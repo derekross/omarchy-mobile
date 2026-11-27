@@ -1,0 +1,57 @@
+#!/usr/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# omamobile-hotdog-bt-addr: promote the OnePlus 7T Pro's WCN3998 Bluetooth
+# controller out of Linux's unconfigured state. Stock Android reads its
+# address from modem NV, which Linux leaves alone, and persist holds none.
+# Use a stable address derived from the SoC serial instead, marked locally
+# administered, so the phone keeps one identity across boots without
+# exposing the serial. (From the owner's earlier port of this phone.)
+set -euo pipefail
+
+model_path=/proc/device-tree/model
+serial_path=/sys/devices/soc0/serial_number
+
+[[ -r $model_path ]] || exit 0
+model=$(tr -d '\0' <"$model_path")
+[[ $model == 'OnePlus 7T Pro' ]] || exit 0
+
+# A configured controller already has an identity. Never replace it.
+if timeout 5 btmgmt info 2>/dev/null | grep -Ec '^hci[0-9]+:[[:space:]]+Primary controller$' >/dev/null; then
+  exit 0
+fi
+
+# hci_uart downloads the rampatch and NVM before the index appears.
+configuration=
+for _ in {1..120}; do
+  configuration=$(timeout 5 btmgmt config 2>/dev/null || true)
+  grep -c '^hci0:.*Unconfigured controller$' <<<"$configuration" >/dev/null && break
+  sleep 0.25
+done
+grep -c '^hci0:.*Unconfigured controller$' <<<"$configuration" >/dev/null || {
+  echo "hotdog Bluetooth controller did not enter the expected unconfigured state" >&2
+  exit 1
+}
+grep -c 'missing options:.*public-address' <<<"$configuration" >/dev/null || {
+  echo "hotdog Bluetooth controller is missing an unexpected configuration option" >&2
+  exit 1
+}
+
+serial=$(tr -d '[:space:]' <"$serial_path")
+[[ $serial =~ ^[0-9]+$ && $serial != 0 ]] || { echo "hotdog SoC serial is unavailable" >&2; exit 1; }
+digest=$(printf 'omamobile-hotdog-bluetooth:%s' "$serial" | sha256sum)
+# First octet 0x02: unicast, locally administered.
+address=$(printf '02:%s:%s:%s:%s:%s' "${digest:0:2}" "${digest:2:2}" \
+  "${digest:4:2}" "${digest:6:2}" "${digest:8:2}")
+
+btmgmt --index hci0 public-addr "$address" >/dev/null
+
+for _ in {1..20}; do
+  controller=$(timeout 5 btmgmt info 2>/dev/null || true)
+  if grep -c '^hci0:.*Primary controller$' <<<"$controller" >/dev/null &&
+     grep -Fci "addr $address " <<<"$controller" >/dev/null; then
+    exit 0
+  fi
+  sleep 0.25
+done
+echo "hotdog Bluetooth controller rejected its address" >&2
+exit 1

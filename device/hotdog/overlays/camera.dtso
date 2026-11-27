@@ -1,0 +1,48 @@
+// SPDX-License-Identifier: MIT
+/*
+ * Bring-up (CAMERA-PLAN.md, step C3): the camera subsystem, both CCI
+ * controllers and the three D-PHY cameras (telephoto S5K3M5, front IMX471,
+ * ultrawide IMX481) with their load switches. The main camera (C-PHY) is
+ * camera-main.dtso. Blacklist qcom_camss, s5k3m5, imx471 and sony_fwtable
+ * before the first boot with this overlay, so each step loads one by hand.
+ * The front camera streams only with the pop-up raised (P-steps).
+ * Paths, not labels, so the base DTB needs no __symbols__.
+ */
+/dts-v1/;
+/plugin/;
+
+&{/soc@0/cci@ac4a000} {
+	status = "okay";
+};
+
+&{/soc@0/cci@ac4b000} {
+	status = "okay";
+};
+
+&{/soc@0/camss@ac65000} {
+	status = "okay";
+};
+
+&{/regulator-cam-tele-vana} {
+	status = "okay";
+};
+
+&{/regulator-cam-front-vana} {
+	status = "okay";
+};
+
+&{/regulator-cam-wide-vana} {
+	status = "okay";
+};
+
+&{/soc@0/cci@ac4a000/i2c-bus@0/camera@10} {
+	status = "okay";
+};
+
+&{/soc@0/cci@ac4b000/i2c-bus@0/camera@10} {
+	status = "okay";
+};
+
+&{/soc@0/cci@ac4b000/i2c-bus@1/camera@1a} {
+	status = "okay";
+};

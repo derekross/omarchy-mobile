@@ -1,7 +1,9 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
 # Unsupported boot methods must fail before touching a phone; ram-only permits
-# only the recovery path to fastboot.
+# only the recovery path to fastboot; the shipped enchilada (android-v0)
+# descriptor and qcom-abl-v2 descriptors (tests/fixtures' stand-in, and any
+# shipped one) reach only the image build.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 t=$(mktemp -d); trap 'rm -rf "$t"' EXIT
@@ -118,6 +120,49 @@ for dry in '' --dry-run; do
 done
 [[ ! -e $t/calls && ! -e $t/work ]] || fail "the enchilada descriptor accessed a phone or prepared an image"
 echo 'ok - enchilada images reach the kernel check; fastboot/flash/push and both installer modes refuse android-v0'
+
+# qcom-abl-v2 descriptors (the stand-in in tests/fixtures, and every
+# shipped one): images get past the descriptor checks (no kernel build here,
+# so they stop at "build the kernel first"); fastboot, flash and push refuse
+# it (a human writes the boot image by fastboot), and the installer refuses
+# the method. None of it reaches a phone.
+v2check() { # codename descriptor
+  mkdir -p "$t/repo/device/$1"
+  cp "$2" "$t/repo/device/$1/device.conf"
+  if DEVICE=$1 KERNEL_OUT="$t/no-kernel" "$t/repo/bin/omamobile" images > "$t/log" 2>&1; then fail "$1 images succeeds without a kernel"; fi
+  grep -q 'build the kernel first' "$t/log" || fail "$1 images fails for the wrong reason"
+  for cmd in fastboot flash push; do
+    if DEVICE=$1 "$t/repo/bin/omamobile" "$cmd" > "$t/log" 2>&1; then fail "$1 $cmd succeeds"; fi
+    grep -q "$cmd refuses BOOT_METHOD=qcom-abl-v2" "$t/log" || fail "$1 $cmd fails for the wrong reason"
+  done
+  for dry in '' --dry-run; do
+    if "$t/repo/tools/install-phone" --device "$1" $dry --work "$t/work" > "$t/log" 2>&1; then fail "$1 installs"; fi
+    grep -q 'unsupported BOOT_METHOD=qcom-abl-v2;' "$t/log" || fail "$1 installer fails for the wrong reason"
+  done
+  [[ ! -e $t/calls && ! -e $t/work ]] || fail "the $1 descriptor accessed a phone or prepared an image"
+  echo "ok - $1 (qcom-abl-v2) images reach the kernel check; fastboot/flash/push and both installer modes refuse it"
+}
+v2check v2test tests/fixtures/qcom-abl-v2.conf
+for d in device/*/device.conf; do
+  grep -qx 'BOOT_METHOD=qcom-abl-v2' "$d" || continue
+  c=${d#device/}; v2check "${c%/device.conf}" "$d"
+done
+
+# qcom-abl-v2: CMDLINE and BOOT_PAGESIZE are required, BOOT_IMAGES is boot
+# alone and UFS_RW userdata alone (Linux writes no boot partition there).
+mkdir -p "$t/repo/device/v2probe"
+v2bad() { # sed expression, expected message
+  sed -e "s/^CODENAME=.*/CODENAME=v2probe/" -e "$1" tests/fixtures/qcom-abl-v2.conf > "$t/repo/device/v2probe/device.conf"
+  if DEVICE=v2probe KERNEL_OUT="$t/no-kernel" "$t/repo/bin/omamobile" images > "$t/log" 2>&1; then fail "v2 descriptor accepted: $1"; fi
+  grep -q "$2" "$t/log" || fail "v2 descriptor '$1' fails for the wrong reason"
+}
+v2bad '/^CMDLINE=/d' 'CMDLINE is missing'
+v2bad '/^BOOT_PAGESIZE=/d' 'BOOT_PAGESIZE is missing'
+v2bad 's/^BOOT_PAGESIZE=.*/BOOT_PAGESIZE=4097/' 'BOOT_PAGESIZE must be 2048 or 4096'
+v2bad 's/^BOOT_IMAGES=.*/BOOT_IMAGES="boot dtbo"/' 'qcom-abl-v2 BOOT_IMAGES must be boot alone'
+v2bad 's/^UFS_RW=.*/UFS_RW="boot_b userdata"/' 'qcom-abl-v2 UFS_RW must be userdata alone'
+[[ ! -e $t/calls ]] || fail "a v2 descriptor check accessed a phone"
+echo 'ok - qcom-abl-v2 CMDLINE, BOOT_PAGESIZE, BOOT_IMAGES and UFS_RW are checked'
 
 # Header fields must be present and numeric; BOOT_IMAGES is boot only and
 # boot_b must be writable.

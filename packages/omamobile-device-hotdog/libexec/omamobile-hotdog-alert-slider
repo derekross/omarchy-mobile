@@ -1,0 +1,105 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+# OnePlus 7T Pro: the alert slider sets the feedback profile.
+#
+# The kernel reports the slider's three positions as ABS_SND_PROFILE on the
+# "Alert slider" input device (gpio-keys). feedbackd's profile is what the
+# ringtone, notification sounds and haptics already follow, so the slider
+# sets it, as on OxygenOS:
+#   top     Silent   profile "silent"  (no sound, no vibration)
+#   middle  Vibrate  profile "quiet"   (vibration only)
+#   bottom  Ring     profile "full"
+# The position at start (login) is applied quietly; every move after that
+# also shows Omarchy's OSD. Another app may still change the profile; the
+# next move of the slider sets it again. On a kernel without the slider
+# node it exits at once and does nothing.
+import fcntl
+import os
+import struct
+import subprocess
+import sys
+
+NAME = "Alert slider"
+EV_ABS = 0x03
+EV_SYN = 0x00
+ABS_SND_PROFILE = 0x22
+# struct input_absinfo: value, minimum, maximum, fuzz, flat, resolution
+EVIOCGABS = (2 << 30) | (24 << 16) | (ord("E") << 8) | (0x40 + ABS_SND_PROFILE)
+EVENT = struct.Struct("llHHi")  # struct input_event on a 64-bit kernel
+
+# value -> (feedbackd profile, OSD message, Nerd Font glyph)
+POSITIONS = {
+    0: ("silent", "Silent", "\U000F009B"),   # bell-off
+    1: ("quiet", "Vibrate", "\U000F0566"),   # vibrate
+    2: ("full", "Ring", "\U000F009E"),       # bell-ring
+}
+
+
+def find_device():
+    base = "/sys/class/input"
+    for entry in sorted(os.listdir(base)):
+        if not entry.startswith("event"):
+            continue
+        try:
+            with open(f"{base}/{entry}/device/name") as f:
+                if f.read().strip() == NAME:
+                    return f"/dev/input/{entry}"
+        except OSError:
+            continue
+    return None
+
+
+def set_profile(profile):
+    from gi.repository import Gio
+    # Gio.Settings.new() aborts the process on an unknown schema
+    source = Gio.SettingsSchemaSource.get_default()
+    if source is None or source.lookup("org.sigxcpu.feedbackd", True) is None:
+        raise RuntimeError("feedbackd's settings schema is not installed")
+    settings = Gio.Settings.new("org.sigxcpu.feedbackd")
+    if settings.get_string("profile") != profile:
+        settings.set_string("profile", profile)
+        Gio.Settings.sync()
+
+
+def apply(value, announce):
+    if value not in POSITIONS:
+        return
+    profile, message, glyph = POSITIONS[value]
+    try:
+        set_profile(profile)
+    except Exception as e:  # no schema or no session bus: say so, keep going
+        print(f"omamobile-hotdog-alert-slider: can't set the profile: {e}", file=sys.stderr)
+    print(f"omamobile-hotdog-alert-slider: {message.lower()} ({profile})", flush=True)
+    if announce:
+        subprocess.run(["omarchy-osd", "-i", glyph, "-m", message],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+
+
+def main():
+    path = find_device()
+    if path is None:
+        print("omamobile-hotdog-alert-slider: no alert slider input device", flush=True)
+        return 0
+    with open(path, "rb", buffering=0) as dev:
+        info = bytearray(24)
+        fcntl.ioctl(dev, EVIOCGABS, info)
+        current = struct.unpack("6i", info)[0]
+        apply(current, announce=False)
+        pending = None
+        while True:
+            data = dev.read(EVENT.size * 16)
+            if not data:
+                return 1
+            for off in range(0, len(data) - EVENT.size + 1, EVENT.size):
+                _, _, etype, code, value = EVENT.unpack_from(data, off)
+                if etype == EV_ABS and code == ABS_SND_PROFILE:
+                    pending = value
+                elif etype == EV_SYN and pending is not None:
+                    if pending != current:
+                        current = pending
+                        apply(current, announce=True)
+                    pending = None
+
+
+if __name__ == "__main__":
+    sys.exit(main())

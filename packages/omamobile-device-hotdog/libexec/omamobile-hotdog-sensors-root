@@ -1,0 +1,141 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# OnePlus 7T Pro: build the directory hexagonrpcd serves to the SLPI's
+# sensors PD, from this phone's own partitions (device/hotdog/SENSORS-PLAN.md).
+#
+# The sensors PD (Qualcomm's Snapdragon Sensor Core on the SLPI) reads its
+# sensor registry, the sensor driver configs and its DSP libraries from the
+# phone over FastRPC at every start; with nothing serving them it stalls and
+# its watchdog restarts the SLPI. hexagonrpcd -R serves this layout:
+#   sensors/registry/   persist:/sensors/registry/registry (stock's parsed
+#                       registry with this phone's ALS and proximity
+#                       calibration)
+#   sensors/config/     vendor_X:/etc/sensors/config (the JSON configs)
+#   sensors/sns_reg.conf  vendor_X:/etc/sensors/sns_reg_config
+#   dsp/sdsp/           dsp_X:/sdsp (the SLPI's shared objects)
+#   socinfo/            what /sys/devices/soc0 says on stock (MTP, 339, 2.2)
+#   project_info/project_name  OnePlus's project number (19801), which the
+#                       firmware's sensor drivers read from /sys/project_info
+#                       to pick per-project behaviour; ABL passes it as
+#                       androidboot.project_name
+#
+# Everything is read, nothing written: persist and dsp_X are read with
+# debugfs on their read-only block devices (never mounted), vendor_X through
+# a read-only loop device over its extent in super. The storage guard keeps
+# all three read-only; this refuses to run if one is not. The copy holds
+# this phone's calibration: it stays under /var/lib/omamobile/sensors
+# (0700) and is never shipped or committed.
+#
+#   omamobile-hotdog-sensors-root           build it if it is missing
+#   omamobile-hotdog-sensors-root --force   build it again
+set -euo pipefail
+
+base=/var/lib/omamobile/sensors
+root=$base/root
+layout=2   # bump when the served layout changes: an older root is rebuilt
+[[ ${1:-} == --force || $(cat "$root/.complete" 2>/dev/null) != "$layout" ]] || exit 0
+
+die() { echo "omamobile-hotdog-sensors-root: $*" >&2; exit 1; }
+part() {
+  local f
+  f=$(grep -lx "PARTNAME=$1" /sys/class/block/*/uevent 2>/dev/null | head -1) || true
+  [[ -n $f ]] || die "no partition named $1"
+  f=${f%/uevent}
+  [[ $(cat "$f/ro") == 1 ]] || die "$1 (${f##*/}) is not read-only: refusing"
+  echo "/dev/${f##*/}"
+}
+
+slot=$(sed -n 's/.*androidboot.slot_suffix=\(_[ab]\).*/\1/p' /proc/cmdline)
+slot=${slot:-_a}
+persist=$(part persist)
+dsp=$(part "dsp$slot")
+super=$(part super)
+
+umask 077
+mkdir -p "$base"
+new=$(mktemp -d "$base/.root.XXXXXX")
+loop=
+cleanup() {
+  [[ -z $loop ]] || losetup -d "$loop" 2>/dev/null || true
+  rm -rf "$new"
+}
+trap cleanup EXIT
+mkdir -p "$new/sensors" "$new/dsp" "$new/socinfo" "$new/x"
+
+debugfs -c -R "rdump /sensors/registry/registry $new/x" "$persist" >/dev/null 2>&1
+[[ -d $new/x/registry ]] || die "persist has no /sensors/registry/registry"
+mv "$new/x/registry" "$new/sensors/registry"
+
+debugfs -c -R "rdump /sdsp $new/dsp" "$dsp" >/dev/null 2>&1
+[[ -d $new/dsp/sdsp ]] || die "dsp$slot has no /sdsp"
+
+# vendor_X's extents in super's (logical partition) metadata: one extent on
+# this phone; more would need a copy, which this does not do.
+read -r offset size < <(python3 - "$super" "vendor$slot" <<'PY'
+import struct, sys
+with open(sys.argv[1], "rb") as f:
+    f.seek(4096)
+    geo = f.read(52)
+    assert struct.unpack("<I", geo[:4])[0] == 0x616C4467, "no LP geometry"
+    base = 4096 + 4096 * 2
+    f.seek(base)
+    hdr = f.read(256)
+    assert struct.unpack("<I", hdr[:4])[0] == 0x414C5030, "no LP header"
+    hsz = struct.unpack("<I", hdr[8:12])[0]
+    tsz = struct.unpack("<I", hdr[44:48])[0]
+    descs = [struct.unpack("<III", hdr[80 + i * 12:92 + i * 12]) for i in range(4)]
+    f.seek(base + hsz)
+    tables = f.read(tsz)
+po, pn, pe = descs[0]
+eo, en, ee = descs[1]
+for i in range(pn):
+    e = tables[po + i * pe:po + (i + 1) * pe]
+    if e[:36].rstrip(b"\0").decode() != sys.argv[2]:
+        continue
+    first, count = struct.unpack("<II", e[40:48])
+    if count != 1:
+        sys.exit("%s has %d extents" % (sys.argv[2], count))
+    sectors, kind, start, _ = struct.unpack("<QIQI", tables[eo + first * ee:eo + first * ee + 24])
+    if kind != 0:
+        sys.exit("%s is not a linear extent" % sys.argv[2])
+    print(start * 512, sectors * 512)
+    sys.exit(0)
+sys.exit("no %s in super" % sys.argv[2])
+PY
+) || die "can't find vendor$slot in super"
+loop=$(losetup -r -f --show -o "$offset" --sizelimit "$size" "$super")
+debugfs -c -R "rdump /etc/sensors $new/x" "$loop" >/dev/null 2>&1
+losetup -d "$loop"; loop=
+[[ -d $new/x/sensors/config && -f $new/x/sensors/sns_reg_config ]] || die "vendor$slot has no /etc/sensors"
+mv "$new/x/sensors/config" "$new/sensors/config"
+mv "$new/x/sensors/sns_reg_config" "$new/sensors/sns_reg.conf"
+rm -rf "$new/x"
+
+# Stock's /sys/devices/soc0, which the registry's JSON filters read
+# (hw_platform, soc_id). Mainline's soc0 has soc_id and revision; the
+# platform is SMEM's (8 = MTP on this phone), read from qcom_socinfo.
+soc=/sys/devices/soc0
+plat=$(cat /sys/kernel/debug/qcom_socinfo/hardware_platform 2>/dev/null || echo 8)
+case $plat in
+  8) plat=MTP ;;
+  *) die "unknown hardware platform $plat (stock's JSON filters expect MTP, 8)" ;;
+esac
+printf '%s\n' "$plat" > "$new/socinfo/hw_platform"
+printf '%s\n' "$(cat "$soc/soc_id")" > "$new/socinfo/soc_id"
+printf '%s\n' "$(cat "$soc/revision")" > "$new/socinfo/revision"
+printf 'Unknown\n' > "$new/socinfo/platform_subtype"
+printf '%s\n' "$(cat /sys/kernel/debug/qcom_socinfo/hardware_platform_subtype 2>/dev/null || echo 0)" > "$new/socinfo/platform_subtype_id"
+printf '%s\n' "$(cat /sys/kernel/debug/qcom_socinfo/platform_version 2>/dev/null || echo 65536)" > "$new/socinfo/platform_version"
+
+mkdir -p "$new/project_info"
+project=$(sed -n 's/.*androidboot\.project_name=\([0-9A-Za-z]*\).*/\1/p' /proc/cmdline)
+[[ -n $project ]] || die "no androidboot.project_name on the command line"
+printf '%s\n' "$project" > "$new/project_info/project_name"
+
+echo "$layout" > "$new/.complete"
+rm -rf "$root.old"
+[[ ! -e $root ]] || mv "$root" "$root.old"
+mv "$new" "$root"
+rm -rf "$root.old"
+trap - EXIT
+echo "omamobile-hotdog-sensors-root: $(ls "$root/sensors/registry" | wc -l) registry files, $(ls "$root/sensors/config" | wc -l) configs, $(ls "$root/dsp/sdsp" | wc -l) DSP files"

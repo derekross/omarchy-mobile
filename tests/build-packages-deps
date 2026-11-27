@@ -125,5 +125,11 @@ pass "a package with no dependency in a repository installs nothing"
 grep -c -- '-v "$ROOT/tools/lib/alarm-deps.sh:/alarm-deps.sh:ro"' tools/build-packages >/dev/null || fail "the container gets tools/lib/alarm-deps.sh"
 grep -c '^      alarm_install_deps <<<"\$info"$' tools/build-packages >/dev/null || fail "and installs a package's dependencies with it"
 grep -c 'pacman -Sp ' tools/build-packages >/dev/null && fail "tools/build-packages no longer resolves dependencies with pacman -Sp"
-grep -qxF 'NAMED_ONLY=(linux-omamobile)' tools/build-packages || fail "omamobile-install-link is in the default build again"
-pass "tools/build-packages installs dependencies through it, and builds omamobile-install-link by default"
+grep -qE '^NAMED_ONLY=\(linux-omamobile( [a-z0-9-]+)*\)$' tools/build-packages || fail "linux-omamobile is built only when named"
+grep -E '^NAMED_ONLY=' tools/build-packages | grep -c -w 'omamobile-install-link' >/dev/null &&
+  fail "omamobile-install-link is in the default build again"
+for name in hexagonrpc modemmanager omamobile-device-hotdog; do
+  grep -E '^NAMED_ONLY=' tools/build-packages | grep -c -w "$name" >/dev/null ||
+    fail "$name is built only when named until it is reviewed"
+done
+pass "tools/build-packages installs dependencies through it, builds omamobile-install-link by default, and hexagonrpc, modemmanager and device-hotdog only when named"

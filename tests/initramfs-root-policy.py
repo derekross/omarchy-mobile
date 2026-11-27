@@ -37,7 +37,12 @@ with tempfile.TemporaryDirectory() as tmp:
 
     names = ('omamobile-root-label', 'omamobile-root-mode', 'omamobile-usb-recovery')
     default = pack('', 'default')
-    assert not any((default / n).exists() for n in names)
+    assert not any((default / n).exists() for n in names + ('omamobile-userdata-wait',))
+    for value in ('1', '300', '600'):
+        assert (pack('INITRAMFS_USERDATA_WAIT=' + value + '\n', 'wait-' + value) /
+                'omamobile-userdata-wait').read_text() == value + '\n'
+    for i, bad in enumerate(('0', '601', '30s', '-5', '""', '0300')):
+        pack('INITRAMFS_USERDATA_WAIT=' + bad + '\n', 'bad-wait-' + str(i), False)
     for mode in ('persistent-development', 'ram-rescue'):
         out = pack('INITRAMFS_ROOT_LABEL=omamobile-root\nINITRAMFS_ROOT_MODE=' + mode +
                    '\nINITRAMFS_USB_RECOVERY=no\n', mode)
@@ -88,6 +93,24 @@ with tempfile.TemporaryDirectory() as tmp:
         assert result.returncode == 1
         assert ('handover' in result.stdout) == calls_arch, (value, result)
     print('ok - absent mode preserves boot; rescue and malformed modes cannot hand over')
+
+    # The userdata wait: without the file the init looks once (no sleep), as
+    # before INITRAMFS_USERDATA_WAIT; with it, once a second up to the limit.
+    blocks = p / 'block'
+    (blocks / 'sda').mkdir(parents=True)
+    waitfile = p / 'userdata-wait'
+    arch = function('boot_arch').replace('/sys/block/sda', str(blocks / 'sda')).replace(
+        '/etc/omamobile-userdata-wait', str(waitfile)).replace('/proc/cmdline', '/dev/null')
+    for value, sleeps in ((None, 0), ('3', 3), ('junk', 0)):
+        if value is None:
+            waitfile.unlink(missing_ok=True)
+        else:
+            waitfile.write_text(value + '\n')
+        spies = 'say() { echo "say $*"; }; sleep() { echo slept; }; ufs_ro_pass() { echo pass; }\n'
+        result = subprocess.run(['/bin/sh', '-c', spies + arch + 'boot_arch'], capture_output=True, text=True)
+        assert result.returncode == 1 and 'no userdata partition' in result.stdout, (value, result)
+        assert result.stdout.count('slept') == sleeps and 'pass' not in result.stdout, (value, result)
+    print('ok - the userdata wait is off unless the descriptor packs a limit')
 
     block = p / 'block/sda27'
     block.mkdir(parents=True)

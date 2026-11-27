@@ -22,8 +22,9 @@ phone_home=$("$ssh" "getent passwd '$phone_user' | cut -d: -f6")
 build=$phone_home/build/pkgs
 
 "$ssh" "rm -rf $build/$name && mkdir -p $build && chown '$phone_user': $build"
-# makepkg's own work dirs (pkg/, src/ at the top) and old packages stay home.
-tar cf - --exclude="./$name/pkg" --exclude="./$name/src/build" --exclude="*.pkg.tar.*" \
+# makepkg's own work dirs (pkg/, src/ at the top), old packages and the
+# laptop's Python caches (a bin/__pycache__ failed the shell's check()) stay home.
+tar cf - --exclude="./$name/pkg" --exclude="./$name/src/build" --exclude="*.pkg.tar.*" --exclude=__pycache__ \
   -C "$(dirname "$dir")" "./$name" | "$ssh" "tar xf - -C $build --no-same-owner && chown -R '$phone_user': $build/$name"
 # Build-only dependencies (makedepends, checkdepends) that aren't installed
 # yet go in for the build and out again afterwards, like makepkg -s -r

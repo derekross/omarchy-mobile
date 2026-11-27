@@ -12,7 +12,8 @@
 # package ships boot files, so linux-omamobile and omamobile-boot-update go
 # in and the package's modules replace the tarball), KERNEL_RELEASE, MODULES_SHA256,
 # GIT_COMMIT, ALARM_SHA256, OMARCHY_CHANNEL, CHANNEL ([omamobile]: stable,
-# development or local), INSTALL_LINK (1: an image for the install link,
+# development or local), LOCAL_KEY (with local: the public key that signed
+# the repository, under /src), INSTALL_LINK (1: an image for the install link,
 # with its marker; tools/build-rootfs --install-link).
 set -euo pipefail
 
@@ -40,6 +41,8 @@ pacman -Sy >/dev/null
 source /src/rootfs/resolve.sh
 # shellcheck source=first-boot.sh
 source /src/rootfs/first-boot.sh
+# shellcheck source=local-key.sh
+source /src/rootfs/local-key.sh
 
 mapfile -t base < <(list /src/rootfs/packages.base)
 mapfile -t ours < <(list /src/rootfs/packages.omamobile)
@@ -233,6 +236,9 @@ grep -q '^alarm:' "$T/etc/passwd" && die "an alarm account in the image"
 awk -F: '$3 >= 1000 && $3 != 65534 {print $1}' "$T/etc/passwd" | grep -c . >/dev/null && die "a user account in the image"
 sed -i 's/^root:[^:]*:/root:!*:/' "$T/etc/shadow"
 rm -rf "$T/etc/pacman.d/gnupg"                 # firstboot makes the phone's own keyring
+# A --local image trusts the contributor's key (rootfs/local-key.sh)
+fpr=$(ship_local_key "$T" "$CHANNEL" "${LOCAL_KEY:-}") || die "shipping the local key failed"
+[[ -z $fpr ]] || echo "    local key shipped as a keyring: $fpr"
 rm -f "$T"/etc/ssh/ssh_host_*                  # sshd makes the phone's own host keys
 printf 'uninitialized\n' > "$T/etc/machine-id" # systemd makes the phone's own id
 rm -f "$T/var/lib/systemd/random-seed" "$T/var/lib/dbus/machine-id"
