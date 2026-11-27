@@ -6751,6 +6751,71 @@ enforcing verity and the pretrial VBMeta digest. Ramoops and
 `SYSTEM_LAST_KMSG` matched on all 97 filtered lines, and
 both passed the required genpd correlation check.
 
+##### Offline D1 DSI0 and BE transition control
+
+In the retained worker trace, BE OFF completes 1.014 ms
+after DSI0 OFF, and wrapper OFF completes 1.316 ms after
+DSI0 OFF. On the final power-up, BE ON completes 0.542 ms
+before DSI0 ON. The worker later evaluates DSI0 again
+without sending another OFF. The captured mailbox replies
+cover these distinct votes.
+
+In exact D1 CPM, the OFF worker branch at `0x466d0`
+calls `0x1d0e8`. The member-3 OFF callback at `0x4537c`
+selects the OFF half of the DPU entry at `0x62fa0` through
+`0x45178` and `0x39b0c`. Its handler at `0x3a438`
+accepts PSM3 states 2 and 3 without requesting a transition.
+From 0 or 1, it requests 0 → 2 or 1 → 3, clearing bit 3
+at CPM `0x6f40a000`. If PSM3 starts in 2 or 3 on the
+later ON, the handler sets bits 2 and 3 while requesting
+2 → 0 or 3 → 1. If PSM3 starts in 0 or 1, it skips the
+transition. The trace supplies no physical PSM3 sample for
+either vote, so the actual branch remains unobserved.
+
+The BE member at `0x62f04` uses LPCM `0x23` PSM1.
+Its OFF side accepts state 4 or, when the PSM2 dependency
+equals 2, requests state 4. The matrix at `0x2000a79c`
+selects `0x3a6c4` for 3 → 4, which writes zero to the
+entire word at `0x6f40a000`. BE ON accepts PSM1 states
+0 through 3 and requests 4 → 3 otherwise for a valid
+source state. The 4 → 3 callback at `0x3a708` sets bit 2
+in the same word before DSI0 requests bits 2 and 3. These
+are conditional firmware paths. They show that the parent
+can change the same bits around a DSI0 vote, with no
+independent decoding of either bit as a gate or reset.
+
+The factory `lpm_pm_domains.ko` corroborates the use of
+bit 3 for DSI0. Its legacy selector 3 sets or clears
+that bit at the provider base plus `0x1000` and
+`poll_for_dpu_dsi_state` checks only the low nibble at
+base plus `0x1018`. The ON and OFF checks accept states
+0–1 and 2–3 respectively. D1 Grizzly has no binding for
+that provider. Relative to the D1 LPCM base, the
+descriptor formula reaches at most `0x7ec` with a
+page index of 0 and starts at `0x1020` with a page
+index of 1, excluding the legacy offset `0x1018`.
+The legacy poll reports only a sequencer state.
+
+The stock host's `sys_clk`, `phy_clk`, `ipi_clk` and
+`lptx_clk` properties are configuration values.
+`vs_mipi_dsi2h_probe` reads them as scalar DT cells
+in `vs_drm.ko`. The B0 tree has no resource for the
+DSI0 APB CMU page and only the panel node supplies a
+reset GPIO. The direct acknowledgment candidate remains
+AP `0x0f4196fc`. Bit 8 reports the APB gate, and bit 12
+reports the clock-cell reset. EL1 access to that word
+and the coverage of any downstream host reset remain
+unverified. The audited read-only CPM and PMU services
+offer no access to that word.
+
+Neither child handler samples the separate APB acknowledgment
+word. A sample taken after the entire power cycle would also
+include the parent effects. To isolate DSI0, an independently
+qualified status source would need to distinguish the DSI0
+edges from the adjacent BE and wrapper transitions. Direct
+mainline host reads and the candidate status reads remain
+disabled.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
