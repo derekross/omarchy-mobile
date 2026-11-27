@@ -7360,6 +7360,56 @@ replay, and mocked registration, capture and cleanup.
 Hardware registration and a modeset capture remain
 pending.
 
+###### Stock D1 modeset prerequisites
+
+The saved stock D1 Android bugreport identifies the
+fitted CGYDA panel and a 1080×2410 display mode at
+120 Hz. It also records SELinux denying the Android
+shell read access to tracefs `available_events` on
+the production build (`ro.debuggable=0`). The
+standalone collector needs permission to create
+tracefs instances and kprobes. The bugreport's
+Perfetto collection reported no eligible session, so
+it provides no existing register trace to decode.
+
+The exact factory vendor ramdisk contains the panel
+and I²C modules. The packed board tree selects
+`google,gs-cgyda` for DSI0. Its VDDI and VCI supplies
+resolve to the already-loaded DA9188 regulator, while
+VDDD resolves to `samsung,s2dos07x02` at I²C
+address `0x60` on AP controller `0x3a1ce000`.
+The stock S2DOS07x02 driver registers the regulator
+and reads registers `0x04` and `0x03` during probe.
+The stock DesignWare platform driver matches
+`google,i2c-mbu`. Loading it also permits matches
+on the enabled controllers at `0x3bdcb000`,
+`0x3a1ca000` and `0x3a1cd000`. Those buses have
+other board devices behind them. The panel I²C path
+therefore needs a scoped binding plan in a guarded
+RAM fixture.
+
+The supplier and panel additions to the current
+display closure are `i2c-designware-core.ko`,
+`i2c-designware-platform.ko`,
+`s2dos07x02-regulator.ko`, `gs-panel.ko` and
+`panel-gs-pkcgda.ko`. The proposed combined
+manifest passes the packer's hard-dependency check
+with 49 entries and the same 11 protected preloads.
+That check covers the module dependency graph.
+I²C, regulator and panel binding are unverified.
+
+The stock `vs_drm` driver registers a DRM device
+at module `0x9c14` and provides
+`vs_gem_dumb_create` (`0xb4e0`),
+`drm_atomic_helper_set_config` and
+`drm_atomic_helper_page_flip`. A RAM-resident KMS
+client could use these interfaces after connector
+registration and choose a mode advertised by the
+fitted panel. The existing bundle includes no such
+client. The next guarded milestone is to verify
+the panel I²C supplier and connected DSI0 connector
+before issuing any display commit.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
