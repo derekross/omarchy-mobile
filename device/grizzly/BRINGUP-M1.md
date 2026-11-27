@@ -7992,6 +7992,63 @@ outside-aperture status for both conditions or an
 audited stock-equivalent supplier sequence that
 establishes both before the first host access.
 
+###### Stock D1 PHY and genpd sequence before the first host read
+
+Replaying the retained MBFS, APB, PHY-init and
+genpd-worker captures gave the same 15 successful
+replies for the three scoped domains. The pstore
+and `SYSTEM_LAST_KMSG` traces agree in all four
+captures. The table uses the genpd-worker trace clock.
+
+| Phase | Stock D1 event |
+| --- | --- |
+| PHY attachment | The platform attaches the CD-PHY to DSI0 genpd before driver probe. Wrapper `0x08` → BE `0x200` → DSI0 `0x203` finish power-on at 6.331662 s. |
+| PHY provider probe | Resolves the fixed 38.4 MHz `pllref`, creates both MMIO regmaps without an APB bus-clock handle, registers the PHY and enables runtime PM. |
+| Post-probe idle release | `genpd_dev_pm_sync` queues the recorded worker. DSI0 → BE → wrapper OFF complete between 6.334095 and 6.335411 s. |
+| Other parent transitions | Wrapper and BE cycle at 6.336984–6.340016 s, before the DSI host load marker. A wrapper-only cycle follows that marker at 6.412526–6.413023 s. |
+| Final host attachment | Wrapper → BE → DSI0 ON complete at 6.433622 s. The host probe then calls `phy_init` on DSI0. |
+| First observed reads | PHY `0x0f7c7124` returns `0x000001cc` at 6.444536 s. Host ID and version follow 8 and 12 µs later. The host reads `pwr_up=0` at 6.445875 s after runtime resume. |
+
+The extra parent cycles recur in all four captures.
+The trace filters downstream votes to DSI0 and does
+not establish which other consumers caused the parent
+cycles. They are part of the observed schedule.
+Their necessity for DSI0 access is unverified.
+
+The PHY provider's platform probe and its later
+`phy_init` callback are separate. In the exact
+`dw_dphy_init_g301` path, the first-resource
+`0x7124` read takes the
+`phy_common9_reg_lp_dco_clk_dyn_gating` bit and
+caches it in software. The callback does not check the
+read result. The captured read proves this PHY register
+responded on stock. The PHY-local reset and shutdown
+fields at the second resource's `0x28` are used by
+later configure or power-off callbacks. Replaying
+those writes before the first host read would change
+the observed stock order.
+
+In mainline `16a63b142e0b`, generic genpd already
+has the parent traversal and post-probe sync worker.
+The Malibu CPM onecell provider has no display
+domains, and the fixture has no DSI0 PHY or host
+consumer. The explicit MBFS diagnostic can be
+extended to replay the observed vote order, but this
+would reproduce requests and replies. Reproducing
+stock's supplier lifecycle needs display-domain
+topology and consumer bindings, plus attribution of
+the remaining parent cycles.
+
+Neither the PHY gating bit nor the scoped MBFS
+replies independently verifies the host APB gate
+or its external reset. No host read was added.
+To attribute the parent cycles, a passive stock
+follow-up can log the calling genpd device and
+widen the MBFS filter to include sibling display
+domains such as DSI1 `0x204`. That would test
+whether the extra parent votes belong to other
+consumers before treating them as DSI0 prerequisites.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
