@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: MIT
+# Point Aquamarine at the MediaTek KMS display card and force software rendering
+# until a userspace PowerVR DRI driver is available. Prevents Aquamarine from
+# retrying failed EGL/mgpu init on every frame and avoids llvmpipe JIT overhead
+# in Qt Quick (quickshell).
+achilles6_card=$(readlink -f /dev/dri/by-path/platform-mediatek-drm.1.auto-card 2>/dev/null || true)
+case "$achilles6_card" in
+  /dev/dri/card[0-9]*)
+    if [ -c "$achilles6_card" ]; then
+      export AQ_DRM_DEVICES="$achilles6_card"
+    fi
+    ;;
+esac
+unset achilles6_card
+export LIBGL_ALWAYS_SOFTWARE=1
+export GALLIUM_DRIVER=llvmpipe
+export QT_QUICK_BACKEND=software
+unset QSG_RHI_BACKEND

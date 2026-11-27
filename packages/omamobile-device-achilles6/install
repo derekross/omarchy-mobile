@@ -1,0 +1,55 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
+destination=${1:?Usage: ./install DESTDIR [BUILDDIR]}
+build=${2:-build}
+[[ $destination == /* && $destination != "/" ]] || { echo "Use an absolute staging directory" >&2; exit 1; }
+
+for file in bin/*; do install -Dm755 "$file" "$destination/usr/bin/${file##*/}"; done
+install -Dm755 "$build/reboot-to" "$destination/usr/bin/reboot-to"
+install -Dm644 vendor/udev/rules.d/10-omamobile-storage.rules \
+  "$destination/usr/lib/udev/rules.d/10-omamobile-storage.rules"
+install -Dm644 vendor/systemd/network/20-usb-gadget.network \
+  "$destination/usr/lib/systemd/network/20-usb-gadget.network"
+install -Dm644 vendor/systemd/logind.conf.d/10-omamobile-power-key.conf \
+  "$destination/usr/lib/systemd/logind.conf.d/10-omamobile-power-key.conf"
+install -Dm644 vendor/NetworkManager/conf.d/10-omamobile-usb.conf \
+  "$destination/usr/lib/NetworkManager/conf.d/10-omamobile-usb.conf"
+install -Dm644 vendor/NetworkManager/conf.d/zz-omamobile-wifi-powersave.conf \
+  "$destination/etc/NetworkManager/conf.d/zz-omamobile-wifi-powersave.conf"
+install -Dm644 vendor/systemd/sleep.conf.d/10-omamobile.conf \
+  "$destination/usr/lib/systemd/sleep.conf.d/10-omamobile.conf"
+install -Dm755 vendor/systemd/system-sleep/10-achilles6-wifi \
+  "$destination/usr/lib/systemd/system-sleep/10-achilles6-wifi"
+install -Dm644 vendor/systemd/system.conf.d/10-omamobile-watchdog.conf \
+  "$destination/usr/lib/systemd/system.conf.d/10-omamobile-watchdog.conf"
+install -Dm644 vendor/systemd/system/omamobile-achilles6-wifi.service \
+  "$destination/usr/lib/systemd/system/omamobile-achilles6-wifi.service"
+install -Dm644 vendor/systemd/system/omamobile-achilles6-cpus.service \
+  "$destination/usr/lib/systemd/system/omamobile-achilles6-cpus.service"
+install -d "$destination/usr/lib/systemd/system/multi-user.target.wants"
+ln -sfn ../omamobile-achilles6-wifi.service \
+  "$destination/usr/lib/systemd/system/multi-user.target.wants/omamobile-achilles6-wifi.service"
+ln -sfn ../omamobile-achilles6-cpus.service \
+  "$destination/usr/lib/systemd/system/multi-user.target.wants/omamobile-achilles6-cpus.service"
+# console=tty0 is active on achilles6, so systemd-firstboot opens a tty and
+# blocks Before=sysinit.target waiting for interactive input ahead of sshd.
+install -d "$destination/etc/systemd/system"
+ln -sfn /dev/null "$destination/etc/systemd/system/systemd-firstboot.service"
+install -Dm644 vendor/udev/rules.d/80-omamobile-bt-addr.rules \
+  "$destination/usr/lib/udev/rules.d/80-omamobile-bt-addr.rules"
+install -Dm644 vendor/NetworkManager/conf.d/15-omamobile-achilles6-wifi.conf \
+  "$destination/etc/NetworkManager/conf.d/15-omamobile-achilles6-wifi.conf"
+install -Dm644 vendor/systemd/system/omamobile-bt-addr@.service \
+  "$destination/usr/lib/systemd/system/omamobile-bt-addr@.service"
+install -Dm644 uwsm/env.d/20-omamobile-achilles6-graphics \
+  "$destination/usr/share/uwsm/env.d/20-omamobile-achilles6-graphics"
+install -Dm644 ucm2/conf.d/mt6765-mt6357/lenovo-tb-x606f.conf \
+  "$destination/usr/share/alsa/ucm2/conf.d/mt6765-mt6357/lenovo-tb-x606f.conf"
+install -Dm644 ucm2/Lenovo/tb-x606f/HiFi.conf \
+  "$destination/usr/share/alsa/ucm2/Lenovo/tb-x606f/HiFi.conf"
+install -Dm644 device.conf "$destination/usr/share/omamobile/device.conf"
+install -Dm644 etc/omamobile-mirrorlist "$destination/etc/pacman.d/omamobile-mirrorlist"
+install -Dm644 LICENSE "$destination/usr/share/licenses/omamobile-device-achilles6/LICENSE"
+install -Dm644 version "$destination/usr/share/omamobile/device-achilles6/version"

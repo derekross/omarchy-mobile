@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: MIT
+[Unit]
+Description=Bring cluster1 CPUs (cpu4..7) online after early boot
+DefaultDependencies=no
+After=systemd-udevd.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c "for c in /sys/devices/system/cpu/cpu[4-7]/online; do [ -w \"$c\" ] && echo 1 > \"$c\" || true; done"
+
+[Install]
+WantedBy=multi-user.target

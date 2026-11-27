@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: MIT
+# Omamobile storage guard, continued in Arch. Make the whole eMMC disk,
+# hardware boot partitions, general-purpose partitions, and RPMB character
+# device inaccessible, and hide every partition except userdata from desktop
+# automounters.
+SUBSYSTEM=="block", KERNEL=="mmcblk[0-9]", MODE="0000", ENV{UDISKS_IGNORE}="1"
+SUBSYSTEM=="block", KERNEL=="mmcblk[0-9]boot[01]", MODE="0000", ENV{UDISKS_IGNORE}="1"
+SUBSYSTEM=="block", KERNEL=="mmcblk[0-9]gp[0-3]", MODE="0000", ENV{UDISKS_IGNORE}="1"
+SUBSYSTEM=="mmc_rpmb", MODE="0000"
+SUBSYSTEM=="block", KERNEL=="mmcblk[0-9]p[0-9]*", ENV{ID_PART_ENTRY_NAME}!="userdata", ENV{UDISKS_IGNORE}="1"

@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: MIT
+[Unit]
+Description=Bring up MediaTek CONSYS Wi-Fi (hang-safe)
+After=local-fs.target
+Before=NetworkManager.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/omamobile-wifi-start
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

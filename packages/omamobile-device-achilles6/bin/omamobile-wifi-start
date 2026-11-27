@@ -1,0 +1,41 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Bring up MediaTek CONSYS gen4m Wi-Fi at boot, hang-safe.
+#
+# Writes and syncs a marker file before touching /dev/wmtWifi, and removes it
+# once the chip comes up. If powering the chip hangs a single-slot tablet, the
+# next boot finds the marker and skips Wi-Fi; run "omamobile-wifi-start --retry"
+# to try again.
+set -euo pipefail
+
+state=${OMAMOBILE_WIFI_STATE:-/var/lib/omamobile}
+marker=$state/wifi-bringup-started
+dev=${OMAMOBILE_WIFI_DEV:-/dev/wmtWifi}
+
+log() { echo "omamobile-wifi: $*"; }
+
+[[ ${1:-} == --retry ]] && rm -f "$marker"
+
+if [[ -e $marker ]]; then
+  log "the last bring-up ($(cat "$marker" 2>/dev/null)) never finished; Wi-Fi stays off this boot."
+  log "after checking the previous boot log, retry with: omamobile-wifi-start --retry"
+  exit 0
+fi
+
+if [[ ! -w $dev ]]; then
+  log "$dev not present; skipping Wi-Fi bring-up"
+  exit 0
+fi
+
+mkdir -p "$state"
+date -Is > "$marker"
+sync -f "$marker" 2>/dev/null || sync
+
+finish() { rm -f "$marker"; sync -f "$state" 2>/dev/null || sync; }
+
+if ! echo 1 > "$dev"; then
+  finish
+  log "writing $dev failed; cleared hang marker" >&2
+  exit 1
+fi
+finish

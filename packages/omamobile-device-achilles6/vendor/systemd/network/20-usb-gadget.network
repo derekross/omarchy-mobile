@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: MIT
+# When the root filesystem is mounted over NFS on usb0 (ip=... on the kernel
+# command line), systemd-networkd must not flush or reconfigure the interface.
+# Do not advertise a default gateway or DNS server on usb0 so Wi-Fi (wlan0)
+# owns default routing and DNS resolution.
+[Match]
+Name=usb0
+
+[Network]
+Address=172.16.42.1/24
+ConfigureWithoutCarrier=yes
+IgnoreCarrierLoss=yes
+KeepConfiguration=yes

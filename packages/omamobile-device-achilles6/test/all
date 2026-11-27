@@ -1,0 +1,62 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+./build "$tmp/build"
+./install "$tmp/root" "$tmp/build"
+[[ -x $tmp/root/usr/bin/reboot-to ]]
+[[ -x $tmp/root/usr/bin/omamobile-setup-system ]]
+[[ -f $tmp/root/usr/lib/udev/rules.d/10-omamobile-storage.rules ]]
+[[ -f $tmp/root/usr/lib/systemd/network/20-usb-gadget.network ]]
+[[ -f $tmp/root/usr/lib/systemd/system.conf.d/10-omamobile-watchdog.conf ]]
+[[ -L $tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-achilles6-wifi.service ]]
+[[ -L $tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-achilles6-cpus.service ]]
+[[ -L $tmp/root/etc/systemd/system/systemd-firstboot.service ]]
+grep -q 'KeepConfiguration=yes' "$tmp/root/usr/lib/systemd/network/20-usb-gadget.network"
+[[ -x $tmp/root/usr/bin/omamobile-bt-addr ]]
+[[ -x $tmp/root/usr/bin/omamobile-wifi-start ]]
+[[ -f $tmp/root/usr/lib/udev/rules.d/80-omamobile-bt-addr.rules ]]
+[[ -f $tmp/root/usr/lib/systemd/system/omamobile-bt-addr@.service ]]
+[[ -f $tmp/root/etc/NetworkManager/conf.d/15-omamobile-achilles6-wifi.conf ]]
+[[ -f $tmp/root/usr/share/uwsm/env.d/20-omamobile-achilles6-graphics ]]
+[[ -f $tmp/root/usr/share/alsa/ucm2/conf.d/mt6765-mt6357/lenovo-tb-x606f.conf ]]
+[[ -f $tmp/root/usr/share/alsa/ucm2/Lenovo/tb-x606f/HiFi.conf ]]
+[[ -x $tmp/root/usr/lib/systemd/system-sleep/10-achilles6-wifi ]]
+if [[ -f ../../device/achilles6/device.conf ]]; then
+  cmp -s device.conf ../../device/achilles6/device.conf || { echo "not ok - device.conf drifted from descriptor" >&2; exit 1; }
+fi
+grep -q '^PACKAGE=omamobile-device-achilles6$' "$tmp/root/usr/share/omamobile/device.conf"
+
+# Verify storage and Bluetooth udev rule invariants
+srule="$tmp/root/usr/lib/udev/rules.d/10-omamobile-storage.rules"
+grep -q 'KERNEL=="mmcblk\[0-9\]".*MODE="0000"' "$srule"
+grep -q 'KERNEL=="mmcblk\[0-9\]boot\[01\]".*MODE="0000"' "$srule"
+grep -q 'KERNEL=="mmcblk\[0-9\]gp\[0-3\]".*MODE="0000"' "$srule"
+grep -q 'SUBSYSTEM=="mmc_rpmb".*MODE="0000"' "$srule"
+grep -q 'ENV{ID_PART_ENTRY_NAME}!="userdata".*ENV{UDISKS_IGNORE}="1"' "$srule"
+grep -q 'ENV{DEVTYPE}=="host"' "$tmp/root/usr/lib/udev/rules.d/80-omamobile-bt-addr.rules"
+
+# Exercise omamobile-wifi-start against a stand-in device
+wstate="$tmp/wifi-state"
+wdev="$tmp/wmtWifi"
+: > "$wdev"
+OMAMOBILE_WIFI_STATE="$wstate" OMAMOBILE_WIFI_DEV="$wdev" "$tmp/root/usr/bin/omamobile-wifi-start"
+[[ $(cat "$wdev") == 1 && ! -e $wstate/wifi-bringup-started ]]
+# Pre-existing marker skips bring-up and leaves device untouched
+: > "$wdev"
+echo "2026-11-27T00:00:00Z" > "$wstate/wifi-bringup-started"
+OMAMOBILE_WIFI_STATE="$wstate" OMAMOBILE_WIFI_DEV="$wdev" "$tmp/root/usr/bin/omamobile-wifi-start"
+[[ ! -s $wdev && -e $wstate/wifi-bringup-started ]]
+# --retry clears the stale marker and brings Wi-Fi up
+OMAMOBILE_WIFI_STATE="$wstate" OMAMOBILE_WIFI_DEV="$wdev" "$tmp/root/usr/bin/omamobile-wifi-start" --retry
+[[ $(cat "$wdev") == 1 && ! -e $wstate/wifi-bringup-started ]]
+# Write failure clears the marker rather than falsely reporting a hang next boot
+if [[ -w /dev/full ]]; then
+  if OMAMOBILE_WIFI_STATE="$wstate" OMAMOBILE_WIFI_DEV=/dev/full "$tmp/root/usr/bin/omamobile-wifi-start" 2>/dev/null; then
+    echo "not ok - omamobile-wifi-start should fail on write error" >&2; exit 1
+  fi
+  [[ ! -e $wstate/wifi-bringup-started ]]
+fi
+echo "ok - omamobile-device-achilles6 package staging"

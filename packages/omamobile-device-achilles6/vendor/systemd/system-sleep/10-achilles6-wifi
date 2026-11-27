@@ -1,0 +1,13 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+# Power down MediaTek CONSYS wmtWifi before suspend so gen4m does not abort
+# noirq suspend with IRQ 208 (aisDeauthXmitComplete), and restore on resume.
+[ -w /dev/wmtWifi ] || exit 0
+case "$1" in
+  pre)
+    echo 0 > /dev/wmtWifi 2>/dev/null || true
+    ;;
+  post)
+    echo 1 > /dev/wmtWifi 2>/dev/null || true
+    ;;
+esac
