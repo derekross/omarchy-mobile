@@ -885,6 +885,23 @@ grep -c 'polling waits for the screen' bin/omamobile-nfc-open >/dev/null || fail
 grep -c 'timeout_add_seconds(4' bin/omamobile-nfc-open >/dev/null && fail "the one-shot stop is gone: the screen check stops polling every time"
 grep -c '"systemctl", "restart", "neard"' bin/omamobile-nfc-open >/dev/null || fail "an NFC unblock restarts neard"
 grep -c '^Requires=neard' systemd/omamobile-nfc-open.service >/dev/null && fail "omamobile-nfc-open restarts neard, so it must not Require= it (the restart would loop)"
+python3 -B test/nfc-privacy.py >/dev/null || { python3 -B test/nfc-privacy.py | grep -v '^ok'; fail "NFC off totally: nfc-open keeps it off and comes back on"; }
+bash test/privacy-helper.sh >/dev/null || fail "the privacy helper: nfc-off and nfc-on only, in order"
+bash test/privacy-mic-camera.sh >/dev/null || { bash test/privacy-mic-camera.sh; fail "the privacy helper: microphone and camera off totally, and on again"; }
+grep -cx '      /^omamobile-privacy@(nfc|mic|camera)-(on|off)\\.service$/.test(action.lookup("unit")) &&' polkit/50-omamobile-privacy.rules >/dev/null || fail "the privacy rule names the six privacy units only"
+# the udev rule: before 73-seat-late (which grants the ACL), capture PCMs only, the codec skipped
+[[ -f udev/72-omamobile-privacy.rules ]] || fail "the privacy udev rule is 72-, between 71-seat and 73-seat-late"
+grep -cF 'SUBSYSTEM=="sound", KERNEL=="pcmC[0-9]*D[0-9]*c", TEST=="/var/lib/omamobile/privacy/mic"' udev/72-omamobile-privacy.rules >/dev/null || fail "the microphone rule matches capture PCMs only, on the state file"
+[[ $(grep -c 'TAG-="uaccess", OWNER:="root", GROUP:="root", MODE:="0600"' udev/72-omamobile-privacy.rules) == 2 ]] || fail "both rules drop uaccess and make the node root's"
+awk '/^DRIVERS=="s5p-mfc\*", GOTO/{g=NR} /^TAG-="uaccess"/{t=NR} END{exit !(g && t && g < t)}' udev/72-omamobile-privacy.rules || fail "the video codec is skipped before the camera lock"
+if command -v udevadm >/dev/null; then udevadm verify --no-style udev/72-omamobile-privacy.rules >/dev/null || fail "udevadm verify: the privacy rule"; fi
+grep -c 'YES' polkit/50-omamobile-privacy.rules >/dev/null && fail "the privacy rule never lets a root action through without the PIN"
+grep -c 'polkit.Result.AUTH_ADMIN_KEEP' polkit/50-omamobile-privacy.rules >/dev/null || fail "the privacy rule asks for the PIN"
+grep -c '"timeout", "122", "systemctl", "start", "omamobile-privacy@nfc-" + (enabled ? "off" : "on") + ".service"' plugins/omamobile.quicksettings/QuickSettings.qml >/dev/null || fail "the NFC tile switches through the privacy units"
+grep -c '"timeout", "122", "systemctl", "start", "omamobile-privacy@" + kind + "-" + (on ? "on" : "off") + ".service"' plugins/omamobile.quicksettings/QuickSettings.qml >/dev/null || fail "the microphone and camera tiles switch through the privacy units"
+grep -c '"mic": mic, "camera": camera' plugins/omamobile.quicksettings/QuickSettings.qml >/dev/null || fail "the camera tile has a backend"
+grep -cF 'folder: "file:///var/lib/omamobile/privacy"' plugins/omamobile.bar/Bar.qml >/dev/null || fail "the bar watches the privacy folder (no polling)"
+pass "NFC, microphone and camera off totally: the helper, the rules, the tiles, the bar and nfc-open"
 grep -c '"omamobile-launch", "empty"' bin/omamobile-widget >/dev/null || fail "the widget agent's terminal gets an empty workspace"
 grep -c '"omamobile-launch", "show-with"' plugins/omamobile.switcher/Switcher.qml >/dev/null || fail "the switcher shows apps together"
 grep -c '"omamobile-launch", "own-screen"' plugins/omamobile.switcher/Switcher.qml >/dev/null || fail "the switcher moves apps to their own screen"
@@ -1368,6 +1385,9 @@ python3 -B -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' bin/omamobil
 python3 -B test/weather.py 2>/dev/null || fail "omamobile-weather"
 tmp=$(mktemp -d); trap 'rm -rf -- "$tmp" "$fixture"' EXIT
 ./install "$tmp/root"
+[[ -x $tmp/root/usr/lib/omamobile-shell/privacy && -f $tmp/root/usr/lib/systemd/system/omamobile-privacy@.service &&
+   -f $tmp/root/usr/share/polkit-1/rules.d/50-omamobile-privacy.rules && -f $tmp/root/usr/lib/systemd/system/neard.service.d/omamobile-privacy.conf &&
+   -f $tmp/root/usr/lib/udev/rules.d/72-omamobile-privacy.rules && -d $tmp/root/var/lib/omamobile/privacy ]] || fail "install stages the privacy helper, unit, rules and folder"
 [[ -x $tmp/root/usr/bin/omamobile-setup-user && -f $tmp/root/usr/share/omamobile/shell/profile/shell.json ]] \
   || fail "install stages the setup script and the profile"
 [[ -f $tmp/root/usr/share/applications/omamobile-agent.desktop ]] || fail "install stages the AI Agent shortcut"

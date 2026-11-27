@@ -1,0 +1,16 @@
+// SPDX-License-Identifier: MIT
+// The NFC, Microphone and Camera quick-settings tiles and Settings (Connected
+// devices > NFC, Security & privacy): the active local user may start
+// omamobile-privacy@{nfc,mic,camera}-{off,on}.service, which run
+// "/usr/lib/omamobile-shell/privacy <instance>" as root, after proving they are
+// the owner: both directions ask for the admin PIN through the shell's polkit
+// prompt, as the firewall switch does (whether a second switch soon after asks
+// again is still to be seen on the phone). Nothing else is allowed here.
+polkit.addRule(function(action, subject) {
+  if (action.id == "org.freedesktop.systemd1.manage-units" &&
+      subject.local && subject.active &&
+      /^omamobile-privacy@(nfc|mic|camera)-(on|off)\.service$/.test(action.lookup("unit")) &&
+      action.lookup("verb") == "start") {
+    return polkit.Result.AUTH_ADMIN_KEEP;
+  }
+});
