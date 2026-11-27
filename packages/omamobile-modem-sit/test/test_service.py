@@ -10,6 +10,7 @@ import unittest
 from unittest.mock import Mock, MagicMock, patch
 import paths
 import service as app_service
+from voice_audio import VoiceAudio
 
 class ServiceTests(unittest.TestCase):
     def setUp(self):
@@ -76,11 +77,42 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual([c.args[0] for c in self.client.request.call_args_list], [0x0000, 0x0d00])
         self.assertIsNone(self.service.audio)
 
-    def test_tegu_route_is_reported_as_speakerphone(self):
-        self.service.audio = MagicMock(tegu=True)
-        self.assertTrue(self.service.status()['audio']['speaker'])
-        self.service.audio.tegu = False
+    def test_call_audio_output_is_reported_and_switchable_on_tegu(self):
+        self.service.audio = MagicMock(tegu=True, output='speaker', pcms=[1])
+        status = self.service.status()['audio']
+        self.assertTrue(status['speaker'])            # the loudspeaker
+        self.assertTrue(status['speaker_available'])  # the tegu route can switch
+        self.service.audio.output = 'earpiece'
         self.assertFalse(self.service.status()['audio']['speaker'])
+        self.service.audio = None
+        off = self.service.status()['audio']
+        self.assertFalse(off['speaker'] or off['speaker_available'])
+
+    def test_a_route_other_than_tegu_reports_the_earpiece_and_no_switch(self):
+        # The 7 Pro's call plays in its earpiece (the CS35L41 earpiece mode)
+        # whatever [audio] output says, and that default is "speaker".
+        for output in ('speaker', 'earpiece'):
+            self.service.audio = MagicMock(tegu=False, output=output, pcms=[1])
+            status = self.service.status()['audio']
+            self.assertFalse(status['speaker'], output)
+            self.assertFalse(status['speaker_available'], output)
+            self.assertTrue(status['running'])
+        # A real route object away from the tegu card has no tegu attribute set true.
+        audio = VoiceAudio.__new__(VoiceAudio)
+        audio.tegu = False
+        self.service.audio = audio
+        self.assertEqual(audio.output, 'speaker')
+        self.assertFalse(self.service.status()['audio']['speaker'])
+
+    def test_speaker_command_switches_the_output_and_rejects_bad_values(self):
+        self.service.audio = MagicMock(tegu=True, output='speaker', pcms=[1])
+        self.service.dispatch(dict(action='audio', what='speaker', value='off'))
+        self.service.audio.set_output.assert_called_once_with('earpiece')
+        self.service.audio.set_output.reset_mock()
+        self.service.dispatch(dict(action='audio', what='speaker', value='on'))
+        self.service.audio.set_output.assert_called_once_with('speaker')
+        with self.assertRaises(ValueError):
+            self.service.dispatch(dict(action='audio', what='speaker', value='maybe'))
 
     def test_failed_radio_off_still_requires_reboot_without_claiming_release(self):
         self.client.request.side_effect = TimeoutError()

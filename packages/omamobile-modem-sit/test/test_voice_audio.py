@@ -4,7 +4,7 @@ import os
 import shutil
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 import paths
 import voice_audio
 from voice_audio import VoiceAudio
@@ -440,6 +440,133 @@ class TeguAudioTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'PCM close'):
             audio.__exit__(None, None, None)
         self.assertEqual(controls['Incall Sink Mute'], '1')
+
+    def test_set_output_switches_the_loudspeaker_and_the_earpiece_and_restores(self):
+        audio, events, controls, original = self.fixture()
+        with audio:
+            self.assertEqual(audio.output, 'speaker')
+            audio.set_output('earpiece')
+            self.assertEqual(audio.output, 'earpiece')
+            self.assertEqual(controls['Bottom Speaker Digital Volume'], '0')   # loudspeaker muted
+            self.assertEqual(controls['Top Speaker Digital Volume'], voice_audio.TEGU_GAIN)
+            self.assertEqual(controls['Incall Sink Mute'], '0')                 # unmuted after the switch
+            audio.set_output('speaker')
+            self.assertEqual(controls['Bottom Speaker Digital Volume'], voice_audio.TEGU_GAIN)
+        self.assertEqual(controls, original)   # the call's end restores the pre-call gains
+        with self.assertRaises(ValueError):
+            audio.set_output('headset')
+
+    def test_a_configured_earpiece_output_starts_the_call_on_the_earpiece(self):
+        audio, events, controls, original = self.fixture()
+        audio.output = 'earpiece'
+        with audio:
+            self.assertEqual(controls['Bottom Speaker Digital Volume'], '0')
+            self.assertEqual(controls['Top Speaker Digital Volume'], voice_audio.TEGU_GAIN)
+            self.assertEqual(audio.output, 'earpiece')
+            # Never a moment on the loudspeaker: the bottom amplifier is
+            # written once, to 0, both gains are read back, and the one
+            # unmute comes after that.
+            bottom = [e for e in events if e[:2] == ('cset', 'Bottom Speaker Digital Volume')]
+            self.assertEqual([e[2] for e in bottom], ['0'])
+            unmutes = [i for i, e in enumerate(events) if e == ('cset', 'Incall Sink Mute', '0')]
+            self.assertEqual(len(unmutes), 1)
+            read_back = [i for i, e in enumerate(events)
+                         if e[0] == 'cget' and e[1] in voice_audio.TEGU_GAINS and i > events.index(bottom[0])]
+            self.assertEqual(len(read_back), 2)
+            self.assertLess(max(read_back), unmutes[0])
+        self.assertEqual(controls, original)
+
+    def test_a_configured_earpiece_start_is_refused_when_its_gain_does_not_read_back(self):
+        audio, events, controls, original = self.fixture()
+        audio.output = 'earpiece'
+        inner = audio.mixer
+        def lying(action, name, value=None):
+            if action == 'cget' and name == 'Bottom Speaker Digital Volume' and controls[name] == '0':
+                return '  : values=180\n'
+            return inner(action, name, value)
+        audio.mixer = lying
+        with self.assertRaisesRegex(voice_audio.AudioRefused, 'tegu call audio refused: TAS gain read-back mismatch'):
+            audio.__enter__()
+        # Unmuted only by the restore at the end (the sink's pre-call value,
+        # written last), never while the call route was up.
+        unmutes = [i for i, e in enumerate(events) if e == ('cset', 'Incall Sink Mute', '0')]
+        self.assertEqual(unmutes, [len(events) - 1])
+        self.assertEqual(controls, original)
+
+    def test_set_output_leaves_the_sink_muted_when_a_gain_write_fails(self):
+        audio, events, controls, original = self.fixture()
+        with audio:
+            inner = audio.mixer
+            def failing(action, name, value=None):
+                if action == 'cset' and name == 'Bottom Speaker Digital Volume' and value == '0':
+                    raise RuntimeError('mixer failed')
+                return inner(action, name, value)
+            audio.mixer = failing
+            with self.assertRaisesRegex(RuntimeError, 'mixer failed'):
+                audio.set_output('earpiece')
+            self.assertEqual(controls['Incall Sink Mute'], '1')   # never unmuted on unconfirmed gains
+            self.assertEqual(audio.output, 'speaker')             # and the output isn't claimed
+            # A repeat that goes through unmutes again.
+            audio.mixer = inner
+            audio.set_output('earpiece')
+            self.assertEqual((controls['Incall Sink Mute'], audio.output), ('0', 'earpiece'))
+        self.assertEqual(controls, original)
+
+    def test_set_output_leaves_the_sink_muted_on_a_gain_read_back_mismatch(self):
+        for broken, message in (('  : values=180\n', 'read-back mismatch'),
+                                ('  : values=unavailable\n', 'read-back unavailable')):
+            audio, events, controls, original = self.fixture()
+            with audio:
+                inner = audio.mixer
+                def lying(action, name, value=None, broken=broken):
+                    if action == 'cget' and name == 'Bottom Speaker Digital Volume':
+                        return broken
+                    return inner(action, name, value)
+                audio.mixer = lying
+                with self.assertRaisesRegex(voice_audio.AudioRefused, 'call audio output refused: TAS gain ' + message):
+                    audio.set_output('earpiece')
+                self.assertEqual(controls['Incall Sink Mute'], '1')
+                self.assertEqual(audio.output, 'speaker')
+                audio.mixer = inner
+            self.assertEqual(controls, original)
+
+    def test_set_output_checks_the_sink_mute_before_changing_a_gain(self):
+        audio, events, controls, original = self.fixture()
+        with audio:
+            inner = audio.mixer
+            def deaf(action, name, value=None):
+                if action == 'cset' and name == 'Incall Sink Mute' and value == '1':
+                    return ''
+                return inner(action, name, value)
+            audio.mixer = deaf
+            with self.assertRaisesRegex(voice_audio.AudioRefused, 'sink mute read-back mismatch'):
+                audio.set_output('earpiece')
+            self.assertEqual(controls['Bottom Speaker Digital Volume'], voice_audio.TEGU_GAIN)
+            audio.mixer = inner
+        self.assertEqual(controls, original)
+
+    def test_an_unknown_output_is_checked_on_the_tegu_route_only(self):
+        # [audio] output is the 9a's key. A mistyped value must not cost any
+        # phone its call audio: ignored away from the tegu card, and on it
+        # logged, with the call starting on the loudspeaker.
+        for tegu, value, expected, warned in ((False, 'earpeice', 'speaker', False),
+                                              (False, 'earpiece', 'speaker', False),
+                                              (True, 'earpeice', 'speaker', True),
+                                              (True, 'earpiece', 'earpiece', False),
+                                              (True, 'speaker', 'speaker', False)):
+            with patch.object(voice_audio, 'is_tegu_card', return_value=tegu), \
+                 patch.object(voice_audio.C, 'CDLL', return_value=MagicMock()), \
+                 patch.object(voice_audio.shutil, 'which', return_value=None), \
+                 patch('builtins.print') as printed:
+                audio = VoiceAudio(card=3, output=value)   # must not raise
+            self.assertEqual((audio.tegu, audio.output), (tegu, expected), (tegu, value))
+            log = ' '.join(' '.join(map(str, call.args)) for call in printed.call_args_list)
+            self.assertEqual('Unknown [audio] output' in log, warned, (tegu, value))
+
+    def test_set_output_needs_a_running_route(self):
+        audio, _, _, _ = self.fixture()   # pcms not opened yet
+        with self.assertRaisesRegex(RuntimeError, 'no call audio is running'):
+            audio.set_output('earpiece')
 
 class EarpieceUnitTests(unittest.TestCase):
     def test_the_mode_goes_through_the_units_when_installed(self):
