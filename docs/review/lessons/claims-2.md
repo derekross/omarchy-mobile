@@ -3,6 +3,13 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-918. A contributor's incident log is read for what it says about a
+  claim we published.** #881's log shows the network ending the IMS bearer
+  with the internet one; the 2026.11.15 release notes say calls and texts "use
+  a separate connection, which didn't drop". *Check:* `git grep -n -i
+  '<subsystem>' docs/release-notes/<latest>.md docs/DEVICES.md` for sentences
+  the new evidence contradicts, and put them in the maintainer's list. Extends
+  L-654 and L-433. *From:* #881, round 61, 2026-11-18.
 - **L-915. A timed client run that returns nothing is not yet a failure or a
   pass: the timeout is compared with the receiver's recorded cold start.** On
   #864 two of five 40 s `where-am-i` runs were empty, where the sibling PR
