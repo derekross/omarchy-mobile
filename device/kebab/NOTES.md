@@ -26,31 +26,64 @@ the slots: B for these tests, A to get Android back. A failed mainline boot
 marks the active slot unbootable (`slot-unbootable:<slot>:yes`) and ABL then
 falls to the other slot; `--set-active` clears that.
 
-## Where the device tree comes from
+## Where the kernel and device tree come from
 
-Linus's tree has no OnePlus 8/8T support. The DTS is
-`arch/arm64/boot/dts/qcom/sm8250-oneplus-kebab.dts` from the
-[sm8250-mainline tree][tree], branch `sm8250/v6.13`, copied to
-`device/kebab/dts/`, with these changes:
+Linus's tree has no OnePlus 8/8T support. Since 2026-11-28 the kernel is
+the [sm8250 tree][tree72]'s tag `sm8250-7.2.0_git20261010` (Linux 7.2.0),
+whose `sm8250-oneplus-kebab.dts` and `sm8250-oneplus-common.dtsi` describe
+the phone: board id `<8 0>` (MTP) with msm-id v1 and v2.1, ramoops at
+0xb0000000, the Samsung AMB655X DSI panel, Synaptics S3908 touch, USB
+through the PM8150B Type-C port (role switch, FSA4480 mux), Adreno 650,
+QCA6390 Wi-Fi and Bluetooth, the remoteprocs. The same tree carries the
+OnePlus 8 Pro (`sm8250-oneplus-instantnoodlep.dts`).
 
-- `qcom,board-id = <8 0>, <0 0>` and `qcom,msm-id` v1 and v2.1 (first light,
-  point 3);
-- a `ramoops` node laid out as stock's (`0xb0000000`, 4 MiB, record,
-  console and ftrace 256 KiB, pmsg 2 MiB);
-- remoteproc and venus `firmware-name`s under `qcom/sm8250/oneplus/kebab/`.
+`tools/build-kebab-kernel` fetches mainline `v7.2` from GitHub and only
+the tree's commits since then from its own (slow) server, appends
+`device/kebab/dts/omamobile.dtsi` to the board DTS, and builds `defconfig`
++ `kernel/configs/omamobile.config` + `device/kebab/kernel.config` in an
+arm64 container. It reports any option that comes out different from
+what the fragment asks.
 
-`tools/build-kebab-kernel` builds that branch (`defconfig` +
-`kernel/configs/omamobile.config` + `device/kebab/kernel.config`) in an
-arm64 container. The branch is 6.13-based; linux-omamobile would need the
-DTS forward-ported.
+`device/kebab/dts/omamobile.dtsi` holds our one change: `pd-disable` on
+the Type-C connector (2026-11-28 entry).
 
-What the DTS covers (read from the file): simple framebuffer at 0x9c000000
-(1080x2376 a8r8g8b8), gpio-keys, Samsung S6SY761 touch, QCA6390 Wi-Fi and
-Bluetooth, NXP NCI NFC, BQ25980 charger, BQ27541 gauge, RPMh regulators,
-USB 2.0 peripheral on `usb_1`. No modem, camera or IMU nodes. The panel
-runs on the bootloader's framebuffer; there is no DSI panel driver yet.
+Until 2026-11-27 the kernel was the [sm8250-mainline tree][tree]'s
+`sm8250/v6.13`, with a copy of its DTS; that DTS had USB as a plain
+peripheral, no panel node and the wrong touch controller (S6SY761).
 
+[tree72]: https://gitlab.postmarketos.org/soc/qualcomm-sm8250/linux
 [tree]: https://gitlab.com/sm8250-mainline/linux
+
+## 2026-11-28: the 7.2.0 tree (`fastboot boot`, root in the shared initramfs)
+
+Kernel `7.2.0-omamobile-push1-00084-g3c5440e9dd3c`, both the tree's DTB
+and our `omamobile.dtsi`.
+
+- **USB through Type-C.** The initramfs's NCM gadget comes up through the
+  PM8150B port's role switch (`TYPEC_TCPM`, `TYPEC_QCOM_PMIC` and
+  `TYPEC_MUX_FSA4480` built in): SSH works.
+- **PD resets the link.** With the connector as the tree has it, TCPM
+  sends a PD signal (`typec@1500: isr: tx_sig`) about once a second to a
+  laptop port that never completes a PD contract, and each is followed by
+  `dwc3 a600000.usb: remote wakeup not configured` and a new network
+  interface on the laptop: an SSH session lasts seconds to a minute.
+  `pd-disable` on the connector (`omamobile.dtsi`) is built; its boot is
+  the next test.
+- **Root without modules.** Booted into the root on `userdata` before its
+  modules were installed, the phone answered ping but not SSH: ufw sets
+  its default-deny policy and then can't load its rules, which need
+  netfilter modules for the running kernel (enchilada's firewall entry
+  again), and touch had no driver. The modules were then written into the
+  root from the initramfs (`omamobile.initramfs`, mount `userdata`,
+  `busybox tar`): `msm.ko`, `panel-samsung-amb655x.ko`,
+  `synaptics_s3908.ko` and the rest.
+- **Host side (macOS).** A manual IPv4 alias on the phone's interface is
+  dropped whenever the interface is re-created; SSH to the phone's IPv6
+  link-local address (found with `ping6 ff02::1%<if>`) needs no address on
+  the laptop at all.
+
+Next: boot the root with `pd-disable`, then the display (msm DRM and the
+AMB655X panel take over from simpledrm) and touch.
 
 ## 2026-11-28: Omarchy from `userdata` (`fastboot boot`, Arch root on `userdata`)
 
@@ -92,7 +125,7 @@ an aarch64 build host refused) and a case-sensitive build directory: on a
 case-insensitive host file system the source's `VERSION` file answers
 `#include <version>`.
 
-Next: the display (msm DRM and the 8T's DSI panel), then the GPU.
+Next: the display (msm DRM and the 8T's DSI panel), then the GPU (2026-11-28, the 7.2.0 tree, above).
 
 ## 2026-11-27: RAM-only first light (`fastboot boot`, root in the shared initramfs)
 

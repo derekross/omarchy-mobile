@@ -1,32 +1,54 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# Build the sm8250-mainline kernel for the OnePlus 8T (kebab) in a native
-# arm64 Ubuntu container: Image.gz, the kebab DTB, modules. Touches no phone.
-# Source and objects live in Docker volumes (bind mounts are too slow for a
-# kernel build); only the artifacts are copied to OUT.
+# Build the sm8250 kernel tree's 7.2.0 tag for the OnePlus 8T (kebab) in a
+# native arm64 Ubuntu container: Image.gz, the tree's own kebab DTB, modules.
+# Touches no phone. Source and objects live in Docker volumes (bind mounts are
+# too slow for a kernel build, and a case-insensitive host file system breaks
+# it); only the artifacts are copied to OUT.
+#
+# The source is mainline's v7.2 from GitHub plus the sm8250 tree's commits
+# since then: the tree's own server is slow, and fetching only what v7.2
+# lacks moves a few MB instead of the whole history.
 #   tools/build-kebab-kernel            # build
 #   OUT=/some/dir tools/build-kebab-kernel
 set -euo pipefail
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 OUT=${OUT:-$ROOT/out/kebab/kernel}
-BRANCH=${BRANCH:-sm8250/v6.13}
+BASE_TAG=${BASE_TAG:-v7.2}
+BASE_DATE=${BASE_DATE:-2026-08-15}
+TAG=${TAG:-sm8250-7.2.0_git20261010}
+SRC_VOLUME=${SRC_VOLUME:-kebab72_src}
+OBJ_VOLUME=${OBJ_VOLUME:-kebab72_obj}
 JOBS=${JOBS:-8}
 mkdir -p "$OUT"
 docker run --rm \
-  -v kebab_mainline_src:/src -v kebab_mainline_out:/obj \
+  -v "$SRC_VOLUME":/src -v "$OBJ_VOLUME":/obj \
   -v "$ROOT":/repo:ro -v "$OUT":/out \
-  -e BRANCH="$BRANCH" -e JOBS="$JOBS" \
+  -e BASE_TAG="$BASE_TAG" -e BASE_DATE="$BASE_DATE" -e TAG="$TAG" -e JOBS="$JOBS" \
   ubuntu:24.04 bash -euxo pipefail -c '
     export DEBIAN_FRONTEND=noninteractive
     apt-get update -qq
     apt-get install -y -qq --no-install-recommends build-essential bc bison flex git ca-certificates \
       libssl-dev libelf-dev libdw-dev lz4 xz-utils kmod cpio rsync python3 perl >/dev/null
     if [ ! -d /src/linux/.git ]; then
-      git clone --depth 1 --branch "$BRANCH" https://gitlab.com/sm8250-mainline/linux /src/linux
+      git init -q /src/linux
+      git -C /src/linux remote add gh https://github.com/torvalds/linux.git
+      git -C /src/linux remote add sm https://gitlab.postmarketos.org/soc/qualcomm-sm8250/linux.git
     fi
-    # our copy of the board DTS (board ids, ramoops, firmware paths) replaces the one in the tree
-    cp /repo/device/kebab/dts/sm8250-oneplus-kebab.dts /src/linux/arch/arm64/boot/dts/qcom/
     cd /src/linux
+    if ! git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+      git fetch -q --depth 1 gh tag "$BASE_TAG"
+      git fetch -q --shallow-since="$BASE_DATE" sm tag "$TAG"
+    fi
+    dts=arch/arm64/boot/dts/qcom/sm8250-oneplus-kebab.dts
+    git update-index --no-assume-unchanged "$dts"
+    git checkout -q -f "$TAG"
+    # Omamobile additions (device/kebab/dts/omamobile.dtsi) go on the end of
+    # the board DTS in the tree; the checkout above restores the pristine
+    # file. assume-unchanged keeps the edit out of the release name (no
+    # -dirty), which the modules on the phone are installed under.
+    cat /repo/device/kebab/dts/omamobile.dtsi >> "$dts"
+    git update-index --assume-unchanged "$dts"
     make ARCH=arm64 O=/obj defconfig
     scripts/kconfig/merge_config.sh -m -O /obj /obj/.config /repo/kernel/configs/omamobile.config
     scripts/kconfig/merge_config.sh -m -O /obj /obj/.config /repo/device/kebab/kernel.config
@@ -39,12 +61,13 @@ docker run --rm \
       [ -n "$got" ] || { echo "DROPPED: $o"; continue; }
       [ "$got" = "$want" ] || echo "CHANGED: $o=$want is $o=$got"
     done | tee /obj/dropped-options.txt
-    make ARCH=arm64 O=/obj -j"$JOBS" Image.gz dtbs modules
-    cp /obj/arch/arm64/boot/Image.gz /obj/arch/arm64/boot/Image /out/
+    make ARCH=arm64 O=/obj -j"$JOBS" Image.gz qcom/sm8250-oneplus-kebab.dtb modules
+    cp /obj/arch/arm64/boot/Image.gz /out/
     cp /obj/arch/arm64/boot/dts/qcom/sm8250-oneplus-kebab.dtb /out/
     cp /obj/.config /out/config
     cp /obj/dropped-options.txt /out/
-    make ARCH=arm64 O=/obj INSTALL_MOD_PATH=/out/modroot modules_install >/dev/null
+    rm -rf /out/modroot
+    make ARCH=arm64 O=/obj INSTALL_MOD_PATH=/out/modroot INSTALL_MOD_STRIP=1 modules_install >/dev/null
     make -s ARCH=arm64 O=/obj kernelrelease > /out/kernelrelease
     ls -lh /out
   '

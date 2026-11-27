@@ -1,0 +1,19 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Omamobile's additions to the sm8250 tree's sm8250-oneplus-kebab.dts,
+ * appended to it by tools/build-kebab-kernel.
+ */
+
+/*
+ * No USB Power Delivery on the Type-C port for now. With PD on, TCPM sent a
+ * PD signal (tx_sig) about every second to a laptop port that never
+ * answered, and each one dropped the USB link (dwc3 "remote wakeup not
+ * configured", the laptop's network interface re-created): the gadget's
+ * SSH session died within a minute. Plain Type-C still picks the data role
+ * and draws default USB current.
+ */
+&pm8150b_typec {
+	connector {
+		pd-disable;
+	};
+};
