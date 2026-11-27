@@ -16,7 +16,7 @@
 # cross-compiles instead (omatel's bin/cross).
 pkgname=omatel-agent
 pkgver=0.2.4
-pkgrel=2
+pkgrel=3
 pkgdesc="Phone and Messages background service: rings, call log, SMS storage, notifications"
 arch=(aarch64)
 url="https://github.com/derekross/omatel"
@@ -27,7 +27,8 @@ license=('GPL-3.0-or-later' 'MIT')
 # shell's call card when it runs (omamobile-shell 0.2.12); from 0.2.3 Omarchy's
 # Do Not Disturb silences every caller but starred contacts.
 depends=(gcc-libs glibc sqlite dbus systemd feedbackd sound-theme-freedesktop)
-optdepends=('omaphone: the Phone app'
+optdepends=('mmsd-tng: MMS and group messages'
+            'omaphone: the Phone app'
             'omamessages: the Messages app'
             'omamobile-mmd: the modem (ModemManager API) on Omamobile phones'
             'callaudiod: call audio routing (speaker, mute), with call audio (T4)')
@@ -35,11 +36,25 @@ makedepends=(cargo pkgconf sqlite)
 checkdepends=(dbus)
 install=omatel-agent.install
 options=('!debug' '!lto')
-source=("omatel-$pkgver.tar.gz::https://github.com/derekross/omatel/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('e02986f33b70e89accb67bf62c4d4e1b695b2d12acc801008db80c1bf6242670')
+# Two changes not in an omatel release yet, for the OnePlus 7T Pro
+# (device/hotdog/MODEM-PLAN.md):
+# 0001: ModemManager settles a modem's EmergencyOnly a moment after its
+#   state, so after a SIM or modem restart the agent kept "emergency-only"
+#   until the next state change (R6). The agent now also follows it.
+# 0002: MMS and group messages through mmsd-tng (omatel 0.3.0's API:
+#   SendWithAttachments, SendToConversationWithAttachments, ListParts,
+#   MmsReady). Drop both when an omatel release carries them.
+source=("omatel-$pkgver.tar.gz::https://github.com/derekross/omatel/archive/refs/tags/v$pkgver.tar.gz"
+        0001-agent-follow-EmergencyOnly-changes.patch
+        0002-MMS-and-group-messages-through-mmsd-tng.patch)
+sha256sums=('e02986f33b70e89accb67bf62c4d4e1b695b2d12acc801008db80c1bf6242670'
+            'cb3433e8392b48e3d951d6415983aee67953678b3fa76db6f7aac1cf811f9639'
+            '6389ea61b79b782df6c3ba99ada30c58e76beef900d90092ea6e94adccaaaad9')
 
 prepare() {
   cd "omatel-$pkgver"
+  patch -Np1 -i "$srcdir/0001-agent-follow-EmergencyOnly-changes.patch"
+  patch -Np1 -i "$srcdir/0002-MMS-and-group-messages-through-mmsd-tng.patch"
   cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
 }
 
