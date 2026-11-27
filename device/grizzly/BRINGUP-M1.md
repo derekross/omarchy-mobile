@@ -9828,6 +9828,48 @@ and link-state bits provide no mapping from AP
 supplies that mapping. PSM1, PHY TX and host reads
 remain disabled.
 
+###### Offline D1 ABL scan-bit table provenance
+
+The scan decoder at ABL `0x58854` calls `0xe284`
+to select one of two tables linked into the ABL
+image. It uses file offset `0x2b3110` for silicon
+revision byte `0x10` and `0x2396b8` otherwise.
+The revision helper at `0x2d0d0` caches the low
+byte of the word at `0x3444601c`. ABL's revision
+print path (`0x47678`, `0x476a8`) splits the
+same byte into the revision letter and digit. The
+saved stock log identifies B0, which selects
+`0x2b3110`.
+
+The decoder uses a 32-bit field index to locate a
+record in the selected table. It then reads bits
+from the captured scan image at the record's
+numeric positions (`0x589fc`–`0x58a58`). The
+linked DPU validation table entry at `0x236738`
+supplies indices `0x1c9fe` and `0x1ca10`. In both
+revision tables those records select 16 bits each,
+at positions `0x2`–`0x11` and
+`0x367c67`–`0x367c76`. The DPU/DP0 ICD peer
+records use five-bit fields. The DPU peer record
+matches across revisions. The HSIO-N peer record
+has different bit positions in the B0 table.
+
+The binary names `s2m_register_parser.c` and
+`s2m_block_parser.c` in its crash-dump code.
+The traced decoder uses the linked constants
+directly. ABL reads the payload from GMC scan
+memory anchored at `0xc0000000` and registers
+it as a crash archive output at `0x56434`, named
+`p_s2m.bin` or `p_s2m_c2m.bin`. The saved FBPK and local
+Malibu source snapshot supply no identified
+generator, named netlist or register-to-scan
+map for DPU LPCM. The retained stock bugreport
+also contains no scan output archive member.
+No saved generated map identifies the PSM1
+descriptor at `0x0f409018`. Its inclusion in the
+physical scan chain remains unverified. Keep
+PSM1, PHY TX and host reads disabled.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
