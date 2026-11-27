@@ -8599,6 +8599,53 @@ return on any such fixture. No PHY-read image was built.
 The existing no-MMIO PHY scaffold and DSI0 host hold
 remain in place.
 
+###### D1 PHY TX readiness with sibling domains off
+
+The Malibu DT gives the DSI0 PHY the DSI0 power domain.
+The DSI0 domain's ancestors are BE and the DPU wrapper.
+DSI1 and FE0 are other BE children, and FE1 is a child of
+FE0. None is an ancestor of the DSI0 PHY.
+
+The exact D1 CPM display records at `0x62f38` and
+`0x62f6c` both select PSM2 for FE0 and FE1. The DSI0
+and DSI1 records at `0x62fa0` and `0x62fd4` both select
+PSM3. Decoding the DSI0 and DSI1 ON/OFF handlers gives
+the following PSM3 state meanings.
+
+| PSM3 state | DSI0 | DSI1 |
+| --- | --- | --- |
+| 0 | ON | ON |
+| 1 | ON | OFF |
+| 2 | OFF | ON |
+| 3 | OFF | OFF |
+
+DSI0 ON from state 3 requests state 1 through
+`0x3a3f0` and `0x3b8b0`. Both DSI0 ON transition
+callbacks set mask `0x0c` at CPM `0x6f40a000`.
+DSI1 ON sets `0x14` at the same address and clears
+its own bit 4 on OFF. The DSI0 handler samples PSM3
+and does not test PSM2. This establishes a DSI0-only
+firmware state and separate FE sequencing. It does
+not identify which physical conditions make the TX
+bank respond from Linux.
+
+Across six distinct retained stock reads of
+`0x0f7c7124`, all returned `0x000001cc`. The two
+captures with sibling vote coverage show DSI1, FE0
+and FE1 ON at the read. The four narrower captures
+give no sibling state. No retained witness has all
+three verified OFF.
+
+Read-only MBFS queries could establish the sibling
+vote values. PSM3 state 1, if available from a
+qualified firmware export, would corroborate DSI0
+sequencer state. The audited D1 paths offer no
+qualified PSM3 export or PHY TX clock/reset readback,
+and neither vote values nor PSM3 alone validate
+the TX transaction. Keep direct PHY TX and DSI0 host
+reads disabled. There is no PHY-read fixture from
+this audit.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
