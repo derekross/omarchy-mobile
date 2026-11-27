@@ -7952,6 +7952,46 @@ through the events available to that build. The
 current discovery ramdisk has the tracing controls
 but no stock Composer client to observe.
 
+###### Mainline DSI0 readiness after stock connector registration
+
+The mainline prerequisite fixture at kernel
+`16a63b142e0b` still uses wrapper `0x08` → BE
+`0x200` → DSI0 `0x203`, then reads the pixel
+clock rate through CPM selector 1. Its code logs
+that host access was skipped and releases the
+votes in reverse order. Neither a host nor PHY
+consumer runs. The earlier powered-rate trial
+recorded successful ON and OFF results and a
+150 MHz pixel rate. The prerequisite-only bundle's
+five saved image hashes still match.
+
+Stock uses the same final vote sequence, but its
+host probe runs after its own PHY initialization
+and earlier genpd cycles. The new DP-off trace
+again shows CD-PHY G301 initialization at
+7.408682 s, host ID `0x30313130` at 7.408717 s and
+version `0x1a000110` at 7.408759 s. This precedes
+DSI2H component bind at 8.043425 s and the
+connected connector sample at 11.063835 s. The
+DP change resolved the later DRM aggregate block.
+It added no independent APB or external-reset
+observation. This fixture did not arm the earlier
+clock and reset provider probes.
+
+| Prerequisite | Offline result |
+| --- | --- |
+| Host APB gate | The pixel GET_RATE is for a different clock. Stock demonstrated effective APB access on its supplier path. ABL's bit 8 at `0x0f4196fc` remains an unqualified non-secure EL1 read. |
+| Host external reset | ABL bit 12 at that word acknowledges the selected APB clock cell. Its coverage of downstream host resets is unverified. The PHY-local resets and the panel reset GPIO cover different blocks. |
+| Firmware completion | The exact CPM path polls PSM3 and can discard a returned transition error before the deferred success notification. It supplies no independent APB or reset status. |
+
+The offline checks did not qualify a mainline read
+of ID, version or `pwr_up`. The existing
+prerequisite-only package stays in place. A future
+guard needs either an independently qualified
+outside-aperture status for both conditions or an
+audited stock-equivalent supplier sequence that
+establishes both before the first host access.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
