@@ -7262,6 +7262,65 @@ The 90-second warm return worked. Fastboot returned
 134 seconds after the B boot request. Stock A completed
 boot with enforcing verity and matching VBMeta.
 
+###### Offline stock PHY reset register access
+
+The D1 CD-PHY module maps the second platform resource
+at `cdphy_init_g301+0xf8`, initializes its MMIO regmap
+at `+0x124` and stores it at private offset `0x30`.
+The two reset field allocations use that regmap and
+offset `0x28`. An exhaustive check of references to
+the five fields in that word found the following
+hardware access sites in the exact stock module.
+
+| Stock callback | Module call offsets | Operation |
+| --- | --- | --- |
+| `dw_dphy_configure_g301`, initial configuration path | `0x11bc`, `0x11d8` | Clear `shutdown_n`, then `phy_rst_n`. |
+| `dw_dphy_configure_g301`, release paths | `0x2ff0`, `0x300c` or `0x30a8`, `0x30c4` | Set `shutdown_n`, then `phy_rst_n`. |
+| `dw_dphy_configure_g301`, adjacent field | `0x2fd4` or `0x308c` | Update bit 8 of the same word. |
+| `dw_dphy_power_off_g301` | `0x50c`, `0x528` | Clear `shutdown_n`, then `phy_rst_n`. |
+
+All listed calls use `regmap_field_update_bits_base`.
+The remaining two fields in this word, bits 16 and
+17, have allocation and removal references only in
+this module. The stock `dw_dphy_reset_g301` callback
+logs and returns zero. The normal init callback reads
+`0x7124` from the first resource. Neither callback
+touches the reset word.
+
+The host's enable path calls `phy_configure` at
+`0x155c` and `phy_power_on` at `0x1584`.
+A host transfer, a ready bridge's runtime resume
+or DRM atomic enable can reach that enable path.
+The disable path calls `phy_power_off` at `0xae0`
+only after the host has entered an enabled state.
+The DRM platform shutdown callback calls
+`drm_atomic_helper_shutdown` at `0x9948` when the
+DRM device exists. It tears down an active pipeline.
+The RAM fixture captured the probe's `bridge not ready`
+and `dt=0 reg=0` messages and neither configuration
+nor PHY power-off before the timed return. Extending
+the idle capture window alone supplies no modeset.
+
+The saved full stock D1 Android bugreport shows the
+DSI0 PHY configuring at 7.443986 s, powering on at
+7.444816 s and powering off at 12.912277 s. Further
+configure and power-off cycles appear in the same log.
+These are natural driver opportunities to observe
+the reset word. A passive capture would pair filtered
+existing regmap read and write events at `0x28` with
+the identified calls and their returns on the same task.
+Both PHY regmaps share the platform device name in
+generic regmap events, so the call site is needed to
+identify the second resource. An existing read can
+report the prior latch bits. A write event alone
+reports the word issued by the driver.
+
+These paths can establish PHY-local state during a
+stock display transition. They leave the PHY state
+at the initial `pwr_up` read and the separate APB
+and external host reset state unresolved. No modeset
+fixture was built from the probe-only bundle.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
