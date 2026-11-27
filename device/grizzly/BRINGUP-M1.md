@@ -9435,6 +9435,65 @@ host reads disabled. This audit used only saved artifacts.
 [gpcsr-20000005-be-async]: https://github.com/GrapheneOS/kernel_pixel/blob/cbc6305f4ca4f4a63c4e6f476fd0d0aa09fa2122/private/google-modules/display/vsi-drm/verisilicon/9x00/info/sswrp_dpu_gpcsr_pg_9400_0x20000005.h#L1346-L1375
 [malibu-fabdisp-gia-test]: https://github.com/GrapheneOS/kernel_pixel/blob/cbc6305f4ca4f4a63c4e6f476fd0d0aa09fa2122/private/devices/google/malibu/dts/malibu-gia-test.dtsi#L1292-L1315
 
+###### Offline D1 `lpdp_1to5_clk` route and readback
+
+The CID-selected `0x20000005` layout names
+`lpdp_1to5_clk` at `0x0f791028` bit 0, in the wrapper's
+asynchronous activity exclusion mask. The bit defaults
+to zero and excludes that activity input when set. Its
+readback describes the mask setting. The header supplies
+no LPDP clock-gate, reset-status field or debug selector.
+The `0x32a` variant also names the input at bit 0, in
+its mask at `0x0f791034`.
+[D1 layout][gpcsr-20000005-input-masks] · [0x32a layout][gpcsr-32a-lpdp-mask]
+
+The exact B0 tree routes DPU mux 2 through `dp-encoder`
+to `a2b4000.dwc_dptx`. The transmitter uses the HSIO-N
+USB/DP PHY at index 2, `DpuDp0.v` (`0x205`) and
+`HsioNDp.v` (`0x213`). DSI0 CD-PHY uses its fixed
+38.4 MHz reference and `DpuDsi0.v` (`0x203`). Exact
+ABL records at `0x236db8` and `0x236dd0` pair
+`dpu_hsio0` with `dptx0_gspan_stream_target` for
+crash-snapshot decoding. This identifies the DP0 stream
+path. The tree and records leave the LPDP input's
+downstream wiring unresolved.
+[DP encoder graph][malibu-lpdp-dp-encoder] · [DPTX resources][malibu-lpdp-dptx] · [CD-PHY resources][malibu-axi2apb5-dpu-dt]
+
+The DP0 MBFS descriptor (`0x63008`) requests PSM1
+state 0 for ON and 3 for OFF. The `3 → 0` callback
+(`0x3a6a0`) sets bit 5 at CPM `0x6f40a000`. The
+`0 → 3` callback (`0x3a678`) clears bit 5 and sets
+shared bit 2. DSI0 uses PSM3. Neither callback reads
+the LPDP signal. ABL
+describes the `dpu_dp0_pix_clk` cell at `0x0f4197c0`
+and associates it with clock selector 0. The exact
+CPM selector-0 record (`0x65800`) has a null gate
+pointer. Clock status operation 2 rejects that record
+at `0x3841e` and returns `-24` before the gate read.
+The DP0 vote and pixel-clock paths supply no LPDP
+gate or reset feedback.
+[DPU clock names][malibu-axi2apb5-clock-dt]
+
+In the retained DP-off trial, the live B0 tree confirmed
+the DP encoder disabled at 5.710108 s. The packaged
+module manifests omitted `dwc_dptx.ko`. Stock CD-PHY
+initialized at 7.408682 s and DSI0 then read host ID
+`0x30313130` and version `0x1a000110`. This shows
+that the DSI0 startup reached those reads without the
+Linux DisplayPort path. The trial did not sample the
+DP0 firmware vote or the LPDP clock.
+
+The exact D1 FBPK, CPM image and checked stock drivers
+yielded no LPDP name or register access linking that
+input to the DSI0 TX interface. A connection to the TX
+bus and a safe clock or external reset readback remain
+unverified. Keep PHY TX and DSI0 host reads disabled.
+This audit used only saved artifacts.
+
+[gpcsr-32a-lpdp-mask]: https://github.com/GrapheneOS/kernel_pixel/blob/cbc6305f4ca4f4a63c4e6f476fd0d0aa09fa2122/private/google-modules/display/vsi-drm/verisilicon/9x00/info/sswrp_dpu_gpcsr_pg_9400_0x32a.h#L574-L626
+[malibu-lpdp-dp-encoder]: https://github.com/GrapheneOS/kernel_pixel/blob/cbc6305f4ca4f4a63c4e6f476fd0d0aa09fa2122/private/devices/google/malibu/dts/malibu-dpu.dtsi#L445-L472
+[malibu-lpdp-dptx]: https://github.com/GrapheneOS/kernel_pixel/blob/cbc6305f4ca4f4a63c4e6f476fd0d0aa09fa2122/private/devices/google/malibu/dts/malibu-base.dtsi#L890-L916
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
