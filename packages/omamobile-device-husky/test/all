@@ -91,6 +91,7 @@ for f in usr/bin/reboot-to \
          usr/lib/systemd/system/omamobile-charge-limit-apply.service \
          usr/share/omamobile/device-husky/version \
          usr/share/licenses/omamobile-device-husky/LICENSE \
+         etc/UPower/UPower.conf.d/50-omamobile-critical.conf \
          etc/pacman.d/omamobile-mirrorlist; do
   [[ -f $tmp/root/$f ]] || fail "install stages $f"
 done
@@ -302,6 +303,28 @@ bash -n bin/omamobile-bt-addr || fail "the Bluetooth address script parses"
 grep -q 'chosen/config/bt_addr' bin/omamobile-bt-addr || fail "the Bluetooth address comes from the bootloader's DT"
 grep -q 'DRIVERS=="hci_uart_bcm"' vendor/udev/rules.d/80-omamobile-bt-addr.rules || fail "the rule matches the BCM UART controller only"
 pass "the Bluetooth address is read at run time, with the 9a's script"
+# At a critical battery the phone powers off, at 3 % (the 7 Pro's drop-in,
+# device-cheetah 0.1.55, its SUSPEND-PLAN 6.6). upower's default is a suspend,
+# which has ended eight boots of this phone (SUSPEND-PLAN section 4). Power
+# off holds only on a kernel with linux-omarchy-mobile#262, so this drop-in
+# must not reach a phone ahead of that kernel (README, omarchy-mobile#578).
+ud="$tmp/root/etc/UPower/UPower.conf.d"
+[[ $(find "$ud" -type f | wc -l) -eq 1 ]] || fail "install stages one upower drop-in"
+uf=$(find "$ud" -type f)
+# upower reads only NN-name.conf from UPower.conf.d (NN two digits).
+[[ ${uf##*/} =~ ^[0-9][0-9]-[a-zA-Z0-9_-]*\.conf$ ]] || fail "upower ignores a drop-in whose name isn't NN-name.conf"
+# Exactly these settings. upower resets all three percentages to its defaults
+# (20, 5, 2) unless Low > Critical > Action, so an action above the default
+# critical level (5) would silently bring back the suspend at 2 %.
+[[ $(grep -vE '^[[:space:]]*(#|$)' "$uf") == $'[UPower]\nPercentageAction=3\nCriticalPowerAction=PowerOff' ]] \
+  || fail "the upower drop-in powers off at 3 %"
+grep -qx 'backup=(etc/pacman.d/omamobile-mirrorlist etc/NetworkManager/conf.d/zz-omamobile-wifi-powersave.conf etc/UPower/UPower.conf.d/50-omamobile-critical.conf)' PKGBUILD \
+  || fail "pacman keeps a changed upower drop-in (backup=)"
+if [[ -f ../omamobile-device-cheetah/etc/upower-critical.conf ]]; then
+  [[ $(grep -vE '^[[:space:]]*(#|$)' etc/upower-critical.conf) == "$(grep -vE '^[[:space:]]*(#|$)' ../omamobile-device-cheetah/etc/upower-critical.conf)" ]] \
+    || fail "the upower drop-in's settings drifted from the 7 Pro's"
+fi
+pass "at a critical battery the phone powers off (upower drop-in, the 7 Pro's settings)"
 ps="$tmp/root/etc/NetworkManager/conf.d/zz-omamobile-wifi-powersave.conf"
 grep -qx '\[connection\]' "$ps" || fail "the Wi-Fi power save file needs a [connection] header"
 grep -qx 'wifi.powersave=3' "$ps" || fail "Wi-Fi power save is on by default (3 = enable)"

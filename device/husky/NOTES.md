@@ -10,6 +10,54 @@ Sources:
 - `P/`: postmarketOS pmaports `device/testing` (2026-10-21).
 - `G/`: Google's GPL kernel for this phone, `android-gs-shusky-6.1-android16` ([source.android.com: Build Pixel kernels](https://source.android.com/docs/setup/build/building-pixel-kernels)).
 
+## 2026-11-21: power off with the RTC fix, and upower at a critical battery
+
+Colin's phone, `omamobile` at `d832a9890f63` (`7.3.0-rc6-omamobile-push1-gd832a9890f63`), the
+last commit of [linux-omarchy-mobile#262](https://github.com/derekross/linux-omarchy-mobile/pull/262)
+and nothing after it: built in WSL, written to slot B with `bin/omamobile flash`, modules
+from `bin/omamobile modules-push`. The device tree, `dtbo`, `init_boot` and `vendor_boot`
+images are byte for byte the ones of `82f31d3a7`, which the phone ran before. Slot B read 2
+tries before each run and was never marked successful; every start from off spent one.
+
+- **The precondition** [V]: the RTC regmap (`firmware:power-management:pmic-1-rtc`) reads
+  `0x02` `0e` and `0x03` `0f` on `82f31d3a7` (2026-11-20) and again on this kernel after every
+  start. The bootloader arms WTSR at every start and the kernel clears it only at power off,
+  so these bytes do not show the fix.
+- **Power off by hand, cable out** [V]: `systemctl poweroff` over Wi-Fi at 14:59:50 (MST).
+  The journal ends at 14:59:56 and `journalctl --list-boots` has no boot until Power was held
+  at 16:04:20, 1 h 4 min later.
+- **Power off by upower, cable out** [V]: a runtime-only upower config in `/run`: the drop-in's
+  two settings, then a later file with `PercentageLow=99`, `PercentageCritical=98` and
+  `PercentageAction=97`, so only `CriticalPowerAction=PowerOff` is the drop-in's and its `3`
+  did not act (`/etc` untouched). The phone was at 100 % and the cable was pulled. The last
+  read before was 98 % at 17:25:14 and the first after the restart was 97 %; at 17:25:41
+  logind logged `poweroff requested from client PID … ('upowerd')`, then "The system will
+  power off now!", and the journal stopped at 17:25:43. The phone was dark and did not answer;
+  the next boot is at 17:46:38, when Power was held (21 min). `GetCriticalAction` read
+  `PowerOff` while the config was armed and `Sleep` again after that start.
+- **upower reads percentages as whole numbers** [V, source and this unit]: upower 1.91.5's
+  `up_config_get_double()` (`src/up-config.c`) keeps the value in an `int`. A first run with
+  99.8, 99.5 and 99.0 read as 99, 99 and 99, which are not descending, so upower reset all
+  three to 20, 5 and 2 and the warning level stayed `none` at 99 %. With 99, 98 and 97 it read
+  `low` at 99 %, `critical` at 98 % and acted at 97 %. The drop-in's 3 is a whole number.
+- **The package on the phone** [V]: built on the phone from this change with
+  `tools/phone-install-package` and installed with `pacman -U` (0.1.16 to 0.1.22; the only
+  other change in that range that installs files is the `omarchy-trace` Plymouth theme, #945
+  for #266, installed but not the active theme). The drop-in is the committed file byte for
+  byte, `pacman -Qkk` reports 0 altered files, and `GetCriticalAction` read `Sleep` before and
+  `PowerOff` after `systemctl restart upower`. The phone was not restarted.
+- **upower acts on the battery's own reading** [V for the reading, not tested at 3 %]: the
+  charger driver is blacklisted, so upower sees only the battery. With the cable in at full
+  charge the battery read `Discharging` at times, with the current within 7 mA of zero (the
+  watcher log, 17:04 to 17:09). So on a weak port at 3 % this file could power the phone off
+  while it is plugged in, as the 7 Pro's would (device/cheetah/SUSPEND-PLAN.md 6.6).
+- **Not tested:** a real 3 % (the gauge has no battery model,
+  [#761](https://github.com/derekross/omarchy-mobile/issues/761), so what 3 % holds in mAh is
+  not known); this file on a kernel without linux-omarchy-mobile#262 (the restart at 3 % is
+  expected from #578, not run); power off with the cable in on this unit (Somnius ran it for
+  linux-omarchy-mobile#262); what plugging in the off phone does (the 7 Pro starts a dark
+  charging boot for that, `omamobile-charger.target`; husky has none); akita and tegu.
+
 ## 2026-11-18: the torch tile and a held volume key, the third phone
 
 Colin's phone, published `omamobile` at `82f31d3a7` (the kernel). The two packages

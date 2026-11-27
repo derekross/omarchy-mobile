@@ -74,5 +74,7 @@ install -Dm644 device.conf \
   "$destination/usr/share/omamobile/device.conf"
 install -Dm644 etc/omamobile-mirrorlist \
   "$destination/etc/pacman.d/omamobile-mirrorlist"
+install -Dm644 etc/upower-critical.conf \
+  "$destination/etc/UPower/UPower.conf.d/50-omamobile-critical.conf"
 install -Dm644 LICENSE "$destination/usr/share/licenses/omamobile-device-husky/LICENSE"
 install -Dm644 version "$destination/usr/share/omamobile/device-husky/version"

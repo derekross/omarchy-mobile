@@ -48,7 +48,8 @@ after 13 s and pmic-1's interrupt count went from 0 to 1. No sleep was
 involved. Interrupt counts at idle on H0: pmic-1 and `rtc-alarm0` 0, the
 gauge 10 (no storm). Omarchy's `suspend-off` toggle is set and
 `omamobile-sleepd` runs, so the phone doesn't sleep on its own; but
-UPower's critical-battery action still does (section 4, 2026-11-13).
+UPower's critical-battery action did (section 4, 2026-11-13), until the
+power off drop-in (section 4, 2026-11-21).
 Inhibitors: NetworkManager, UPower and Omarchy's lock, all `delay`.
 
 ## 2. Rules and recovery
@@ -240,9 +241,11 @@ the whole run.
   handshake is tested.
 - **Auto sleep** (`omamobile-sleepd` with the toggle on), and anything
   unattended: a later plan, after H4 and the hook.
-- **UPower's critical action** (section 4, 2026-11-13): whether it should
-  suspend at all on husky before H4 has passed, as cheetah keeps its
-  drop-in off.
+- **UPower's critical action:** the husky device package powers off at 3 %
+  (`PercentageAction=3`, `CriticalPowerAction=PowerOff`), as device-cheetah does
+  since 0.1.55. It needs a kernel with
+  [linux-omarchy-mobile#262](https://github.com/derekross/linux-omarchy-mobile/pull/262)
+  (section 4, 2026-11-21). Auto sleep and unattended runs stay a later plan.
 - **NFC** with its driver bound across s2idle (#209's note), the modem,
   the AoC across sleep, and SYS_SLEEP: separate plans.
 
@@ -354,3 +357,29 @@ commented), and the package's
 `AllowSuspendThenHibernate=no`. There is no `/etc/systemd/sleep.conf.d/`
 directory, so no hand copy hides the package's file (#806). To be read
 again once 0.1.14 is installed.
+
+**This unit, 2026-11-21, upower's critical action, and power off.**
+Kernel `7.3.0-rc6-omamobile-push1-gd832a9890f63` (`omamobile` at the last
+commit of linux-omarchy-mobile#262), `omamobile-device-husky` 0.1.16 for
+the runs, then the package built from this change. Eight boots of this
+unit end at upower's critical suspend: 2026-11-11 10:19 (`deep`), then
+`s2idle` on 11-13 04:25, 11-14 09:49, 11-15 08:53, 11-16 06:07, 11-17
+09:00, 11-19 15:44 and 11-21 09:33. In each the journal ends within a
+second of `PM: suspend entry`, with no resume line, and the next boot is
+a fresh one. The journal does not settle whether the battery ran flat or
+the phone hung.
+With linux-omarchy-mobile#262 a power off stays off: `systemctl poweroff`
+with the cable out, off for 1 h 4 min. A runtime-only upower config (the
+drop-in's `CriticalPowerAction=PowerOff`, with the percentages raised to
+99, 98 and 97 because the battery read 100 %, so the drop-in's 3 did not
+act itself) made upowerd ask logind for the power off, and the phone
+stayed off until Power, 21 min later. The journal lines, and the finding
+that upower cuts fractional percentages to whole numbers, are in
+[NOTES.md, 2026-11-21](NOTES.md#2026-11-21-power-off-with-the-rtc-fix-and-upower-at-a-critical-battery).
+With the package built from this change installed, upower's critical
+action reads `PowerOff`.
+Not tested: a real 3 %; this file on a kernel without
+linux-omarchy-mobile#262; power off with the cable in on this unit;
+upower at 3 % with the cable in (upower acts on the battery's own
+`Discharging` reading, which at full charge with the cable in showed up
+at times); what plugging in the off phone does.
