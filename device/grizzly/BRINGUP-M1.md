@@ -8561,6 +8561,44 @@ the exact D1 vendor drop. The checked interfaces supply no
 independent host reset evidence, so direct host and LPCM
 status reads stay disabled.
 
+###### Stock D1 first PHY read and mainline qualification
+
+The D1 PHY provider probe obtains `pllref`, and
+`cdphy_init_g301` maps the TX and PHY APB resources and
+allocates the regmap fields. Its mapping calls use no
+bus-clock handle. The provider probe enables runtime PM.
+The later DSI2H consumer calls `phy_init` before enabling
+its own runtime PM or reading host ID and version.
+The exact D1 PHY init callback at `0x2a8` issues a
+32-bit `regmap_read` of TX offset `0x7124` at
+`0x2f0`, copies bit 8 to the software PLL flag and
+returns zero. It performs no PHY register write. The
+first read samples the LP-DCO dynamic-gating control.
+It does not measure PLL lock or an external reset.
+
+The word at AP `0x0f7c7124` is within the TX resource
+and independently falls within the D1 GC bridge rule
+`0x30303` for `0x0f7c3000`–`0x0f7c9fff`. In four
+retained stock captures, it returned `0x000001cc`
+9.785–11.229 ms after the last DSI0 ON reply. The two
+captures that included sibling votes also show DSI1,
+FE0 and FE1 ON when the PHY read ran. The other two
+filtered those domains out. Those observations prove
+the read path on the stock sequence and leave the
+necessity of the sibling domains and timing unresolved.
+
+The mainline scaffold proved only the wrapper, BE and
+DSI0 vote cycle. It omitted those sibling domains and
+received the DSI0 OFF acknowledgement 2.872 ms after
+the ON readback. Neither the MBFS readback nor a fixed
+delay qualifies the TX aperture under the isolated
+mainline setup. A future single-word diagnostic needs
+independent evidence that the PHY TX aperture is
+accessible with that setup. Keep the NV guard and timed
+return on any such fixture. No PHY-read image was built.
+The existing no-MMIO PHY scaffold and DSI0 host hold
+remain in place.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
