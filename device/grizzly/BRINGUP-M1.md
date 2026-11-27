@@ -8487,6 +8487,46 @@ to the APB clock cell. Both the DSI0 host aperture and the
 unqualified clock-cell status word remain excluded from the
 mainline diagnostic.
 
+###### Public Malibu DSI0 reset source audit
+
+The public [Spacecraft source snapshot](https://github.com/GrapheneOS/kernel_pixel/commit/cbc6305f4ca4f4a63c4e6f476fd0d0aa09fa2122)
+identifies build `CP41.260831.019`. It contains the Malibu
+and Grizzly vendor source paths. The D1 GKI hash resolves
+to [Android common](https://android.googlesource.com/kernel/common/+/f5369e7496cb231d2b41cbca078b8b69160ac22d),
+whose binding, reset and display bridge trees lack the
+Malibu DSI2H and CPM provider code. The Spacecraft snapshot
+corroborates the D1 binary and DT observations below. Its
+build metadata predates D1.
+
+- The [Malibu DPU DTSI](https://github.com/GrapheneOS/kernel_pixel/blob/cbc6305f4ca4f4a63c4e6f476fd0d0aa09fa2122/private/devices/google/malibu/dts/malibu-dpu.dtsi#L271-L294)
+  gives the host and PHY the DSI0 power domain. The host
+  references the PHY and the DSI0 event IRQ. Neither node
+  supplies a reset phandle. The
+  [Grizzly display overlay](https://github.com/GrapheneOS/kernel_pixel/blob/cbc6305f4ca4f4a63c4e6f476fd0d0aa09fa2122/private/devices/google/spacecraft/dts/malibu-grizzly-display.dtsi#L26-L73)
+  supplies panel reset GPIOs and sets the DSI0 data rate.
+- The downstream [host binding](https://github.com/GrapheneOS/kernel_pixel/blob/cbc6305f4ca4f4a63c4e6f476fd0d0aa09fa2122/private/google-modules/display/vsi-drm/Documentation/devicetree/bindings/display/verisilicon/vs-dsi2h.yaml)
+  describes the DSI event/error interrupt and PHY link. The
+  [PHY binding](https://github.com/GrapheneOS/kernel_pixel/blob/cbc6305f4ca4f4a63c4e6f476fd0d0aa09fa2122/private/google-modules/display/vsi-drm/Documentation/devicetree/bindings/display/synopsys/dw-cdphy.yaml)
+  describes the PLL reference clock. Neither specifies
+  an external host reset connection or status source. The
+  PHY schema lists the older compatible variants, so the
+  Malibu DTSI is the wiring evidence for its v2 node.
+- The [Malibu reset provider](https://github.com/GrapheneOS/kernel_pixel/blob/cbc6305f4ca4f4a63c4e6f476fd0d0aa09fa2122/private/devices/google/malibu/dts/malibu-base.dtsi#L1335-L1380)
+  has the same seven reset groups as the saved D1 B0 merges
+  and omits DPU LPCM `0x23`. The [reset driver](https://github.com/GrapheneOS/kernel_pixel/blob/cbc6305f4ca4f4a63c4e6f476fd0d0aa09fa2122/private/google-modules/soc/rdo/drivers/rst/google/rst-cpm-main.c#L169-L225)
+  provides assert and deassert. It lacks a reset status
+  callback and its two debugfs entries have no getter.
+- The [Malibu GIA test map](https://github.com/GrapheneOS/kernel_pixel/blob/cbc6305f4ca4f4a63c4e6f476fd0d0aa09fa2122/private/devices/google/malibu/dts/malibu-gia-test.dtsi#L371-L473)
+  names software-reset-done events for display FE and BE.
+  DSI0 has the DSI subsystem event IRQ in its own row,
+  with no named external host reset acknowledgement.
+
+The public sources supply no DSI0 external reset routing
+or supported read-only status for that boundary. The
+clock-cell handshake remains the only identified APB reset
+acknowledgement. Host reads and direct LPCM status reads
+stay disabled.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
