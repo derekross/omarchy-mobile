@@ -8679,7 +8679,33 @@ The log checker accepted the required sequence and rejected active
 votes, read errors, missing or misordered samples, and failed release.
 The verified five-image archive has SHA-256
 `2fc9d727eabfa6de261e6f0d659fd620cb0b9b30fa2607a8ee44d791c6e0aaa0`.
-Live MBFS replies are pending a hardware trial.
+###### Attended DSI0 sibling MBFS vote trial
+
+On 2026-11-27, the guarded rescue backed up all nine NV partitions
+before the single MBFS fixture boot. The private copy is 3,392,151,552
+bytes. The rescue verified the partitions were read-only and unmounted,
+and the saved SHA-256 hashes matched the on-device hashes. Stock
+Android stayed off between the rescue and the fixture.
+
+Ramoops and `SYSTEM_LAST_KMSG` agree on all four samples.
+
+| Checkpoint | Boot time (s) | DSI1 | FE0 | FE1 |
+| --- | ---: | ---: | ---: | ---: |
+| Before DSI0 ON | 6.424467 | 0 | 0 | 0 |
+| After DSI0 ON | 6.425383 | 0 | 0 | 0 |
+| Before DSI0 OFF | 6.428641 | 0 | 0 | 0 |
+| After DSI0 OFF | 6.429298 | 0 | 0 | 0 |
+
+The LUN 0 read-only check passed for 42 partitions, the GPT scan used
+seven metadata reads, and the v73 comparison passed. The fixture then
+bound the DSI0 PHY scaffold, acquired wrapper → BE → DSI0, released
+DSI0 → BE → wrapper, and reported completion at 6.463 s. The kernel
+reported no SCSI disks before requesting its warm restart at 90.198 s.
+
+Stock D1 booted on A with enforcing verity and its original VBMeta
+digest. The trial verifies the three MBFS votes at the four sampled
+checkpoints. Physical power and PHY TX readiness remain unverified.
+PHY TX and DSI0 host reads stayed disabled.
 
 ### Offline stock D1 device reference-clock diagnostic
 
