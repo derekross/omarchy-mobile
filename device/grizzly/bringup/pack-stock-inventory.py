@@ -50,6 +50,11 @@ DSI0_MODULES = (
     "tzprot.ko", "gs-drm-connector.ko", "mipi-cdphy.ko", "mipi-dsi2h.ko",
     "google_icc.ko", "drm_display_helper.ko", "vs_drm.ko",
 )
+STOCK_DC_SHA256 = "5f75caef5893c7513c9d928f7542e4931f1c4be96bbd0358bf7e775ec99a6a68"
+DC_CID_EXCLUSIONS = (
+    "dsi2host@3d8000", "dsi2host@3f8000", "dw_mipi_cdphy@3c0000",
+    "dw_mipi_cdphy@3e0000", "dp-encoder",
+)
 DSI0_PANEL_MODULES = (
     "i2c-designware-core.ko", "i2c-designware-platform.ko", "s2dos07x02-regulator.ko",
     "da9188-gpio.ko", "gs-panel.ko", "panel-gs-pkcgda.ko",
@@ -65,7 +70,25 @@ def capture(*command):
     return subprocess.check_output(command)
 
 
-def pack_panel_dp_off(stock_dtbo, vendor_dtbs, baseline, temp, image, avbtool):
+def without_display_status(dts, nodes, required_status=None):
+    for node in nodes:
+        declaration = rb"^\t\t(?:[a-zA-Z0-9_]+: )?" + re.escape(node.encode()) + rb" \{\n"
+        matches = list(re.finditer(declaration, dts, re.M))
+        if len(matches) != 1:
+            raise ValueError(f"expected one B0 display node: {node}")
+        split = matches[0].end()
+        head, body = dts[:split], dts[split:]
+        props = re.match(rb'(?:\t\t\t[^\t\n][^\n]*;\n)*', body)[0]
+        status = re.findall(rb'^\t\t\tstatus = "([^"\n]+)";\n', props, re.M)
+        if len(status) > 1 or (required_status is not None and status != [required_status]):
+            raise ValueError(f"unexpected B0 display node status: {node}")
+        props_end = len(props)
+        props = re.sub(rb'^\t\t\tstatus = "[^"\n]+";\n', b'', props, flags=re.M)
+        dts = head + props + body[props_end:]
+    return dts
+
+
+def pack_display_dtbo(stock_dtbo, vendor_dtbs, baseline, temp, image, avbtool, dc_cid):
     # Pinned rescue DTBO and factory vendor-kernel DTB container.
     source = stock_dtbo.read_bytes()
     magic, total, header, stride, count, table, _, version = struct.unpack_from(">8I", source)
@@ -98,17 +121,23 @@ def pack_panel_dp_off(stock_dtbo, vendor_dtbs, baseline, temp, image, avbtool):
     if original.read_bytes() != baseline.read_bytes():
         raise ValueError("unmodified B0 merge differs from the audited board")
 
-    fragment = temp / "dp-off.dtbo"
-    capture("dtc", "-q", "-I", "dts", "-O", "dtb", "-o", fragment, HERE / "stock-dsi0-dp-off.dtso")
-    replacement = temp / "b0-dp-off.dtbo"
+    source_name = "stock-dc-cid.dtso" if dc_cid else "stock-dsi0-dp-off.dtso"
+    fragment = temp / "display-off.dtbo"
+    capture("dtc", "-q", "-I", "dts", "-O", "dtb", "-o", fragment, HERE / source_name)
+    replacement = temp / "b0-display-off.dtbo"
     capture("fdtoverlay", "-i", overlay, "-o", replacement, fragment)
-    merged = temp / "b0-dp-off.dtb"
+    merged = temp / "b0-display-off.dtb"
     capture("fdtoverlay", "-i", base, "-o", merged, replacement)
     old_dts = capture("dtc", "-q", "-s", "-I", "dtb", "-O", "dts", original)
     new_dts = capture("dtc", "-q", "-s", "-I", "dtb", "-O", "dts", merged)
-    dp = b'\t\t\tcompatible = "verisilicon,dp-encoder";\n\t\t\tphandle = <0x520>;\n'
-    if old_dts.count(dp) != 1 or new_dts != old_dts.replace(dp, dp + b'\t\t\tstatus = "disabled";\n', 1):
-        raise ValueError("B0 merged tree changed outside the DP encoder status")
+    if dc_cid:
+        if (without_display_status(old_dts, DC_CID_EXCLUSIONS)
+                != without_display_status(new_dts, DC_CID_EXCLUSIONS, b"disabled")):
+            raise ValueError("B0 merged tree changed outside the DC CID exclusions")
+    else:
+        dp = b'\t\t\tcompatible = "verisilicon,dp-encoder";\n\t\t\tphandle = <0x520>;\n'
+        if old_dts.count(dp) != 1 or new_dts != old_dts.replace(dp, dp + b'\t\t\tstatus = "disabled";\n', 1):
+            raise ValueError("B0 merged tree changed outside the DP encoder status")
 
     changed = replacement.read_bytes()
     delta = len(changed) - size
@@ -211,7 +240,8 @@ def pack(args):
     sampler_path = args.ufs_psm1_prep_trace or args.ufs_psm1_trace
     power_trace = (args.ufs_power_trace or args.ufs_pre_on_trace or sampler_path
                    or args.ufs_cpm_trace or args.ufs_uic_trace)
-    rescue_base = args.dsi0_trace or args.ufs_uic_trace
+    display_trace = args.dsi0_trace or args.dc_cid_trace
+    rescue_base = display_trace or args.ufs_uic_trace
     stock = {name: args.factory / f"{name}.img" for name in FACTORY}
     expected_images = FACTORY
     if rescue_base:
@@ -278,12 +308,12 @@ def pack(args):
             else:
                 write_payload(root / "stock-inventory.modules", manifest.encode(), 0o644)
                 archive_members.append("stock-inventory.modules")
-                if args.nv_guard_only or args.ufs_refclk_only or power_trace or args.usb2_test or args.dsi0_trace:
+                if args.nv_guard_only or args.ufs_refclk_only or power_trace or args.usb2_test or display_trace:
                     write_payload(root / "grizzly-inventory/nv-guard.sh",
                                   (HERE / "stock-nv-guard.sh").read_bytes(), 0o644)
-                if args.nv_guard_only or (args.dsi0_trace and not args.ufs_uic_trace):
+                if args.nv_guard_only or (display_trace and not args.ufs_uic_trace):
                     write_payload(root / "grizzly-inventory/nv-guard-only", b"", 0o644)
-                if args.dsi0_trace:
+                if display_trace:
                     display_modules = DSI0_MODULES
                     if args.dsi0_panel_discovery:
                         display_modules += DSI0_PANEL_MODULES
@@ -291,11 +321,17 @@ def pack(args):
                     full_count, full_preloads = check_modules(
                         vendor_kernel_cpio, manifest.rstrip() + "\n" + display_manifest)
                     if full_count != count + len(display_modules) or full_preloads != preloads:
-                        raise ValueError("DSI0 closure must load separately after the NV guard")
+                        raise ValueError("display closure must load separately after the NV guard")
                     write_payload(root / "grizzly-inventory/dsi0.modules",
                                   display_manifest.encode(), 0o644)
                     helper = "stock-dsi0-trace.sh"
-                    if args.dsi0_rmw_trace:
+                    if args.dc_cid_trace:
+                        dc_module = capture("bsdtar", "-xOf", vendor_kernel_cpio, "lib/modules/vs_drm.ko")
+                        if hashlib.sha256(dc_module).hexdigest() != STOCK_DC_SHA256:
+                            raise ValueError("factory vs_drm.ko differs from the audited DC CID probe")
+                        write_payload(root / "grizzly-inventory/dc-cid-trace", b"", 0o644)
+                        helper = "stock-dc-cid-trace.sh"
+                    elif args.dsi0_rmw_trace:
                         helper = "stock-dsi0-rmw-trace.sh"
                     if args.dsi0_panel_discovery:
                         helper = "stock-dsi0-panel.sh"
@@ -445,9 +481,10 @@ def pack(args):
         vendor_ramdisks.write_bytes(b"".join(fragment.read_bytes()
                                              for fragment in vendor_fragments))
         board_dtb = args.board_dtb
-        if args.dsi0_panel_dp_off:
-            board_dtb = pack_panel_dp_off(stock["dtbo"], temp / "vendor_kernel_boot/dtb",
-                                          board_dtb, temp, images / "dtbo.img", args.avbtool)
+        if args.dsi0_panel_dp_off or args.dc_cid_trace:
+            board_dtb = pack_display_dtbo(stock["dtbo"], temp / "vendor_kernel_boot/dtb",
+                                         board_dtb, temp, images / "dtbo.img", args.avbtool,
+                                         args.dc_cid_trace)
         bounds = capture(sys.executable, HERE / "check-handoff.py", kernel, board_dtb,
                          vendor_kernel_ramdisk, vendor_ramdisks, ramdisk,
                          "--packed-kernel", stock_kernel,
@@ -456,7 +493,7 @@ def pack(args):
 
     for name, path in stock.items():
         if name != "init_boot":
-            if name == "dtbo" and args.dsi0_panel_dp_off:
+            if name == "dtbo" and (args.dsi0_panel_dp_off or args.dc_cid_trace):
                 continue
             if name == "dtbo" and isolation_dtbo:
                 path = isolation_dtbo
@@ -480,7 +517,9 @@ def pack(args):
               f"{count - len(preloads)} subsequent module requests.")
         if args.nv_guard_only:
             print("NV guard prototype verifies read-only state without exporting block data.")
-        if args.dsi0_panel_discovery:
+        if args.dc_cid_trace:
+            print("Stock DC CID trace arms before the guarded display load with DSI hosts and PHYs disabled.")
+        elif args.dsi0_panel_discovery:
             print("Stock DSI0 panel fixture checks scoped I2C binding and the cached DRM connector.")
         elif args.dsi0_rmw_trace:
             print("Stock PHY register trace arms after CD-PHY loads and before the DSI host loads.")
@@ -545,6 +584,8 @@ def main():
                       help="observe existing stock PHY 0x28 accesses if display activity occurs")
     mode.add_argument("--dsi0-panel-discovery", action="store_true",
                       help="qualify stock panel and connector binding after the NV guard")
+    mode.add_argument("--dc-cid-trace", action="store_true",
+                      help="trace the stock DC customer ID with DSI host and PHY nodes disabled")
     mode.add_argument("--ufs-refclk-only", action="store_true",
                       help="read the stock UFS device's reference-clock attribute after the NV guard")
     mode.add_argument("--ufs-power-trace", action="store_true",

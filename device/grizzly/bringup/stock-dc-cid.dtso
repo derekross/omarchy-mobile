@@ -1,0 +1,32 @@
+// SPDX-License-Identifier: MIT
+/dts-v1/;
+/plugin/;
+
+/ {
+    // Add fragments to the D1 B0 board overlay.
+    fragment@0 {
+        target-path = "/";
+        __overlay__ {
+            fragment@grizzly-cid-host0-off {
+                target-path = "/sswrp_dpu@f400000/dsi2host@3d8000";
+                __overlay__ { status = "disabled"; };
+            };
+            fragment@grizzly-cid-host1-off {
+                target-path = "/sswrp_dpu@f400000/dsi2host@3f8000";
+                __overlay__ { status = "disabled"; };
+            };
+            fragment@grizzly-cid-phy0-off {
+                target-path = "/sswrp_dpu@f400000/dw_mipi_cdphy@3c0000";
+                __overlay__ { status = "disabled"; };
+            };
+            fragment@grizzly-cid-phy1-off {
+                target-path = "/sswrp_dpu@f400000/dw_mipi_cdphy@3e0000";
+                __overlay__ { status = "disabled"; };
+            };
+            fragment@grizzly-cid-dp-off {
+                target-path = "/sswrp_dpu@f400000/dp-encoder";
+                __overlay__ { status = "disabled"; };
+            };
+        };
+    };
+};

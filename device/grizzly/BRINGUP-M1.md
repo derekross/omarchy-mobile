@@ -9174,6 +9174,51 @@ reads, PHY TX reads and DSI0 host reads disabled.
 [gpcsr-gspan-apb]: https://github.com/GrapheneOS/kernel_pixel/blob/cbc6305f4ca4f4a63c4e6f476fd0d0aa09fa2122/private/google-modules/display/vsi-drm/verisilicon/9x00/info/sswrp_dpu_gpcsr_pg_9400_0x20000005.h#L1482-L1533
 [gpcsr-phy-pll]: https://github.com/GrapheneOS/kernel_pixel/blob/cbc6305f4ca4f4a63c4e6f476fd0d0aa09fa2122/private/google-modules/display/vsi-drm/phy/synopsys/dw-mipi-cdphy-g301.c#L2320-L2325
 
+###### Offline stock D1 DC customer-ID trace
+
+`pack-stock-inventory.py --dc-cid-trace` starts with the
+audited read-only NV rescue images and Grizzly B0 DTB. Only
+DTBO entry 19 changes. It disables both DSI2H nodes, both
+CD-PHY nodes and the DP encoder. The display master skips
+these disabled components and retains DC, BE, FE0, FE1 and
+writeback. The live DT statuses are checked before loading
+the seven stock display modules. The DSI2H and CD-PHY
+modules satisfy link dependencies. Their device probes
+are excluded by the disabled nodes.
+
+Exact D1 `vs_drm.ko` calls `dc_hw_init` from `dc_bind`
+after the stock BE and FE power requests. Its normal
+`dc_read` of DC offset `0x30` at module offset `0x2e224`
+returns the customer ID. The driver passes that value in
+`w3` to `vs_dc_get_chip_info` (`0x19548`). The fixture
+records the four scalar arguments at that function in a
+private tracefs instance. It adds no device register reads
+and issues no display commit. It reports the observed
+customer ID and the corresponding generated layout, or
+`unknown` for an unrecognized tuple. Lost records and
+conflicting samples make the capture incomplete.
+
+The existing five-parent, nine-target NV guard must pass
+before trace arming and display load. The stock inventory's
+90-second warm return is armed independently before loading
+the inventory modules. The CID result is emitted to the
+stock inventory kernel log for retained-console collection.
+
+QEMU with the exact D1 kernel and factory module closure
+verified early event enablement, probe registration after
+module load, and cleanup. Synthetic traces verified both
+known IDs, unknown IDs, repeated samples, and rejection of
+lost or conflicting records. The live DT check accepted
+the five disabled nodes and rejected an enabled DSI host.
+The actual customer ID still requires a Grizzly boot.
+
+All five image hashes, the replacement AVB metadata,
+the B0 DT merge, saved B partition sizes and handoff bounds
+passed offline. The initrd ends at `0x88fb8ec1`, below the
+FDT at `0x8a000000`. Replacement hashes are
+`init_boot` `5c1c835ecc5969494f354e1c05746852e4706db3b74ab933c40661d90d9c9806`
+and `dtbo` `c2725fb4f145fecd87efc6b12f4639a6c7d27ccdc6bf1efca43c75b692a846cf`.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler

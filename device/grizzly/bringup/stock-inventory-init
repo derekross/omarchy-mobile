@@ -871,6 +871,7 @@ dsi0_genpd_requested=no
 dsi0_phy_reset_requested=no
 dsi0_rmw_requested=no
 dsi0_panel_requested=no
+dc_cid_requested=no
 dsi0_helper=/grizzly-inventory/stock-dsi0-trace.sh
 dsi0_genpd_marker=/grizzly-inventory/dsi0-genpd-trace
 if [ -e "$dsi0_genpd_marker" ] || [ -L "$dsi0_genpd_marker" ]; then
@@ -914,6 +915,17 @@ if [ -e "$dsi0_panel_marker" ] || [ -L "$dsi0_panel_marker" ]; then
     fi
     dsi0_panel_requested=yes
     dsi0_helper=/grizzly-inventory/stock-dsi0-panel.sh
+fi
+dc_cid_marker=/grizzly-inventory/dc-cid-trace
+if [ -e "$dc_cid_marker" ] || [ -L "$dc_cid_marker" ]; then
+    if [ "$dsi0_genpd_requested" = yes ] || [ "$dsi0_pll_requested" = yes ] ||
+       [ "$dsi0_phy_reset_requested" = yes ] || [ "$dsi0_rmw_requested" = yes ] ||
+       [ "$dsi0_panel_requested" = yes ] || [ ! -f "$dc_cid_marker" ] ||
+       [ -L "$dc_cid_marker" ] || [ ! -f "$dsi0_manifest" ]; then
+        end_inventory "DC CID trace fixture is ambiguous or incomplete"
+    fi
+    dc_cid_requested=yes
+    dsi0_helper=/grizzly-inventory/stock-dc-cid-trace.sh
 fi
 if [ -e "$dsi0_manifest" ] || [ -L "$dsi0_manifest" ]; then
     if [ "$fixture" != inventory ] || [ "$nv_guard_requested" != yes ] ||
@@ -992,6 +1004,12 @@ if stock_inventory_scan /sys/class/block yes; then
     if [ "$nv_guard_requested" = yes ]; then
         stock_nv_guard "$bb" /sys/class/block /proc/self/mountinfo /grizzly-inventory/nv-ro "$nv_snapshot_output" ||
             end_inventory "NV guard failed"
+        if [ "$dc_cid_requested" = yes ]; then
+            # shellcheck source=stock-dc-cid-trace.sh
+            . "$dsi0_helper"
+            stock_dc_cid_trace "$dsi0_manifest" || end_inventory "DC CID trace unavailable after NV guard"
+            end_inventory "DC CID trace and NV guard complete"
+        fi
         if [ "$dsi0_panel_requested" = yes ]; then
             # shellcheck source=stock-dsi0-panel.sh
             . "$dsi0_helper"
