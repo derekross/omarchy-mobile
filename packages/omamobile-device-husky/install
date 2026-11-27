@@ -64,6 +64,12 @@ install -Dm644 vendor/udev/rules.d/75-omamobile-charge-limit.rules \
   "$destination/usr/lib/udev/rules.d/75-omamobile-charge-limit.rules"
 install -Dm644 vendor/systemd/system/omamobile-charge-limit-apply.service \
   "$destination/usr/lib/systemd/system/omamobile-charge-limit-apply.service"
+install -Dm644 thermal.conf "$destination/usr/share/omamobile/thermal.conf"
+install -Dm755 bin/omamobile-husky-thermal "$destination/usr/bin/omamobile-husky-thermal"
+install -Dm644 vendor/systemd/system/omamobile-husky-thermal.service \
+  "$destination/usr/lib/systemd/system/omamobile-husky-thermal.service"
+# Keeps the generic power-profile follower (#1045) off on husky, guard on or off: only the opt-in guard above sets CPU caps here.
+install -Dm644 /dev/null "$destination/usr/share/omamobile/power-profile-off"
 install -Dm644 device.conf \
   "$destination/usr/share/omamobile/device.conf"
 install -Dm644 etc/omamobile-mirrorlist \
