@@ -244,6 +244,20 @@ observe_mainline_ro_disk() {
                     fi
                     exec "$bb" sh "$systemd_root_marker" boot
                 fi
+                dsi0_scaffold=/grizzly-inventory/dsi0-phy-scaffold.sh
+                if [ -e "$dsi0_scaffold" ] || [ -L "$dsi0_scaffold" ]; then
+                    [ "$expected" -eq 42 ] && [ -f "$dsi0_scaffold" ] && [ ! -L "$dsi0_scaffold" ] ||
+                        end_inventory 'invalid mainline DSI0 PHY fixture'
+                    if ! "$bb" dmesg | "$bb" grep -Eq 'ufs-uic-v73 LUN 0 block comparison part=23 lba=598711 bytes=8192 ret=0$'; then
+                        "$bb" sleep 1 || break
+                        tries=$((tries + 1))
+                        continue
+                    fi
+                    # shellcheck source=dsi0-phy-scaffold.sh
+                    . "$dsi0_scaffold"
+                    grizzly_dsi0_phy_cycle || end_inventory 'DSI0 PHY scaffold trace incomplete'
+                    end_inventory 'DSI0 PHY scaffold vote cycle complete'
+                fi
                 end_inventory 'single disk RAM stage complete' ;;
             2) ;;
             *) end_inventory 'single disk read-only inventory failed' ;;

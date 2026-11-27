@@ -8305,6 +8305,53 @@ files parse. Full DT schema validation requires
 `dtschema`, which was unavailable in the offline
 toolchain. The build was not booted.
 
+###### Slot B mainline DSI0 PHY vote fixture
+
+Build the scaffold kernel at `11c4782eb636dee4776827fbdb580e69cbcfbedb`
+with `CONFIG_PHY_GOOGLE_MALIBU_CDPHY=m` and module unloading enabled.
+Use the read-only v73 LUN 0 diagnostic configuration and add
+`bringup/dsi0-phy-scaffold.dtso` to its overlays. That overlay changes
+only the DSI0 PHY status to `okay`. The PHY module and diagnostic
+script go in the standalone inventory initramfs via
+`pack-mainline-inventory.py --dsi0-phy-scaffold PHY_MODULE` with
+the matching rescue cpio. The fixture keeps the manual display vote
+diagnostics off and omits DSI1, the display SMMU and the DSI0 host.
+The scaffold driver performs no PHY register accesses or host reads.
+
+The slot B inventory arms the 90-second warm return and disables
+module autoload. PID 1 verifies the metadata-only GPT scan, all 42
+read-only and unmounted LUN 0 partitions, and the v73 block
+comparison. It waits for the kernel to retire the guarded disk
+before inserting the PHY module. It checks for the `malibu-cdphy`
+platform binding, unloads the module, and waits for the genpd
+power-off worker. The retained console should show the following
+six transitions, with each acknowledgement followed by its
+matching vote readback.
+
+| Phase | Order |
+| --- | --- |
+| ON | wrapper `0x08` → BE `0x200` → DSI0 `0x203` |
+| OFF | DSI0 `0x203` → BE `0x200` → wrapper `0x08` |
+
+Only newly acquired votes are released. An inherited vote, failed
+probe, or missing or out-of-order reply leaves the trace incomplete
+and the independent return active. The fixture keeps the
+read-only UFS guard and mounts no UFS partitions. A fresh verified
+private NV backup is needed for an attended trial, followed by a
+return to stock A and retrieval of the retained console. APB gate
+and external reset qualification is still required before any host
+read.
+
+The offline build on 2026-11-27 used kernel release
+`7.3.0-rc6-omamobile-grizzly-dsi0-phy-fixture`. The ARM64 Image and
+board DTB built, and the PHY module built with `W=1` and matching
+vermagic. Readback verified the five images against the saved D1
+slot capacities and ABL handoff limits, checked the AVB signatures
+on `boot` and `init_boot`, and compared the embedded DT and initramfs
+against their inputs. The DT diff showed only the one status change.
+Mocked traces passed the vote-order and storage-guard checks.
+Device boot and live CPM replies are pending.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler

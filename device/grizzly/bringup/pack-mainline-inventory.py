@@ -46,14 +46,15 @@ def build_read_only_root(output, busybox, loader):
 
 
 def pack(rescue, output, device_query_only=False, single_lun_only=False,
-         single_disk_only=False, gpt_scan_only=False, read_only_test_root=False):
+         single_disk_only=False, gpt_scan_only=False, read_only_test_root=False,
+         dsi0_phy_scaffold=None):
     busybox = arm64_member(rescue, "bin/busybox")
     loader = arm64_member(rescue, LOADER)
     output.mkdir(mode=0o700)
     archive = output / "inventory.cpio"
     compressed = output / "inventory.cpio.lz4"
     root_image = build_read_only_root(output, busybox, loader) if read_only_test_root else None
-    gpt_scan_only = gpt_scan_only or read_only_test_root
+    gpt_scan_only = gpt_scan_only or read_only_test_root or dsi0_phy_scaffold is not None
     with TemporaryDirectory(dir=output) as scratch:
         root = Path(scratch)
         dirs = ("grizzly-inventory", "lib")
@@ -77,6 +78,15 @@ def pack(rescue, output, device_query_only=False, single_lun_only=False,
             files["grizzly-inventory/test-root.ext4"] = (root_image.read_bytes(), 0o400)
             files["grizzly-inventory/read-only-test-root.sh"] = (
                 (HERE / "read-only-test-root.sh").read_bytes(), 0o644)
+        if dsi0_phy_scaffold is not None:
+            module = dsi0_phy_scaffold.read_bytes()
+            if (module[:6] != b"\x7fELF\x02\x01" or len(module) < 64
+                    or struct.unpack_from("<HH", module, 16) != (1, 183)
+                    or b"\0name=phy_google_malibu_cdphy\0" not in module):
+                raise ValueError("DSI0 PHY scaffold requires its ARM64 kernel module")
+            files["grizzly-inventory/phy-google-malibu-cdphy.ko"] = (module, 0o400)
+            files["grizzly-inventory/dsi0-phy-scaffold.sh"] = (
+                (HERE / "dsi0-phy-scaffold.sh").read_bytes(), 0o644)
         libc = "lib/libc.musl-aarch64.so.1"
         for name in dirs:
             path = root / name
@@ -121,12 +131,14 @@ def main():
                       help="verify a temporary read-only LUN 0 disk and its GPT partitions")
     mode.add_argument("--read-only-test-root", action="store_true",
                       help="add a RAM-backed read-only ext4 smoke test after the v73 read")
+    mode.add_argument("--dsi0-phy-scaffold", type=Path, metavar="PHY_MODULE",
+                      help="bind the isolated DSI0 PHY module after the v73 storage guard")
     parser.add_argument("output", type=Path)
     args = parser.parse_args()
     try:
         pack(args.rescue_cpio, args.output, args.device_query_only,
              args.single_lun_only, args.single_disk_only, args.gpt_scan_only,
-             args.read_only_test_root)
+             args.read_only_test_root, args.dsi0_phy_scaffold)
     except (OSError, ValueError, subprocess.CalledProcessError) as error:
         parser.exit(1, f"mainline inventory packaging failed: {error}\n")
 
