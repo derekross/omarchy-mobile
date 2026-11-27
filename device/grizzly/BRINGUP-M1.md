@@ -9145,9 +9145,8 @@ when both are enabled. The exact D1 module includes both
 `0x19548` compares live chip, product and customer IDs. The
 two entries share chip ID, product ID and revision and differ
 in customer ID. The BE transaction confirms the compiled
-offsets. The saved D1 display bugreport yielded no live DC
-customer ID. The actual D1 behavior of a read or write at
-`+0x104c` remains unverified.
+offsets. The attended customer-ID capture below matches
+the `0x20000005` layout. Direct GPCSR access remains untested.
 [Malibu defconfig][gpcsr-malibu-config] · [Compile-time selection][gpcsr-hw-include] · [Runtime chip match][gpcsr-chip-match]
 
 Neither header identifies a PHY TX bus-clock or external reset
@@ -9210,7 +9209,6 @@ module load, and cleanup. Synthetic traces verified both
 known IDs, unknown IDs, repeated samples, and rejection of
 lost or conflicting records. The live DT check accepted
 the five disabled nodes and rejected an enabled DSI host.
-The actual customer ID still requires a Grizzly boot.
 
 All five image hashes, the replacement AVB metadata,
 the B0 DT merge, saved B partition sizes and handoff bounds
@@ -9218,6 +9216,43 @@ passed offline. The initrd ends at `0x88fb8ec1`, below the
 FDT at `0x8a000000`. Replacement hashes are
 `init_boot` `5c1c835ecc5969494f354e1c05746852e4706db3b74ab933c40661d90d9c9806`
 and `dtbo` `c2725fb4f145fecd87efc6b12f4639a6c7d27ccdc6bf1efca43c75b692a846cf`.
+
+###### Attended stock D1 DC customer-ID result
+
+On 2026-11-27 the first rescue USB connection dropped
+before copying. The retry copied all nine partitions
+(3,392,151,552 bytes) to the private Mac backup directory.
+The independent phone-side hashes and local checksum
+manifest verified. The phone returned to Fastboot
+without booting Android between the backup and CID trial.
+The five CID images were staged with A selected, and the
+full `vendor_boot_b` readback matched the supplied image.
+
+| Kernel uptime | Result |
+| ---: | --- |
+| 0.875222 s | The 90-second warm return was armed. |
+| 4.682894 s | The NV read-only guard passed for five parents and nine targets. |
+| 4.712157 s | Both DSI hosts and both PHY nodes passed the disabled-status check. The probe armed before `vs_drm` loaded. |
+| 4.884209–4.889099 s | DC, BE, FE0, FE1 and writeback bound. The retained log showed no DSI host or PHY probe. |
+| 4.897425 s | One sample recorded chip `0x9400`, revision `0x7002`, product `0x02094000` and customer ID `0x20000005`. |
+| 4.909952 s | The CID trace reported completion. |
+| 90.878081 s | The timer requested the warm return. |
+
+The live ID selects the `0x20000005` generated layout.
+In that layout `+0x104c` is the FE0 asynchronous Q-channel
+activity mask and `+0x1070` is its FE1 counterpart. Bit 0
+excludes the BE activity input when set. This matches the
+direction of D1 CPM's writes around the front-end votes.
+The `0x32a` BE idle offsets in the Linux binary are still
+compile-time constants. The CID trace adds no GPCSR, PHY TX
+or host reads and leaves the TX clock and external reset
+readback questions open.
+[FE0 mask definition][gpcsr-20000005-fe0] · [FE1 mask definition][gpcsr-20000005-fe1]
+
+Ramoops and `SYSTEM_LAST_KMSG` matched on all 39 selected
+lines. Fastboot returned 134 seconds after the only CID
+boot request. Stock A completed boot with the same D1
+build, enforcing verity and matching VBMeta digest.
 
 ### Offline stock D1 device reference-clock diagnostic
 
