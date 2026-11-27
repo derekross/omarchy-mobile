@@ -7643,6 +7643,42 @@ Stop at discovery and let the timed return run. Select
 stock A in Fastboot, boot Android and verify the
 captured slot, verity and VBMeta.
 
+###### Attended stock D1 DRM aggregate snapshot
+
+On 2026-11-27 the fresh read-only rescue copied and
+verified all nine NV partitions (3,392,151,552 bytes)
+privately on the Mac. All five diagnostic images
+passed staging checks, including the full
+`vendor_boot_b` readback. The fixture booted once
+on B with no display commit.
+
+| Kernel uptime | Discovery result |
+| ---: | --- |
+| 5.692727 s | The NV guard passed for five parent disks and nine target partitions. |
+| 7.469911 s | DesignWare bound only to `3a1ce000.i2c`. |
+| 7.986055 s | DA9188 GPIO registered before CGYDA probed. |
+| 11.047876 s | S2DOS07x02 and CGYDA had bound. The DRM class had zero cards and zero DSI connectors. |
+| 18.145913 s | The DP encoder was still on the deferred-probe list, with no reason recorded. |
+| 45.084383 s | The late sample again found zero cards and zero DSI connectors. |
+| 45.095472–45.099356 s | The aggregate was unbound. Six named components (DC, BE, two FEs, WB and DSI2H) were registered but unbound. One unnamed slot was unregistered. The DP encoder was still deferred. |
+| 90.882213 s | The warm return timer requested restart. |
+
+The aggregate report leaves the missing slot unnamed.
+The exact B0 match list and the deferred DP encoder
+point to the encoder as the missing component. There
+was no DRM connector to read at either sample. A
+separate offline check can determine whether a
+diagnostic-only DT overlay can exclude just the DP
+encoder from the match list and preserve the DSI0
+pipeline for one further discovery boot.
+
+The VDDD trace retained all 31 events. It recorded six
+successful SMBus transfers and no disable invocation.
+Ramoops and `SYSTEM_LAST_KMSG` matched on all 84
+selected lines. Fastboot returned 133 seconds after
+the B boot request. Stock A completed boot with
+enforcing verity and matching VBMeta.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
