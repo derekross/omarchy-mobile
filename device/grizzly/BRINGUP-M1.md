@@ -126,6 +126,7 @@ whether it predated a stock boot.
 | [Stock D1 DSI0 genpd and MBFS trace](#attended-stock-d1-dsi0-genpd-and-mbfs-trace) | The Mac left stock D1 A at 16:46:20 UTC on 2026-11-26. Android stayed off between the rescue and the trace boot at 16:53:23 UTC. | All nine hashes passed at 16:52:00 UTC. The stock A return requires a fresh copy before the next power or CPM trial. |
 | [Stock D1 DSI0 clock and reset trace](#attended-stock-d1-dsi0-clock-and-reset-trace) | The Mac left stock D1 A at 17:08:28 UTC on 2026-11-26. Android stayed off between the rescue and the trace boot at 17:15:58 UTC. | All nine hashes passed at 17:14:41 UTC. The stock A return requires a fresh copy before the next power or CPM trial. |
 | [Stock D1 DSI0 PHY init trace](#attended-stock-d1-dsi0-phy-init-trace) | The Mac left stock D1 A at 20:30:01 UTC on 2026-11-26. Android stayed off between the rescue and the trace boot at 20:38:41 UTC. | All nine hashes passed at 20:37:24 UTC. The stock A return requires a fresh copy before the next power or CPM trial. |
+| [Stock D1 DSI0 genpd worker trace](#attended-stock-d1-dsi0-genpd-worker-trace) | The Mac left stock D1 A at 06:07:15 UTC on 2026-11-27. Android stayed off between the rescue and the single trace boot at 06:13:36 UTC. | All nine hashes passed at 06:12:23 UTC. The stock A return requires a fresh copy before the next power or CPM trial. |
 
 [Maintainer decision on backup freshness](https://github.com/derekross/omamobile/pull/1002#issuecomment-7171826035).
 Take a fresh read-only backup of all nine partitions after the latest
@@ -6697,8 +6698,7 @@ Offline, the checker replayed four saved profiles with
 identical output and passed 13 synthetic correlation cases.
 A tracefs mock checked probe registration and cleanup,
 DSI0 filters, the stock host-read stop trigger and refusal
-when the PHY was already loaded. Actual D1 probe registration
-and the hardware correlation are pending.
+when the PHY was already loaded.
 
 The packed `init_boot` SHA-256 is
 `efa1456c8f96248b0ee353f318adbef64662e67795001919d4b4b1b46aa3165a`.
@@ -6709,6 +6709,47 @@ For an attended run, take a fresh guarded NV backup after
 the latest stock boot, return the rescue to Fastboot and
 keep Android off until the approved trace boot. Use the
 timed return to Fastboot and select stock A.
+
+##### Attended stock D1 DSI0 genpd worker trace
+
+On 2026-11-27 the fresh read-only rescue backup verified
+all nine NV partitions, 3,392,151,552 bytes, the independent
+phone-side hashes and private permissions. Copy and host
+verification took 255 seconds. Both five-image staging
+passes matched the full 64 MiB `vendor_boot_b` readback.
+The rescue returned to Fastboot with A selected and Android
+stayed off before the single trace boot on B.
+
+The NV guard reported five read-only parents and nine
+targets before the trace armed. PID 1 confirmed all eight
+probes with zero misses and retained all 58 trace records.
+The PHY-load marker precedes the early DSI0 ON, and the
+host-load marker follows the early OFF and worker return.
+
+| Trace time (s) | Event | Result |
+| ---: | --- | --- |
+| 6.331662 | Early DSI0 ON reply | `0` on the PHY-loading task |
+| 6.333763–6.333782 | `genpd_dev_pm_sync` and queue result | Same loading task, `queued=1` |
+| 6.333799 | Power-off worker enters | Same work item |
+| 6.333803 | Worker sends DSI0 OFF | MBFS `0x203` |
+| 6.334095 | Worker receives DSI0 OFF reply | `0` |
+| 6.335422 | Worker returns from `genpd_power_off` | Same work item and task |
+| 6.413343–6.413347 | Later worker pass | Same work item, no DSI0 OFF request in this pass |
+| 6.433622 | DSI0 ON reply before host access | `0` |
+| 6.444544–6.445875 | Stock host reads | ID `0x30313130`, version `0x1a000110`, `pwr_up=0` |
+
+The early OFF reply fell inside the worker queued by
+the PHY probe's genpd sync callback. No AP-side clock
+or reset provider call was captured. The trace establishes
+the source of the early OFF and leaves the physical APB
+gate and external reset state unmeasured.
+
+The 90-second timer requested restart at 90.857439 seconds
+of kernel uptime. Fastboot returned 138 seconds after the
+slot B boot request. Stock D1 A completed boot with
+enforcing verity and the pretrial VBMeta digest. Ramoops and
+`SYSTEM_LAST_KMSG` matched on all 97 filtered lines, and
+both passed the required genpd correlation check.
 
 ### Offline stock D1 device reference-clock diagnostic
 
