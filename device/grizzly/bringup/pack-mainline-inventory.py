@@ -47,7 +47,10 @@ def build_read_only_root(output, busybox, loader):
 
 def pack(rescue, output, device_query_only=False, single_lun_only=False,
          single_disk_only=False, gpt_scan_only=False, read_only_test_root=False,
-         dsi0_phy_scaffold=None, require_dsi0_sibling_votes=False):
+         dsi0_phy_scaffold=None, require_dsi0_sibling_votes=False,
+         require_dsi0_selector3_gate=False):
+    if require_dsi0_selector3_gate and not require_dsi0_sibling_votes:
+        raise ValueError("DSI0 selector 3 gate checks require sibling vote checks")
     if require_dsi0_sibling_votes and dsi0_phy_scaffold is None:
         raise ValueError("DSI0 sibling vote checks require the PHY scaffold")
     busybox = arm64_member(rescue, "bin/busybox")
@@ -91,6 +94,8 @@ def pack(rescue, output, device_query_only=False, single_lun_only=False,
                 (HERE / "dsi0-phy-scaffold.sh").read_bytes(), 0o644)
         if require_dsi0_sibling_votes:
             files["grizzly-inventory/dsi0-sibling-votes"] = (b"", 0o644)
+        if require_dsi0_selector3_gate:
+            files["grizzly-inventory/dsi0-selector3-gate"] = (b"", 0o644)
         libc = "lib/libc.musl-aarch64.so.1"
         for name in dirs:
             path = root / name
@@ -139,12 +144,15 @@ def main():
                       help="bind the isolated DSI0 PHY module after the v73 storage guard")
     parser.add_argument("--require-dsi0-sibling-votes", action="store_true",
                         help="require sibling MBFS samples around the scaffold vote")
+    parser.add_argument("--require-dsi0-selector3-gate", action="store_true",
+                        help="require read-only selector 3 gate samples alongside sibling votes")
     parser.add_argument("output", type=Path)
     args = parser.parse_args()
     try:
         pack(args.rescue_cpio, args.output, args.device_query_only,
              args.single_lun_only, args.single_disk_only, args.gpt_scan_only,
-             args.read_only_test_root, args.dsi0_phy_scaffold, args.require_dsi0_sibling_votes)
+             args.read_only_test_root, args.dsi0_phy_scaffold, args.require_dsi0_sibling_votes,
+             args.require_dsi0_selector3_gate)
     except (OSError, ValueError, subprocess.CalledProcessError) as error:
         parser.exit(1, f"mainline inventory packaging failed: {error}\n")
 

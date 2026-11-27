@@ -8837,8 +8837,62 @@ No qualified status source covers the external reset
 at the DSI0 PHY TX register interface.
 
 Keep `0x0f7c7124` and the DSI0 host aperture disabled.
-This audit stops at the read-only clock-cell query.
-There is no new fixture and no on-device test.
+
+###### Offline DSI0 selector 3 gate fixture
+
+Kernel `66e7799dfff3d6ef17040a0891d49d61fb494482` on
+`grizzly-dsi0-scaffold` adds the opt-in parameter
+`clk_google_malibu_cpm.display_dsi0_selector3_gate=1`.
+The fixture also enables `display_dsi0_siblings`.
+Build the existing PHY scaffold with the matching kernel.
+Pass `--dsi0-phy-scaffold PHY_MODULE`,
+`--require-dsi0-sibling-votes` and
+`--require-dsi0-selector3-gate` to the inventory packer.
+PID 1 verifies the two ramdisk markers and enabled
+kernel parameters before loading the module.
+
+Each checkpoint samples the DSI1, FE0 and FE1 votes
+and sends clock status command `0x02032302` with
+argument `1` only when all three readings are zero.
+It logs `display-dsi0-selector3-gate` with the same
+phase name as the sibling sample. Both parents are held
+for all four phases.
+
+| Sample | Position |
+| --- | --- |
+| `before-on` | After wrapper and BE ON readbacks, before DSI0 ON |
+| `after-on` | After DSI0 ON readback |
+| `before-off` | Before DSI0 OFF |
+| `after-off` | After DSI0 OFF readback, before BE and wrapper release |
+
+The checker requires all four ordered sibling and gate
+pairs and the full vote and release sequence. Either
+Boolean gate reply is valid. Missing samples, firmware
+errors, transport errors and nonzero sibling votes fail
+the diagnostic. The gate result does not change the
+genpd cleanup path. A transport timeout can still stall
+the shared CPM mailbox and prevent later releases.
+The independent timed return stays armed. An active or
+unreadable sibling before ON still blocks the DSI0 vote.
+The gate result covers only the clock cell. Its routing
+to DSI0 TX and the external reset remain unverified.
+
+The fixture runs after the unchanged 42-partition
+read-only NV guard and UFS disk retirement. It keeps the
+90-second warm return and leaves PHY TX and host reads
+disabled. No on-device trial has run.
+
+The ARM64 kernel and module built with release
+`7.3.0-rc6-omamobile-grizzly-dsi0-selector3-gate`. The
+CPM and scaffold targets passed their `W=1` builds.
+Offline verification confirmed both boot parameters,
+both ramdisk markers, the PHY-only DT overlay, AVB
+signatures on boot and init_boot, ABL handoff bounds,
+and slot fit against the saved D1 metadata. The host-side
+mock checked the exact command and sibling guard, and
+the trace checker passed replay with the fixture's
+ARM64 BusyBox. The five-image archive SHA-256 is
+`05e289825c20d4c2d061a4b5ff05c9d0befc6fce57fb33783b368ab137a35c4a`.
 
 ### Offline stock D1 device reference-clock diagnostic
 

@@ -3,7 +3,7 @@
 
 grizzly_dsi0_phy_vote_trace() {
     # shellcheck disable=SC2016
-    "$bb" awk -v require_siblings="${1:-0}" '
+    "$bb" awk -v require_siblings="${1:-0}" -v require_gate="${2:-0}" '
         BEGIN {
             domain[1] = domain[6] = "wrapper"
             domain[2] = domain[5] = "be"
@@ -15,14 +15,23 @@ grizzly_dsi0_phy_vote_trace() {
         }
         /grizzly-mainline-inventory: DSI0 PHY scaffold vote trace start$/ {
             armed = 1
-            count = failed = samples = 0
+            count = failed = samples = gates = 0
             next
         }
         armed && require_siblings && /display-dsi0-siblings:/ {
+            if (require_gate && gates != samples)
+                failed = 1
             samples++
             if (NF < 5 || $(NF - 4) != "display-dsi0-siblings:" ||
                 $(NF - 3) != phase[samples] || count != position[samples] ||
                 $(NF - 2) != "dsi1=0" || $(NF - 1) != "fe0=0" || $NF != "fe1=0")
+                failed = 1
+        }
+        armed && require_gate && /display-dsi0-selector3-gate:/ {
+            gates++
+            if (NF < 3 || $(NF - 2) != "display-dsi0-selector3-gate:" ||
+                $(NF - 1) != phase[gates] || count != position[gates] ||
+                samples != gates || $NF !~ /^firmware=[01]$/)
                 failed = 1
         }
         armed && /display-(wrapper|be|dsi0): requested=[01] (ack=[0-9]+|readback=[01])$/ {
@@ -32,12 +41,17 @@ grizzly_dsi0_phy_vote_trace() {
                 reply_ok = ($NF == "ack=0" || $NF == "ack=5")
             else
                 reply_ok = ($NF == ("readback=" on))
-            if ($(NF - 2) != "display-" domain[step] ":" ||
+            if ((require_gate && gates != samples) ||
+                $(NF - 2) != "display-" domain[step] ":" ||
                 $(NF - 1) != "requested=" on || !reply_ok)
                 failed = 1
             count++
         }
-        END { exit !(armed && !failed && count == 12 && (!require_siblings || samples == 4)) }'
+        END {
+            exit !(armed && !failed && count == 12 &&
+                   (!require_siblings || samples == 4) &&
+                   (!require_gate || (require_siblings && gates == 4)))
+        }'
 }
 
 grizzly_dsi0_phy_cycle() (
@@ -63,9 +77,11 @@ grizzly_dsi0_phy_cycle() (
     fi
 
     require_siblings=0
+    require_gate=0
+    parameters=/sys/module/clk_google_malibu_cpm/parameters
     marker=/grizzly-inventory/dsi0-sibling-votes
     if [ -e "$marker" ] || [ -L "$marker" ]; then
-        parameter=/sys/module/clk_google_malibu_cpm/parameters/display_dsi0_siblings
+        parameter=$parameters/display_dsi0_siblings
         if ! { [ -f "$marker" ] && [ ! -L "$marker" ] &&
                [ -r "$parameter" ] && IFS= read -r enabled < "$parameter" &&
                [ "$enabled" = Y ]; }; then
@@ -73,6 +89,17 @@ grizzly_dsi0_phy_cycle() (
             return 1
         fi
         require_siblings=1
+    fi
+    marker=/grizzly-inventory/dsi0-selector3-gate
+    if [ -e "$marker" ] || [ -L "$marker" ]; then
+        parameter=$parameters/display_dsi0_selector3_gate
+        if ! { [ "$require_siblings" -eq 1 ] && [ -f "$marker" ] && [ ! -L "$marker" ] &&
+               [ -r "$parameter" ] && IFS= read -r enabled < "$parameter" &&
+               [ "$enabled" = Y ]; }; then
+            stock_inventory_log 'DSI0 PHY skipped: selector 3 gate checks are unavailable'
+            return 1
+        fi
+        require_gate=1
     fi
 
     stock_inventory_log 'DSI0 PHY scaffold vote trace start'
@@ -90,7 +117,7 @@ grizzly_dsi0_phy_cycle() (
 
     # Platform detach queues genpd power-off work.
     for attempt in 1 2 3 4 5; do
-        if "$bb" dmesg | grizzly_dsi0_phy_vote_trace "$require_siblings"; then
+        if "$bb" dmesg | grizzly_dsi0_phy_vote_trace "$require_siblings" "$require_gate"; then
             stock_inventory_no_scsi_disks /sys/class/block
             return $?
         fi
