@@ -32,10 +32,6 @@
 	google,tdm-tx-slots = <1 3 5 7>;
 };
 
-&aoc {
-	#sound-dai-cells = <1>;
-};
-
 &{/} {
 		aoc_snd_card: sound-aoc {
 			compatible = "google,gs201-aoc-sound";
