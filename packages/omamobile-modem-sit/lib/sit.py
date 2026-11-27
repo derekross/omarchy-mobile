@@ -8,7 +8,8 @@ the do-not-send list of device/cheetah/MODEM-SIT-RESEARCH.md section 5 (NV,
 identity, carrier lock, AT forwarding, VSIM and satellite), so an edit to
 the allow-list can't let one of those through. Dial and outgoing SMS are
 refused unless the owner was opened for them. SIM_IO is refused too,
-except the read-only ISIM EF_PCSCF read of isim.py, checked byte by byte.
+except the read-only ISIM EF_PCSCF and USIM EF_MSISDN reads, checked byte
+by byte and enabled separately by the channel owner.
 """
 from collections import deque
 import fcntl
@@ -18,11 +19,13 @@ import struct
 import time
 
 from isim import SIM_IO, check_request as check_sim_io
+from msisdn import check_request as check_msisdn
 from paths import IPC, RUN, open_channel, run_dir
 from sit_names import NAMES
 
 # Data/radio/IMS lifecycle, display state, read-only status, and incoming SMS
-# ACK. No SIM I/O (but the one ISIM file below), PIN, subscription, APDU or vendor NV requests.
+# ACK. SIM I/O is limited to the two guarded read-only files below; no PIN,
+# subscription, APDU or vendor NV requests.
 # GET_IMSI (0x0400, read-only, from 0.3.29) is sent once at start-up for the SIM's home
 # network code, to choose the carrier settings; its answer is never logged or kept.
 ALLOWED = {0x0000, 0x0102, 0x0108, 0x0200, 0x0400, 0x0600, 0x0601, 0x0602, 0x0603, 0x0613,
@@ -65,13 +68,17 @@ class ModemError(RuntimeError):
 MANIFEST = 0x4600
 
 
-def check(ident, *, sms=False, calls=False, manifest=False, isim_pcscf=False, payload=b''):
+def check(ident, *, sms=False, calls=False, manifest=False, isim_pcscf=False,
+          msisdn=False, payload=b''):
     if manifest and ident == MANIFEST:
         return
-    # SIM_IO (0x0208) is outside the allow-list; the one exception, for an
-    # owner opened for it, is GET RESPONSE / READ RECORD on the ISIM's
-    # EF_PCSCF (isim.check_request raises for anything else).
+    # SIM_IO (0x0208) stays outside the general allow-list. Separate owner
+    # flags authorize GET RESPONSE / READ RECORD for either USIM EF_MSISDN
+    # or ISIM EF_PCSCF; neither grants generic SIM access.
     if ident == SIM_IO:
+        if msisdn and len(payload) > 1 and payload[1] == 2:
+            check_msisdn(payload)
+            return
         if not isim_pcscf:
             raise ValueError('request outside the allow-list')
         check_sim_io(payload)
@@ -84,11 +91,12 @@ def check(ident, *, sms=False, calls=False, manifest=False, isim_pcscf=False, pa
 
 class Sit:
     def __init__(self, *, allow_sms=False, allow_calls=False, allow_manifest=False,
-                 allow_isim_pcscf=False, device=None):
+                 allow_isim_pcscf=False, allow_msisdn=False, device=None):
         self.allow_sms = allow_sms
         self.allow_calls = allow_calls
         self.allow_manifest = allow_manifest
         self.allow_isim_pcscf = allow_isim_pcscf
+        self.allow_msisdn = allow_msisdn
         run_dir()
         self.lock = os.open(RUN / 'ipc0.lock', os.O_CREAT | os.O_RDWR | os.O_CLOEXEC, 0o600)
         try:
@@ -136,7 +144,8 @@ class Sit:
         check(ident, sms=getattr(self, 'allow_sms', False),
               calls=getattr(self, 'allow_calls', False),
               manifest=manifest_reply and getattr(self, 'allow_manifest', False),
-              isim_pcscf=getattr(self, 'allow_isim_pcscf', False), payload=payload)
+              isim_pcscf=getattr(self, 'allow_isim_pcscf', False),
+              msisdn=getattr(self, 'allow_msisdn', False), payload=payload)
         self.token = (self.token + 1) & 0xffffffff
         data = struct.pack('<BBHHIBB', 0, 0, ident, 12 + len(payload), self.token, 0, 0) + payload
         if os.write(self.fd, data) != len(data):

@@ -3,6 +3,7 @@
 """omamobile-sit: calls, SMS and status through omamobile-sitd's socket.
 
   omamobile-sit status [--json]        registration, IMS voice/SMS, data, calls
+  omamobile-sit own-number [--json]    read the SIM's stored number, if present
   omamobile-sit watch                  the public status, one JSON line per change
   omamobile-sit dial NUMBER            an IMS voice call (international form)
   omamobile-sit answer [ID]            the ringing call (or call ID)
@@ -83,6 +84,18 @@ def main(argv):
         return 0
     cmd, rest = argv[0], argv[1:]
     try:
+        if cmd == 'own-number' and rest in ([], ['--json']):
+            # Never fall back to the public status file for private data.
+            result = request('own-number', timeout=20)
+            if '--json' in rest:
+                print(json.dumps(result))
+            elif result['status'] == 'available':
+                print('\n'.join(result['numbers']))
+            elif result['status'] == 'empty':
+                print('The SIM has no stored phone number')
+            else:
+                print('SIM phone number unavailable (' + result.get('reason', result['status']) + ')')
+            return 0
         if cmd == 'status':
             try:
                 status = request('status')
