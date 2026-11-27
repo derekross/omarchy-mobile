@@ -19,7 +19,8 @@ REGISTER = re.compile(rf"{re.escape(HOST)}\S* reg=([0-9a-f]+) val=([0-9a-fA-F]+)
 PHY_INIT = re.compile(r"f7c0000\.dw_mipi_cdphy reg=0*7124 val=([0-9a-fA-F]+)$")
 RESUME_RETURN = re.compile(rf"rpm_resume(?:\+\S+)?\s*:{re.escape(HOST)} ret=(-?\d+)$")
 MBFS = re.compile(r"(0x[0-9a-f]+):\S+\s+en:([01])(?:\s+\(res:(-?\d+)\))?$")
-MBFS_DOMAINS = {0x08: "wrapper", 0x200: "BE", 0x203: "DSI0"}
+MBFS_DOMAINS = {0x08: "wrapper", 0x200: "BE", 0x201: "FE0", 0x202: "FE1",
+                0x203: "DSI0", 0x204: "DSI1", 0x205: "DP0"}
 CPM_EVENT = re.compile(r"dsi0_(clk|rst)_(call|result)$")
 CPM_CALL = re.compile(r" lpcm=(\d+) id=(\d+) op=(\d+)$")
 CPM_RESULT = re.compile(r" result=(-?\d+)$")
@@ -38,11 +39,15 @@ PLL_PHASES = {
 PLL_SAMPLE = re.compile(r" bank=(0x[0-9a-fA-F]+) value=(0x[0-9a-fA-F]+)$")
 DSI0_PLL_BANK = 0x0f7d8800
 GENPD_ARM = "DSI0 genpd probes armed"
+GENPD_DEVICES_ARM = "DSI0 genpd device probes armed"
 PHY_LOAD = "DSI0 loading mipi-cdphy.ko"
 HOST_LOAD = "DSI0 loading mipi-dsi2h.ko"
 GENPD_EVENTS = ("dsi0_genpd_sync", "dsi0_genpd_off_begin", "dsi0_genpd_off_end")
 GENPD_QUEUE_RESULT = "dsi0_genpd_queue_result"
-GENPD_SAMPLE = re.compile(r' domain="dpu_dsi0_pd" work=(0x[0-9a-fA-F]+)$')
+GENPD_SAMPLE = re.compile(r' domain="([a-z0-9_]+)" work=(0x[0-9a-fA-F]+)$')
+GENPD_DEVICE = re.compile(r' device="([a-zA-Z0-9_.:@+-]+)" domain="([a-z0-9_]+)"')
+GENPD_ATTACH_END = re.compile(r" result=(-?\d+)$")
+GENPD_ATTACH_EVENTS = ("dsi0_genpd_attach", "dsi0_genpd_attach_end")
 GENPD_QUEUED = re.compile(r" queued=([01])$")
 PHY_RESET_ARM = "DSI0 PHY reset probe armed"
 PHY_RESET_PM = "dsi0_phy_reset_pm"
@@ -115,9 +120,10 @@ def summarize_genpd(timeline, status, required):
             continue
         if event in GENPD_EVENTS:
             sample = GENPD_SAMPLE.search(body)
-            if not sample or not (work := int(sample[1], 16)):
+            if not sample or not (work := int(sample[2], 16)):
                 raise ValueError("invalid DSI0 genpd work sample")
-            samples[event].append((order, pid, work))
+            if sample[1] == "dpu_dsi0_pd":
+                samples[event].append((order, pid, work))
         elif event == GENPD_QUEUE_RESULT:
             result = GENPD_QUEUED.search(body)
             if not result:
@@ -149,6 +155,48 @@ def summarize_genpd(timeline, status, required):
     print(f"{begin[0][0]} DSI0 genpd power-off worker pid={begin[1]} "
           f"off_reply={off_order[0]} worker_return={end[0][0]} result=0")
     print("dsi0_early_off_correlated=yes")
+
+
+def summarize_genpd_devices(timeline, arm, status):
+    attached = set()
+    pending = defaultdict(list)
+    work_ids = {}
+    for timestamp, index, pid, event, body in timeline:
+        if (timestamp, index) >= status:
+            break
+        if event not in (*GENPD_EVENTS, *GENPD_ATTACH_EVENTS):
+            continue
+        if (timestamp, index) <= arm:
+            raise ValueError("display genpd event precedes device-arm marker")
+        detail = ""
+        if event in (*GENPD_ATTACH_EVENTS, "dsi0_genpd_sync"):
+            device = GENPD_DEVICE.search(body)
+            if not device:
+                raise ValueError("missing display genpd device name")
+            detail = f" device={device[1]}"
+            if event in GENPD_ATTACH_EVENTS:
+                phase = event.removeprefix("dsi0_genpd_")
+                result = ""
+                if phase == "attach":
+                    pending[pid].append(device.groups())
+                else:
+                    reply = GENPD_ATTACH_END.search(body)
+                    if not reply or not pending[pid] or pending[pid].pop() != device.groups():
+                        raise ValueError("unmatched display genpd attachment result")
+                    result = f" result={reply[1]}"
+                    if reply[1] == "0":
+                        attached.add(device.groups())
+                print(f"{timestamp} display genpd {phase} pid={pid}{detail} domain={device[2]}{result}")
+                continue
+        sample = GENPD_SAMPLE.search(body)
+        if not sample or not (work := int(sample[2], 16)):
+            raise ValueError("invalid display genpd work sample")
+        work_id = work_ids.setdefault(work, len(work_ids) + 1)
+        phase = event.removeprefix("dsi0_genpd_")
+        print(f"{timestamp} display genpd {phase} pid={pid}{detail} domain={sample[1]} work={work_id}")
+    expected = {("f7c0000.dw_mipi_cdphy", "dpu_dsi0_pd"), (HOST, "dpu_dsi0_pd")}
+    if not expected <= attached:
+        raise ValueError("missing DSI0 PHY or host attachment")
 
 
 def summarize_phy_reset(timeline, host_status, required):
@@ -297,7 +345,7 @@ def summarize_rmw(trace):
     print(f"phy_rmw_calls={calls} reads={reads} writes={writes} unmatched={unmatched}")
 
 
-def summarize(trace, require_genpd=False, require_phy_reset=False):
+def summarize(trace, require_genpd=False, require_phy_reset=False, require_genpd_devices=False):
     check_buffer(trace)
     timeline = []
     reads = []
@@ -324,6 +372,12 @@ def summarize(trace, require_genpd=False, require_phy_reset=False):
         raise ValueError(f"expected DSI0 status read, found {len(reads)}")
 
     read_time, read_index, read_pid, value = min(reads)
+    genpd_device_markers = [(ts, index) for ts, index, _, event, body in timeline
+                            if event == "tracing_mark_write" and body == GENPD_DEVICES_ARM]
+    if len(genpd_device_markers) > 1 or (require_genpd_devices and not genpd_device_markers):
+        raise ValueError("expected one display genpd device-arm marker")
+    if genpd_device_markers and genpd_device_markers[0] >= (read_time, read_index):
+        raise ValueError("display genpd device probes armed after the first host status read")
     if pll_markers and pll_markers[0] >= (read_time, read_index):
         raise ValueError("DSI0 PLL probe armed after the first host status read")
     resumes = []
@@ -392,8 +446,9 @@ def summarize(trace, require_genpd=False, require_phy_reset=False):
             if resource not in MBFS_DOMAINS:
                 continue
             result = "" if vote[3] is None else f" result={vote[3]}"
+            caller = f" pid={pid}" if genpd_device_markers else ""
             print(f"{timestamp} MBFS {event} {MBFS_DOMAINS[resource]} "
-                  f"resource={resource:#x} on={vote[2]}{result}")
+                  f"resource={resource:#x} on={vote[2]}{result}{caller}")
             mbfs_events += 1
         elif event in ("clk_enable", "clk_disable", "clk_set_rate") and ("dsi" in name or "dpu" in name):
             print(f"{timestamp} CCF {event} {body}")
@@ -426,6 +481,8 @@ def summarize(trace, require_genpd=False, require_phy_reset=False):
     if pll_markers:
         summarize_pll(timeline, pll_markers[0], host_id_time)
     summarize_genpd(timeline, (read_time, read_index), require_genpd)
+    if genpd_device_markers:
+        summarize_genpd_devices(timeline, genpd_device_markers[0], (read_time, read_index))
     summarize_phy_reset(timeline, (read_time, read_index), require_phy_reset)
     print("APB clock and external reset state require separate evidence.")
     return correlated
@@ -436,6 +493,8 @@ def main():
     parser.add_argument("trace", type=Path, help="saved tracefs instance trace")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--require-genpd", action="store_true", help="require the early DSI0 OFF correlation")
+    mode.add_argument("--require-genpd-devices", action="store_true",
+                      help="require display genpd device samples and the early DSI0 OFF correlation")
     mode.add_argument("--require-phy-reset", action="store_true", help="require the four PHY reset attempts")
     mode.add_argument("--phy-rmw", action="store_true", help="decode the stock PHY register 0x28 trace")
     args = parser.parse_args()
@@ -444,7 +503,8 @@ def main():
         if args.phy_rmw:
             summarize_rmw(trace)
             return 0
-        return 0 if summarize(trace, args.require_genpd, args.require_phy_reset) else 1
+        return 0 if summarize(trace, args.require_genpd or args.require_genpd_devices,
+                              args.require_phy_reset, args.require_genpd_devices) else 1
     except (OSError, ValueError) as error:
         parser.exit(1, f"{parser.prog}: {error}\n")
 

@@ -15,7 +15,7 @@ probes=$1/kprobe_events
 group=grizzly_dsi0_cpm
 events='dsi0_clk_call dsi0_clk_result dsi0_rst_call dsi0_rst_result'
 pll_events='dsi0_pll_first dsi0_pll_last dsi0_pll_relock_first dsi0_pll_relock_last dsi0_pll_cfg_first dsi0_pll_cfg_last dsi0_pll_cfg_timeout'
-genpd_events='dsi0_genpd_sync dsi0_genpd_queue_result dsi0_genpd_off_begin dsi0_genpd_off_end'
+genpd_events='dsi0_genpd_attach dsi0_genpd_attach_end dsi0_genpd_sync dsi0_genpd_queue_result dsi0_genpd_off_begin dsi0_genpd_off_end'
 phy_reset_events='dsi0_phy_reset_pm dsi0_phy_reset_result'
 
 remove_probes() {
@@ -159,6 +159,9 @@ done
 if [ -n "$mode" ]; then
     # Stock D1 power_controller.ko exposes the resource as a u32 in both events.
     resources='pm_resource_id == 8 || pm_resource_id == 512 || pm_resource_id == 515'
+    if [ "$mode" = --genpd ]; then
+        resources='pm_resource_id == 8 || (pm_resource_id >= 512 && pm_resource_id <= 517)'
+    fi
     for event in send_mail_mbfs recv_result_mbfs; do
         enable_event "power_controller/$event" "$resources"
     done
@@ -175,17 +178,21 @@ if [ "$provider_probes" = yes ]; then
 fi
 
 if [ "$mode" = --genpd ]; then
-    # The pinned D1 Image puts genpd->name at 0x508. The sync probe
-    # uses x8 = genpd and x2 = &genpd->power_off_work at queue_work_on.
+    # The pinned D1 Image puts genpd->name at 0x508 and dev->kobj.name at 0.
+    # Observe attach at the genpd_power_on call, with x19 still holding dev.
+    # At sync+0x34, x0 still holds dev, x8 is genpd and x2 is the work item.
     # Both worker probes use x20 = genpd and x19 = the same work pointer
     # on either side of the genpd_power_off call.
-    dsi0_domain='domain == "dpu_dsi0_pd"'
-    add_probe p dsi0_genpd_sync 'genpd_dev_pm_sync+0x3c domain=+0(+1288(%x8)):string work=%x2:x64' "$dsi0_domain"
+    display_domains='domain == "sswrp_dpu_pd" || domain == "dpu_be_pd" || domain == "dpu_fe0_pd" || domain == "dpu_fe1_pd" || domain == "dpu_dsi0_pd" || domain == "dpu_dsi1_pd" || domain == "dpu_dp0_pd"'
+    attach_fields='device=+0(+0(%x19)):string domain=+0(+1288(%x22)):string'
+    add_probe p dsi0_genpd_attach "__genpd_dev_pm_attach+0x210 $attach_fields" "$display_domains"
+    add_probe p dsi0_genpd_attach_end "__genpd_dev_pm_attach+0x214 $attach_fields result=%x0:s32" "$display_domains"
+    add_probe p dsi0_genpd_sync 'genpd_dev_pm_sync+0x34 device=+0(+0(%x0)):string domain=+0(+1288(%x8)):string work=%x2:x64' "$display_domains"
     # queue_work_on returns bool in w0; the input registers are caller-saved.
     add_probe p dsi0_genpd_queue_result 'genpd_dev_pm_sync+0x40 queued=%x0:u8'
     worker_fields='domain=+0(+1288(%x20)):string work=%x19:x64'
-    add_probe p dsi0_genpd_off_begin "genpd_power_off_work_fn+0x4c $worker_fields" "$dsi0_domain"
-    add_probe p dsi0_genpd_off_end "genpd_power_off_work_fn+0x50 $worker_fields" "$dsi0_domain"
+    add_probe p dsi0_genpd_off_begin "genpd_power_off_work_fn+0x4c $worker_fields" "$display_domains"
+    add_probe p dsi0_genpd_off_end "genpd_power_off_work_fn+0x50 $worker_fields" "$display_domains"
 fi
 
 # PID 1 stops captures that need observations after the host probe.
@@ -200,5 +207,6 @@ if [ "$provider_probes" = yes ]; then
 fi
 if [ "$mode" = --genpd ]; then
     "$bb" echo 'DSI0 genpd probes armed' > "$instance/trace_marker"
+    "$bb" echo 'DSI0 genpd device probes armed' > "$instance/trace_marker"
 fi
 trap - 0

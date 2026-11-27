@@ -8049,6 +8049,58 @@ domains such as DSI1 `0x204`. That would test
 whether the extra parent votes belong to other
 consumers before treating them as DSI0 prerequisites.
 
+###### Passive stock D1 genpd device and sibling trace
+
+The updated `pack-stock-inventory.py
+--dsi0-genpd-trace` fixture observes the stock
+driver's existing domain operations. The two MBFS
+filters now cover wrapper `0x08` and DPU resources
+`0x200`–`0x205` (BE, FE0, FE1, DSI0, DSI1 and
+DP0). It still stops at the stock DSI0 `pwr_up`
+read. The NV guard precedes module load and the
+independent 90-second return remains armed.
+
+Two probes bracket `genpd_power_on` in exact D1
+`__genpd_dev_pm_attach` at `+0x210` and `+0x214`.
+They record the device name, domain and result.
+The sync probe moves from `+0x3c` to `+0x34`,
+where the device argument is still available.
+It records the name alongside the domain and
+work item. The worker probes observe that same
+work item. All three domain filters now include
+the seven audited display domains. These probes
+read kernel device and genpd objects in RAM.
+They add no MMIO, clock or reset operation.
+
+Use `check-stock-dsi0-trace.py --require-genpd-devices
+TRACE` on the retained trace. Compare MBFS rows by
+task with each named attach interval. For the OFF
+half, match a named sync with the worker by domain
+and work item and compare the worker's MBFS replies.
+The decoder prints local work numbers instead of
+kernel addresses. A sibling reply within the matching
+window can attribute a parent cycle. A parent-only
+interval without a matching device remains unresolved.
+
+Offline checks passed the retained genpd replay and
+a synthetic DSI1 attach, ON/OFF and worker case.
+The decoder rejected a missing device, a mismatched
+attach result, a different DSI0 work item and a
+legacy trace in the new required mode. Mock arming
+verified both sibling filters and cleanup of all ten
+probes. The image hashes, AVB, handoff bounds and
+saved slot fit passed. The NV guard and display
+module manifest match the previous fixture.
+
+The replacement `init_boot` SHA-256 is
+`15bf2b35158a776875ffd826098c154a9462fbb2a1b16f21e76ce03dc8a6bf91`.
+The other four images are unchanged. Probe
+registration and caller attribution remain pending
+on hardware. A later attended slot B trial needs
+a fresh verified NV backup and the usual stock A
+return. This is a passive capture of stock probe
+activity.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
