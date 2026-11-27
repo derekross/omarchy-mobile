@@ -69,8 +69,16 @@ ufs_ro_log() { echo "omamobile: ufs-ro: $*" > /dev/kmsg; }
 # say this init maps the list so; any other content in it closes the guard.
 UFS_RW=""
 UFS_RW_LUNS=""
-# Is $1 a disk that holds allowlisted partitions? sda always.
-ufs_rw_disk() { case " sda $UFS_RW_LUNS " in *" $1 "*) true ;; *) false ;; esac; }
+# Is $1 a disk that holds allowlisted partitions? sda always, plus UFS_RW_LUNS (including eMMC disks).
+ufs_rw_disk() { [ -n "$1" ] || return 1; case " sda $UFS_RW_LUNS " in *" $1 "*) true ;; *) false ;; esac; }
+# Parent disk of a partition node (sda1 -> sda, mmcblk0p1 -> mmcblk0).
+# Whole disks, mmcblk*boot[01], and mmcblk*gp[0-3] return empty so they are never allowlisted.
+ufs_part_disk() {
+  case "$1" in
+    sd[a-z][0-9]*) echo "${1%%[0-9]*}" ;;
+    mmcblk[0-9]p[0-9]*) echo "${1%p*}" ;;
+  esac
+}
 # The running slot's suffix: _a or _b, or nothing. Run it in a subshell
 # ($(...)): it turns off globbing for the command line's words.
 ufs_slot_add() { # one value: the first is kept, another one makes it unknown
@@ -155,10 +163,10 @@ ufs_rw_load() {
   [ -s /etc/omamobile-ufs-rw-luns ] || return 0
   list=$(cat /etc/omamobile-ufs-rw-luns)
   # shellcheck disable=SC2086 # split into names on purpose
-  case "$list" in *[!a-z\ ]*) set -- bad ;; *) set -- $list ;; esac
+  case "$list" in *[!a-z0-9\ ]*) set -- bad ;; *) set -- $list ;; esac
   for p in "$@"; do
     case "$p" in
-      sd[b-z]) ;;
+      sd[b-z]|mmcblk[0-9]) ;;
       *)
         ufs_ro_log "malformed LUN list in /etc/omamobile-ufs-rw-luns: every LUN but sda read-only"
         return 0 ;;
@@ -171,8 +179,8 @@ ufs_rw_load
 mkdir -p /run/ufs-ro
 ufs_partname() { sed -n 's/^PARTNAME=//p' "$1/uevent" 2>/dev/null; }
 ufs_ro_pass() {
-  local s ro name part disk
-  for s in /sys/block/sd* /sys/block/sd*/sd*; do
+  local s ro name part disk r
+  for s in /sys/block/sd* /sys/block/sd*/sd* /sys/block/mmcblk* /sys/block/mmcblk*/mmcblk*p*; do
     [ -r "$s/ro" ] || continue
     name=${s##*/}
     [ -e "/run/ufs-ro/$name" ] && continue
@@ -196,7 +204,8 @@ ufs_ro_pass() {
       continue
     fi
     part=$(ufs_partname "$s")
-    if [ -n "$part" ] && ufs_rw_disk "${name%%[0-9]*}" && \
+    disk=$(ufs_part_disk "$name")
+    if [ -n "$part" ] && [ -n "$disk" ] && ufs_rw_disk "$disk" && \
        case " $UFS_RW " in *" $part "*) true ;; *) false ;; esac; then
       : > "/run/ufs-ro/$name"
       ufs_ro_log "/dev/$name ($part) left writable (allowlist)"
@@ -213,22 +222,38 @@ ufs_ro_pass() {
       echo "omamobile: WARNING: /dev/$name is NOT read-only" > /dev/tty0 2>/dev/null
     fi
   done
+  # eMMC RPMB is a character device, not a block device: remove every RPMB node.
+  for r in /dev/mmcblk*rpmb /dev/rpmb[0-9]*; do
+    [ -e "$r" ] || continue
+    rm -f "$r"
+    if [ ! -e "$r" ]; then
+      ufs_ro_log "$r: RPMB node removed"
+    elif [ ! -e "/run/ufs-ro/${r##*/}.failed" ]; then
+      : > "/run/ufs-ro/${r##*/}.failed"
+      ufs_ro_log "FAILED to remove $r"
+      echo "omamobile: WARNING: $r was NOT removed" > /dev/tty0 2>/dev/null
+    fi
+  done
 }
 # Prints every disk or partition that is writable but not on the allowlist
 # (sda itself excepted: its node is removed). Empty means the guard holds.
 ufs_unguarded() {
-  local s name part ro
-  for s in /sys/block/sd* /sys/block/sd*/sd*; do
+  local s name part disk ro r
+  for s in /sys/block/sd* /sys/block/sd*/sd* /sys/block/mmcblk* /sys/block/mmcblk*/mmcblk*p*; do
     [ -r "$s/ro" ] || continue
     name=${s##*/}
     ufs_rw_disk "$name" && [ ! -s /etc/omamobile-nfsroot ] && continue
     read -r ro < "$s/ro"
     [ "$ro" = 0 ] || continue
     part=$(ufs_partname "$s")
-    if [ -n "$part" ] && ufs_rw_disk "${name%%[0-9]*}"; then
+    disk=$(ufs_part_disk "$name")
+    if [ -n "$part" ] && [ -n "$disk" ] && ufs_rw_disk "$disk"; then
       case " $UFS_RW " in *" $part "*) continue ;; esac
     fi
     echo "$name${part:+ ($part)}"
+  done
+  for r in /dev/mmcblk*rpmb /dev/rpmb[0-9]*; do
+    [ -e "$r" ] && echo "${r##*/}"
   done
 }
 ufs_ro_start() {
@@ -554,12 +579,15 @@ boot_nfs() {
 # missing we stay here in the initramfs shell.
 boot_arch() {
   grep -q omamobile.initramfs /proc/cmdline && return 1
-  local dev="" s info label check
-  for s in /sys/block/sda/sda*; do
-    grep -qx PARTNAME=userdata "$s/uevent" 2>/dev/null && dev=/dev/${s##*/}
+  local dev="" ro_path="" s info label check
+  # userdata on sda, or on an eMMC disk named in UFS_RW_LUNS (never an unlisted microSD).
+  for s in /sys/block/sda/sda* /sys/block/mmcblk*/mmcblk*p*; do
+    [ -e "$s" ] || continue
+    case ${s##*/} in mmcblk*) ufs_rw_disk "$(ufs_part_disk "${s##*/}")" || continue ;; esac
+    grep -qx PARTNAME=userdata "$s/uevent" 2>/dev/null && { dev=/dev/${s##*/}; ro_path=$s/ro; }
   done
   [ -n "$dev" ] || { say "arch: no userdata partition"; return 1; }
-  [ "$(cat /sys/block/sda/${dev#/dev/}/ro)" = 0 ] || { say "arch: userdata is read-only"; return 1; }
+  [ "$(cat "$ro_path")" = 0 ] || { say "arch: userdata is read-only"; return 1; }
   # Strict identification is opt-in: old hand-installed roots may be unlabelled.
   # The descriptor packs this file only when it requests the root protection.
   if [ -e /etc/omamobile-root-label ]; then

@@ -341,3 +341,188 @@ pass "a malformed LUN list leaves every LUN but sda read-only"
 fake_disks
 printf 'boot_b userdata persist\n' > "$B/etc/omamobile-ufs-rw"; printf 'sde\n' > "$B/etc/omamobile-ufs-rw-luns"
 closed "a closed allowlist with a LUN list" "allowlist names persist"
+
+# --- eMMC: mmcblk* disks, partitions, boot0/boot1, gp0..3, RPMB, and UFS_RW_LUNS ---
+fake_emmc() {
+  # fake_emmc [SLOT] [EMMC_DISK] [SD_DISK]
+  local slot=${1:-none} disk=${2:-mmcblk0} sd=${3:-}
+  rm -rf "$B" && mkdir -p "$B/dev" "$B/etc" "$B/proc" \
+    "$B/sys/block/$disk" "$B/sys/block/${disk}boot0" "$B/sys/block/${disk}boot1" \
+    "$B/sys/block/${disk}gp0" "$B/sys/block/${disk}gp1"
+  printf 'androidboot.hardware = "mt6765"\n' > "$B/proc/bootconfig"
+  [[ $slot == none ]] || printf 'androidboot.slot_suffix = "%s"\n' "$slot" >> "$B/proc/bootconfig"
+  printf 'console=tty0 panic=10\n' > "$B/proc/cmdline"
+  echo 0 > "$B/sys/block/$disk/ro"; : > "$B/dev/$disk"
+  local i=0 p
+  for p in para nvram nvdata protect1 protect2 proinfo dtbo boot boot_a boot_b userdata; do
+    i=$((i + 1))
+    mkdir -p "$B/sys/block/$disk/${disk}p$i"
+    printf 'MAJOR=179\nPARTN=%s\nPARTNAME=%s\n' "$i" "$p" > "$B/sys/block/$disk/${disk}p$i/uevent"
+    echo 0 > "$B/sys/block/$disk/${disk}p$i/ro"; : > "$B/dev/${disk}p$i"
+  done
+  for p in "${disk}boot0" "${disk}boot1" "${disk}gp0" "${disk}gp1"; do
+    echo 0 > "$B/sys/block/$p/ro"; : > "$B/dev/$p"
+  done
+  : > "$B/dev/${disk}rpmb"
+  : > "$B/dev/rpmb0"
+  if [[ -n $sd ]]; then
+    mkdir -p "$B/sys/block/$sd/${sd}p1"
+    echo 0 > "$B/sys/block/$sd/ro"; : > "$B/dev/$sd"
+    printf 'MAJOR=179\nPARTN=1\nPARTNAME=userdata\n' > "$B/sys/block/$sd/${sd}p1/uevent"
+    echo 0 > "$B/sys/block/$sd/${sd}p1/ro"; : > "$B/dev/${sd}p1"
+  fi
+}
+emmc_writable() {
+  local disk=${1:-mmcblk0} s out=""
+  for s in "$B"/sys/block/"$disk"/"${disk}"p*; do
+    [[ -f $s/ro && $(cat "$s/ro") == 0 ]] && out+="$(sed -n 's/^PARTNAME=//p' "$s/uevent") "
+  done
+  echo "${out% }"
+}
+emmc_checks() {
+  local tag=$1 disk=${2:-mmcblk0}
+  [[ ! -e $B/dev/$disk ]] || fail "$tag: whole-disk /dev/$disk node was removed"
+  for p in "${disk}boot0" "${disk}boot1" "${disk}gp0" "${disk}gp1"; do
+    [[ $(cat "$B/sys/block/$p/ro") == 1 ]] || fail "$tag: $p is read-only"
+  done
+  [[ ! -e $B/dev/${disk}rpmb ]] || fail "$tag: /dev/${disk}rpmb node was removed"
+  [[ ! -e $B/dev/rpmb0 ]] || fail "$tag: /dev/rpmb0 node was removed"
+}
+
+# Single-slot eMMC listed in UFS_RW_LUNS: userdata writable; boot, boot0/1, gp0/1, calibration ro; disk & rpmb removed
+fake_emmc none mmcblk0
+printf 'boot_b userdata\n' > "$B/etc/omamobile-ufs-rw"
+printf 'mmcblk0\n' > "$B/etc/omamobile-ufs-rw-luns"
+guard
+[[ $(emmc_writable mmcblk0) == userdata ]] || fail "emmc single-slot: only userdata writable (got: $(emmc_writable mmcblk0))"
+emmc_checks "emmc single-slot" mmcblk0
+[[ -z $(unguarded) ]] || fail "emmc single-slot: nothing outside allowlist is writable (got: $(unguarded))"
+pass "eMMC single-slot (UFS_RW_LUNS=mmcblk0): disk and RPMB removed, boot0/1, gp0/1 and calibration read-only, userdata writable"
+
+# A/B eMMC on slot B: boot_b and userdata writable; everything else ro
+fake_emmc _b mmcblk0
+printf 'boot_b userdata\n' > "$B/etc/omamobile-ufs-rw"
+printf 'mmcblk0\n' > "$B/etc/omamobile-ufs-rw-luns"
+guard
+[[ $(emmc_writable mmcblk0) == "userdata boot_b" || $(emmc_writable mmcblk0) == "boot_b userdata" ]] \
+  || fail "emmc slot B: boot_b and userdata writable (got: $(emmc_writable mmcblk0))"
+emmc_checks "emmc slot B" mmcblk0
+[[ -z $(unguarded) ]] || fail "emmc slot B: nothing outside allowlist is writable (got: $(unguarded))"
+pass "eMMC slot B: boot_b and userdata writable; boot0/1, gp0/1 and calibration read-only"
+
+# Unlisted eMMC (e.g. eMMC at mmcblk1 with no UFS_RW_LUNS): fails closed — whole disk, partitions, boot0/1, gp0/1 ro, rpmb removed
+fake_emmc _b mmcblk1 mmcblk0
+printf 'boot_b userdata\n' > "$B/etc/omamobile-ufs-rw"
+guard
+[[ $(cat "$B/sys/block/mmcblk1/ro") == 1 ]] || fail "unlisted mmcblk1: whole disk read-only"
+[[ -z $(emmc_writable mmcblk1) ]] || fail "unlisted mmcblk1: every partition read-only (got: $(emmc_writable mmcblk1))"
+[[ $(cat "$B/sys/block/mmcblk1boot0/ro") == 1 && $(cat "$B/sys/block/mmcblk1gp0/ro") == 1 ]] || fail "unlisted mmcblk1: boot0 and gp0 read-only"
+[[ ! -e $B/dev/mmcblk1rpmb && ! -e $B/dev/rpmb0 ]] || fail "unlisted mmcblk1: RPMB nodes removed"
+[[ $(cat "$B/sys/block/mmcblk0/ro") == 1 && -z $(emmc_writable mmcblk0) ]] || fail "unlisted mmcblk0 microSD: stays read-only"
+[[ -z $(unguarded) ]] || fail "unlisted mmcblk1: nothing writable (got: $(unguarded))"
+pass "eMMC at mmcblk1 without UFS_RW_LUNS fails closed (all mmcblk* disks, partitions, boot0/1, gp0/1 read-only, RPMB removed)"
+
+# eMMC at mmcblk1 listed in UFS_RW_LUNS with microSD (also carrying a PARTNAME=userdata) at mmcblk0
+fake_emmc none mmcblk1 mmcblk0
+printf 'boot_b userdata\n' > "$B/etc/omamobile-ufs-rw"
+printf 'mmcblk1\n' > "$B/etc/omamobile-ufs-rw-luns"
+guard
+[[ $(emmc_writable mmcblk1) == userdata ]] || fail "emmc mmcblk1: userdata writable (got: $(emmc_writable mmcblk1))"
+emmc_checks "emmc mmcblk1" mmcblk1
+[[ $(cat "$B/sys/block/mmcblk0/ro") == 1 && -z $(emmc_writable mmcblk0) ]] || fail "emmc mmcblk1: microSD at mmcblk0 stays read-only"
+[[ -z $(unguarded) ]] || fail "emmc mmcblk1: nothing outside allowlist is writable (got: $(unguarded))"
+pass "eMMC at mmcblk1 with microSD at mmcblk0: mmcblk1 guarded, microSD stays read-only"
+
+# ufs_unguarded catches reopened calibration, boot0, gp0, or recreated rpmb nodes
+echo 0 > "$B/sys/block/mmcblk1/mmcblk1p2/ro"
+[[ $(unguarded) == "mmcblk1p2 (nvram)" ]] || fail "emmc unguarded: reopened nvram reported (got: $(unguarded))"
+echo 1 > "$B/sys/block/mmcblk1/mmcblk1p2/ro"
+echo 0 > "$B/sys/block/mmcblk1boot0/ro"
+[[ $(unguarded) == "mmcblk1boot0" ]] || fail "emmc unguarded: reopened mmcblk1boot0 reported (got: $(unguarded))"
+echo 1 > "$B/sys/block/mmcblk1boot0/ro"
+echo 0 > "$B/sys/block/mmcblk1gp0/ro"
+[[ $(unguarded) == "mmcblk1gp0" ]] || fail "emmc unguarded: reopened mmcblk1gp0 reported (got: $(unguarded))"
+echo 1 > "$B/sys/block/mmcblk1gp0/ro"
+: > "$B/dev/mmcblk1rpmb"
+[[ $(unguarded) == "mmcblk1rpmb" ]] || fail "emmc unguarded: recreated mmcblk1rpmb reported (got: $(unguarded))"
+rm -f "$B/dev/mmcblk1rpmb"
+: > "$B/dev/rpmb0"
+[[ $(unguarded) == "rpmb0" ]] || fail "emmc unguarded: recreated rpmb0 reported (got: $(unguarded))"
+rm -f "$B/dev/rpmb0"
+pass "eMMC ufs_unguarded catches reopened partitions, boot0, gp0, and recreated RPMB nodes"
+
+# eMMC in NFS root mode: mmcblk0 itself set read-only, all partitions, boot0/1, gp0/1 read-only, rpmb removed
+fake_emmc none mmcblk0
+printf '172.16.42.2:/srv/nfs/root\n' > "$B/etc/omamobile-nfsroot"
+printf 'mmcblk0\n' > "$B/etc/omamobile-ufs-rw-luns"
+guard
+[[ $(cat "$B/sys/block/mmcblk0/ro") == 1 ]] || fail "emmc NFS: mmcblk0 itself is read-only"
+[[ -z $(emmc_writable mmcblk0) ]] || fail "emmc NFS: every partition read-only (got: $(emmc_writable mmcblk0))"
+[[ $(cat "$B/sys/block/mmcblk0boot0/ro") == 1 && $(cat "$B/sys/block/mmcblk0gp0/ro") == 1 ]] || fail "emmc NFS: boot0 and gp0 read-only"
+[[ ! -e $B/dev/mmcblk0rpmb && ! -e $B/dev/rpmb0 ]] || fail "emmc NFS: RPMB nodes removed"
+[[ -z $(unguarded) ]] || fail "emmc NFS: nothing writable (got: $(unguarded))"
+pass "eMMC NFS root: mmcblk0, all partitions, boot0/1 and gp0/1 read-only; RPMB removed"
+
+# Closed allowlist on eMMC: every partition, boot0/1, gp0/1 read-only, mmcblk0 & rpmb removed
+fake_emmc none mmcblk0
+printf 'mmcblk0\n' > "$B/etc/omamobile-ufs-rw-luns"
+guard
+[[ $(cat "$B/sys/block/mmcblk0/ro") == 1 ]] || fail "emmc closed: mmcblk0 read-only"
+[[ -z $(emmc_writable mmcblk0) ]] || fail "emmc closed: every partition read-only (got: $(emmc_writable mmcblk0))"
+[[ $(cat "$B/sys/block/mmcblk0boot0/ro") == 1 && $(cat "$B/sys/block/mmcblk0gp0/ro") == 1 ]] || fail "emmc closed: boot0 and gp0 read-only"
+[[ ! -e $B/dev/mmcblk0rpmb && ! -e $B/dev/rpmb0 ]] || fail "emmc closed: RPMB nodes removed"
+[[ -z $(unguarded) ]] || fail "emmc closed: nothing writable (got: $(unguarded))"
+pass "eMMC closed allowlist: mmcblk0, all partitions, boot0/1 and gp0/1 read-only; RPMB removed"
+
+# A/B eMMC on slot A (RAM boot): boot_a and userdata writable; boot_b, boot0/1, gp0/1 and calibration ro
+fake_emmc _a mmcblk0
+printf 'boot_b userdata\n' > "$B/etc/omamobile-ufs-rw"
+printf 'mmcblk0\n' > "$B/etc/omamobile-ufs-rw-luns"
+guard
+[[ $(emmc_writable mmcblk0) == "boot_a userdata" || $(emmc_writable mmcblk0) == "userdata boot_a" ]] \
+  || fail "emmc slot A: boot_a and userdata writable (got: $(emmc_writable mmcblk0))"
+emmc_checks "emmc slot A" mmcblk0
+[[ -z $(unguarded) ]] || fail "emmc slot A: nothing outside allowlist is writable (got: $(unguarded))"
+pass "eMMC slot A: boot_a and userdata writable; boot_b, boot0/1, gp0/1 and calibration read-only"
+
+# Bad eMMC LUN lists leave every eMMC disk read-only and log malformed LUN list
+for bad in mmcblk0p1 mmcblk0boot0 mmcblk mmcblk10; do
+  fake_emmc _b mmcblk0
+  printf 'boot_b userdata\n' > "$B/etc/omamobile-ufs-rw"
+  printf '%s\n' "$bad" > "$B/etc/omamobile-ufs-rw-luns"
+  guard
+  grep -q "malformed LUN list" "$B/dev/kmsg" || { cat "$B/dev/kmsg"; fail "eMMC LUN list '$bad': says so on kmsg"; }
+  [[ $(cat "$B/sys/block/mmcblk0/ro") == 1 && -z $(emmc_writable mmcblk0) ]] \
+    || fail "eMMC LUN list '$bad': mmcblk0 stays read-only (got: $(emmc_writable mmcblk0))"
+  [[ $(cat "$B/sys/block/mmcblk0boot0/ro") == 1 && $(cat "$B/sys/block/mmcblk0gp0/ro") == 1 ]] || fail "eMMC LUN list '$bad': boot0/gp0 read-only"
+  [[ ! -e $B/dev/mmcblk0rpmb && ! -e $B/dev/rpmb0 ]] || fail "eMMC LUN list '$bad': RPMB nodes removed"
+  [[ -z $(unguarded) ]] || fail "eMMC LUN list '$bad': nothing writable (got: $(unguarded))"
+done
+pass "malformed eMMC LUN lists (mmcblk0p1, mmcblk0boot0, mmcblk, mmcblk10) leave all eMMC disks read-only"
+
+# Pack-time validation in bin/omamobile refuses partition/boot names in UFS_RW_LUNS
+for bad in mmcblk0p1 mmcblk0boot0 mmcblk mmcblk10; do
+  mkdir -p "$t/pack-$bad/bin" "$t/pack-$bad/device/emmc"
+  cp bin/omamobile "$t/pack-$bad/bin/omamobile"
+  printf 'DEVICE="${DEVICE:-emmc}"\nSRC_DIR=/nonexistent\n' > "$t/pack-$bad/omamobile.conf"
+  sed 's/^CODENAME=.*/CODENAME=emmc/' device/bluejay/device.conf > "$t/pack-$bad/device/emmc/device.conf"
+  printf '\nUFS_RW_LUNS=%s\n' "$bad" >> "$t/pack-$bad/device/emmc/device.conf"
+  if DEVICE=emmc "$t/pack-$bad/bin/omamobile" initramfs-config "$t/pack-$bad/out" >/dev/null 2>&1; then
+    fail "bin/omamobile should refuse UFS_RW_LUNS=$bad at pack time"
+  fi
+done
+pass "bin/omamobile refuses invalid eMMC names in UFS_RW_LUNS at pack time"
+
+# Device at mmcblk10: ufs_part_disk returns empty and ufs_rw_disk "" must refuse it
+fake_emmc none mmcblk10
+printf 'boot_b userdata\n' > "$B/etc/omamobile-ufs-rw"
+guard
+[[ $(cat "$B/sys/block/mmcblk10/ro") == 1 && -z $(emmc_writable mmcblk10) ]] \
+  || fail "mmcblk10: stays read-only (got: $(emmc_writable mmcblk10))"
+[[ $(cat "$B/sys/block/mmcblk10boot0/ro") == 1 && $(cat "$B/sys/block/mmcblk10gp0/ro") == 1 ]] || fail "mmcblk10: boot0/gp0 read-only"
+[[ ! -e $B/dev/mmcblk10rpmb && ! -e $B/dev/rpmb0 ]] || fail "mmcblk10: RPMB nodes removed"
+[[ -z $(unguarded) ]] || fail "mmcblk10: nothing writable (got: $(unguarded))"
+if PATH="$t/bin:$PATH" $GSH -c ". '$t/guard-test.sh'; UFS_RW_LUNS=''; ufs_rw_disk ''"; then
+  fail "ufs_rw_disk '' must return false when UFS_RW_LUNS is empty"
+fi
+pass "mmcblk10 stays read-only and ufs_rw_disk refuses an empty disk name"

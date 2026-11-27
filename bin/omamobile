@@ -152,8 +152,8 @@ load_device() {
   [[ $seen_rw == *" userdata "* ]] || die "$file: UFS_RW must include userdata"
   # Optional: LUNs besides sda that hold UFS_RW partitions; the init guards
   # each as it guards sda (whole-disk node removed, partitions one by one)
-  if [[ -n ${DEV_UFS_RW_LUNS:-} && ! $DEV_UFS_RW_LUNS =~ ^sd[b-z]( sd[b-z])*$ ]]; then
-    die "$file: UFS_RW_LUNS may hold only disk names sdb to sdz separated by spaces"
+  if [[ -n ${DEV_UFS_RW_LUNS:-} && ! $DEV_UFS_RW_LUNS =~ ^(sd[b-z]|mmcblk[0-9])( (sd[b-z]|mmcblk[0-9]))*$ ]]; then
+    die "$file: UFS_RW_LUNS may hold only disk names sdb to sdz or mmcblk0 to mmcblk9 separated by spaces"
   fi
 
   if [[ $DEV_BOOT_METHOD == android-v0 ]]; then

@@ -94,7 +94,7 @@ with tempfile.TemporaryDirectory() as tmp:
     (block / 'uevent').write_text('PARTNAME=userdata\n')
     (block / 'ro').write_text('0\n')
     (p / 'cmdline').write_text('console=null\n')
-    script = function('boot_arch').replace('/sys/block/sda', str(p / 'block'))
+    script = function('boot_arch').replace('/sys/block/sda', str(p / 'block')).replace('/sys/block/mmcblk*', str(p / 'mmc/mmcblk*'))
     script = script.replace('/proc/cmdline', str(p / 'cmdline'))
     script = script.replace('/etc/omamobile-root-label', str(p / 'absent-label'))
     script = script.replace('/etc/omamobile-root-mode', str(p / 'absent-mode'))

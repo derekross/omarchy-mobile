@@ -9,6 +9,10 @@ import tempfile
 
 repo = Path(__file__).resolve().parent.parent
 source = (repo / 'initramfs/init').read_text()
+helpers = (
+    source.split('ufs_rw_disk() {', 1)[1].split('\n# The running slot', 1)[0]
+)
+helpers = 'ufs_rw_disk() {' + helpers + '\n'
 body = 'boot_arch() {' + source.split('boot_arch() {', 1)[1].split('\n}\n', 1)[0] + '\n}\n'
 for stale, guard_fault in ((False, False), (False, True), (True, False)):
     with tempfile.TemporaryDirectory() as tmp:
@@ -28,7 +32,7 @@ for stale, guard_fault in ((False, False), (False, True), (True, False)):
         pending.parent.mkdir(parents=True)
         if stale:
             pending.write_text('previous-boot\n')
-        script = body.replace('/etc/omamobile-root-label', str(p / 'policy')).replace('/sys/block/sda', str(p / 'block')).replace('/proc/cmdline', str(p / 'cmdline')).replace('/etc/omamobile-root-mode', str(p / 'mode')).replace('/newroot', str(root))
+        script = body.replace('/etc/omamobile-root-label', str(p / 'policy')).replace('/sys/block/sda', str(p / 'block')).replace('/sys/block/mmcblk*', str(p / 'mmc/mmcblk*')).replace('/proc/cmdline', str(p / 'cmdline')).replace('/etc/omamobile-root-mode', str(p / 'mode')).replace('/newroot', str(root))
         # Stop immediately before process quiescing; never execute kill/switch_root.
         stop = '  kill -9 -1 2>/dev/null'
         assert script.count(stop) == 1
@@ -65,3 +69,64 @@ ufs_unguarded() { [ "$GUARD_FAULT" = 1 ] && echo test-stop; }
                 held = subprocess.run(shell + [str(f)], env={**os.environ, 'LOG': str(p / 'log'), 'GUARD_FAULT': '0'}, capture_output=True, text=True, timeout=5)
                 assert held.returncode == 1 and pending.exists()
         print('PASS:', 'failed previous boot holds in RAM' if stale else 'guard refusal leaves no marker' if guard_fault else 'fresh boot persists marker after guard; later boots remain held')
+
+
+# Real boot_arch eMMC lookup: picks listed mmcblk1p10, ignores microSD mmcblk0p1 and mmcblk10p1.
+for luns, expect_rc, expect_log in (
+    ('mmcblk1', 42, 'switching to Arch Linux on /dev/mmcblk1p10'),
+    ('', 1, 'arch: no userdata partition'),
+):
+    with tempfile.TemporaryDirectory() as tmp:
+        p = Path(tmp)
+        # microSD at mmcblk0 (unlisted, ro=1)
+        (p / 'mmc/mmcblk0/mmcblk0p1').mkdir(parents=True)
+        (p / 'mmc/mmcblk0/mmcblk0p1/uevent').write_text('PARTNAME=userdata\n')
+        (p / 'mmc/mmcblk0/mmcblk0p1/ro').write_text('1\n')
+        # card at index >= 10 (ufs_part_disk returns empty; ufs_rw_disk "" must refuse it)
+        (p / 'mmc/mmcblk10/mmcblk10p1').mkdir(parents=True)
+        (p / 'mmc/mmcblk10/mmcblk10p1/uevent').write_text('PARTNAME=userdata\n')
+        (p / 'mmc/mmcblk10/mmcblk10p1/ro').write_text('0\n')
+        # listed eMMC at mmcblk1 (only when luns == 'mmcblk1')
+        if luns:
+            (p / 'mmc/mmcblk1/mmcblk1p10').mkdir(parents=True)
+            (p / 'mmc/mmcblk1/mmcblk1p10/uevent').write_text('PARTNAME=userdata\n')
+            (p / 'mmc/mmcblk1/mmcblk1p10/ro').write_text('0\n')
+        (p / 'cmdline').write_text('rdinit=/init\n')
+        (p / 'mode').write_text('persistent-development\n')
+        (p / 'policy').write_text('omamobile-root\n')
+        root = p / 'root'
+        (root / 'usr/lib/systemd').mkdir(parents=True)
+        systemd = root / 'usr/lib/systemd/systemd'
+        systemd.touch()
+        systemd.chmod(0o755)
+        script = (
+            body.replace('/etc/omamobile-root-label', str(p / 'policy'))
+            .replace('/sys/block/sda', str(p / 'block'))
+            .replace('/sys/block/mmcblk*', str(p / 'mmc/mmcblk*'))
+            .replace('/proc/cmdline', str(p / 'cmdline'))
+            .replace('/etc/omamobile-root-mode', str(p / 'mode'))
+            .replace('/newroot', str(root))
+        )
+        stop = '  kill -9 -1 2>/dev/null'
+        assert script.count(stop) == 1
+        script = script.replace(stop, '  return 42')
+        spies = f"""
+UFS_RW_LUNS='{luns}'
+say() {{ echo "$*" >> "$LOG"; }}
+dumpe2fs() {{ echo 'Filesystem volume name: omamobile-root'; }}
+e2fsck() {{ return 0; }}
+grow_root() {{ echo UNEXPECTED_GROW >> "$LOG"; return 1; }}
+mount() {{ return 0; }}
+umount() {{ echo unmounted >> "$LOG"; }}
+sync() {{ echo synced >> "$LOG"; }}
+ufs_ro_pass() {{ :; }}
+ufs_unguarded() {{ :; }}
+"""
+        f = p / 'run.sh'
+        f.write_text(spies + helpers + script + 'boot_arch\n')
+        shell = json.loads(os.environ.get('OMAMOBILE_BOOT_ARCH_TEST_SHELL', '["/bin/sh"]'))
+        result = subprocess.run(shell + [str(f)], env={**os.environ, 'LOG': str(p / 'log')}, capture_output=True, text=True, timeout=5)
+        assert result.returncode == expect_rc, (luns, result)
+        log = (p / 'log').read_text()
+        assert expect_log in log, (luns, log)
+        print('PASS:', f'eMMC boot_arch (UFS_RW_LUNS={luns or "<empty>"}): {expect_log}')
