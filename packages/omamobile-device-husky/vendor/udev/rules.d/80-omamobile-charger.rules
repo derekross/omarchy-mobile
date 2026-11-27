@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-# Omarchy Mobile: block sleep while the MAX77759 charger is online
+# Omamobile: block sleep while the MAX77759 charger is online
 # (omamobile-plugged-inhibit.service). Only when the charger driver binds,
 # so nothing runs while omamobile-max77759.conf blacklists it.
 ACTION=="add", SUBSYSTEM=="power_supply", KERNEL=="max77759-charger", TAG+="systemd", ENV{SYSTEMD_WANTS}+="omamobile-plugged-inhibit.service"
