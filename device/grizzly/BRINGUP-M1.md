@@ -6552,7 +6552,7 @@ offset `0x1084` bit 14 for zero
 (`0x37740`–`0x377b0`). Its timeout reports backend
 idle status. The passive stock DSI0 captures and full
 stock display bugreport contain no direct witness for
-either GPCSR word.
+the FE controls at `+0x104c` or `+0x1070`.
 
 The stock backend clock-domain isolation helper
 (`0x31260`) writes FE/BE offset `0x80248` through
@@ -9103,9 +9103,8 @@ In exact D1 `vs_drm.ko`, the identified GPCSR reads at
 the FE/BE aperture. The custom dump passes that aperture
 at `0x36c08` to `gs_reg_dump_with_skips`. These paths
 supply no readback of either front-end control.
-The saved public source index names generated headers
-for the GPCSR block, but the cached files do not contain
-those headers or their field definitions.
+The generated header comparison below identifies the
+FE1 field and the layout-dependent interpretation of FE0.
 
 GC policy `0x30303` covers both addresses. It establishes
 the static address rule and leaves EL1 read behavior and
@@ -9116,6 +9115,64 @@ PHY TX bus clock or external reset was found at either
 word. Keep both GPCSR word reads, PHY TX and DSI0 host
 reads disabled. This audit used only saved artifacts
 and built no fixture.
+
+###### Generated Malibu GPCSR layouts
+
+Both generated GPL headers are available in the public
+Spacecraft kernel snapshot for `CP41.260831.019`. Their
+Git blob hashes match the snapshot tree. The headers
+subtract `0x00390000` from the wrapper-relative addresses,
+giving offsets from the B0 `dpu-gpcsr` base `0x0f790000`.
+
+| GPCSR offset | `0x20000005` layout | `0x32a` layout |
+| --- | --- | --- |
+| `+0x104c` | FE0 `QCHCTL_ACTIVE_ASYNC_MASK_0`, bit 0 read/write. [FE0 mask definition][gpcsr-20000005-fe0] | FE0 `QCHCTL_DBG_STATUS`, all bits readable in the header and write mask zero. The FE0 async mask is at `+0x1054`. [FE0 status and mask definitions][gpcsr-32a-fe0] |
+| `+0x1070` | FE1 `QCHCTL_ACTIVE_ASYNC_MASK_0`, bit 0 read/write. [FE1 mask definition][gpcsr-20000005-fe1] | Same FE1 bit 0 mask. [FE1 mask definition][gpcsr-32a-fe1] |
+
+For these async activity masks, bit 0 controls whether the
+front-end Q-channel logic includes the DPU back-end activity
+input. `1` excludes it and `0` includes it. D1 CPM's FE0
+stores at `+0x104c` fit the `0x20000005` mask definition.
+D1 Linux's BE idle transaction uses `+0x107c` and `+0x1084`,
+which match the `0x32a` debug selector and status pair. The
+`0x20000005` pair is at `+0x1080` and `+0x108c`.
+[BE idle implementation][gpcsr-be-idle] · [0x32a BE pair][gpcsr-32a-be] · [0x20000005 BE pair][gpcsr-20000005-be]
+
+The public Malibu defconfig enables both DC9400 options, and
+the driver's preprocessor chooses `0x32a` GPCSR constants
+when both are enabled. The exact D1 module includes both
+`dc_info_9400_32a` and `dc_info_9400_20000005`. Its matcher at
+`0x19548` compares live chip, product and customer IDs. The
+two entries share chip ID, product ID and revision and differ
+in customer ID. The BE transaction confirms the compiled
+offsets. The saved D1 display bugreport yielded no live DC
+customer ID. The actual D1 behavior of a read or write at
+`+0x104c` remains unverified.
+[Malibu defconfig][gpcsr-malibu-config] · [Compile-time selection][gpcsr-hw-include] · [Runtime chip match][gpcsr-chip-match]
+
+Neither header identifies a PHY TX bus-clock or external reset
+status field. The wrapper Q-channel debug word has a programmable
+selector with no documented DSI0 mapping. The `0x20000005`
+GSPAN debug APB control is for the GSPAN path. Stock's existing
+PLL-lock poll at `+0x24` is in the separate PHY `u0-apb-regbank`
+and reports PLL lock. These sources leave PHY TX bus-clock and
+external reset status unqualified. Keep the GPCSR control word
+reads, PHY TX reads and DSI0 host reads disabled.
+[Wrapper debug definitions][gpcsr-wrapper-debug] · [GSPAN debug APB control][gpcsr-gspan-apb] · [PHY PLL poll][gpcsr-phy-pll]
+
+[gpcsr-20000005-fe0]: https://github.com/GrapheneOS/kernel_pixel/blob/cbc6305f4ca4f4a63c4e6f476fd0d0aa09fa2122/private/google-modules/display/vsi-drm/verisilicon/9x00/info/sswrp_dpu_gpcsr_pg_9400_0x20000005.h#L880-L907
+[gpcsr-32a-fe0]: https://github.com/GrapheneOS/kernel_pixel/blob/cbc6305f4ca4f4a63c4e6f476fd0d0aa09fa2122/private/google-modules/display/vsi-drm/verisilicon/9x00/info/sswrp_dpu_gpcsr_pg_9400_0x32a.h#L761-L833
+[gpcsr-20000005-fe1]: https://github.com/GrapheneOS/kernel_pixel/blob/cbc6305f4ca4f4a63c4e6f476fd0d0aa09fa2122/private/google-modules/display/vsi-drm/verisilicon/9x00/info/sswrp_dpu_gpcsr_pg_9400_0x20000005.h#L1109-L1136
+[gpcsr-32a-fe1]: https://github.com/GrapheneOS/kernel_pixel/blob/cbc6305f4ca4f4a63c4e6f476fd0d0aa09fa2122/private/google-modules/display/vsi-drm/verisilicon/9x00/info/sswrp_dpu_gpcsr_pg_9400_0x32a.h#L985-L1012
+[gpcsr-be-idle]: https://github.com/GrapheneOS/kernel_pixel/blob/cbc6305f4ca4f4a63c4e6f476fd0d0aa09fa2122/private/google-modules/display/vsi-drm/verisilicon/9x00/vs_dc_hw.c#L6344-L6368
+[gpcsr-32a-be]: https://github.com/GrapheneOS/kernel_pixel/blob/cbc6305f4ca4f4a63c4e6f476fd0d0aa09fa2122/private/google-modules/display/vsi-drm/verisilicon/9x00/info/sswrp_dpu_gpcsr_pg_9400_0x32a.h#L1062-L1134
+[gpcsr-20000005-be]: https://github.com/GrapheneOS/kernel_pixel/blob/cbc6305f4ca4f4a63c4e6f476fd0d0aa09fa2122/private/google-modules/display/vsi-drm/verisilicon/9x00/info/sswrp_dpu_gpcsr_pg_9400_0x20000005.h#L1211-L1299
+[gpcsr-malibu-config]: https://github.com/GrapheneOS/kernel_pixel/blob/cbc6305f4ca4f4a63c4e6f476fd0d0aa09fa2122/private/devices/google/malibu/malibu_defconfig#L133-L135
+[gpcsr-hw-include]: https://github.com/GrapheneOS/kernel_pixel/blob/cbc6305f4ca4f4a63c4e6f476fd0d0aa09fa2122/private/google-modules/display/vsi-drm/verisilicon/9x00/vs_dc_hw.h#L19-L23
+[gpcsr-chip-match]: https://github.com/GrapheneOS/kernel_pixel/blob/cbc6305f4ca4f4a63c4e6f476fd0d0aa09fa2122/private/google-modules/display/vsi-drm/verisilicon/9x00/info/vs_dc_info.c#L11-L35
+[gpcsr-wrapper-debug]: https://github.com/GrapheneOS/kernel_pixel/blob/cbc6305f4ca4f4a63c4e6f476fd0d0aa09fa2122/private/google-modules/display/vsi-drm/verisilicon/9x00/info/sswrp_dpu_gpcsr_pg_9400_0x32a.h#L464-L538
+[gpcsr-gspan-apb]: https://github.com/GrapheneOS/kernel_pixel/blob/cbc6305f4ca4f4a63c4e6f476fd0d0aa09fa2122/private/google-modules/display/vsi-drm/verisilicon/9x00/info/sswrp_dpu_gpcsr_pg_9400_0x20000005.h#L1482-L1533
+[gpcsr-phy-pll]: https://github.com/GrapheneOS/kernel_pixel/blob/cbc6305f4ca4f4a63c4e6f476fd0d0aa09fa2122/private/google-modules/display/vsi-drm/phy/synopsys/dw-mipi-cdphy-g301.c#L2320-L2325
 
 ### Offline stock D1 device reference-clock diagnostic
 
