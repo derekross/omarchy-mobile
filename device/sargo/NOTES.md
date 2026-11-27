@@ -387,10 +387,12 @@ card probes).
    the shared config, or the phone keeps a development kernel.
 3. This phone's CONTRIBUTING.md §3.1 entry (slot B's GPT mark), then
    `flash`/`push` and the installer for `android-v2`.
-4. The fuel gauge, Bluetooth and modem branches into linux-omamobile
-   (binding entries for the six SDM670 compatibles first).
-5. The modem and Wi-Fi as packages: `qrtr`, `rmtfs` and `tqftpserv`, a
-   start unit that keeps rmtfs on RAM copies and orders the services after
-   the modem (or a fix for the name service's announce), the modem
-   firmware from the `modem` partition and the board file in
-   `tools/extract-vendor-firmware`, and the Wi-Fi MAC from the bootloader.
+4. The fuel gauge, Bluetooth and modem branches into linux-omamobile:
+   linux-omamobile #302 (fuel gauge), #303 (UART6 and Bluetooth) and #304
+   (modem and Wi-Fi), in review.
+5. The modem and Wi-Fi as packages: `qrtr`, `rmtfs` and `tqftpserv`
+   (#502, the maintainer's decision), then a start unit that keeps rmtfs on
+   RAM copies and orders the services after the modem (or a fix for the
+   name service's announce), and the Wi-Fi MAC from the bootloader. Whether
+   the modem starts at boot by default is the maintainer's call. The modem
+   firmware and the board file are in `tools/extract-vendor-firmware`.
