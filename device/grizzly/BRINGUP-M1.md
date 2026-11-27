@@ -9974,6 +9974,31 @@ supplies no writer for the descriptor. Its origin
 and value at reset remain unverified. Keep PSM1,
 PHY TX and host reads disabled.
 
+###### Offline D1 DP0 operating-point telemetry
+
+The exact CPM definitions for `dpu_dp0` and `dpu_dp1`
+at `0x8515c` and `0x8517c` register LPCM operating-point
+directories for IDs `0x28` and `0x29`. The descriptor
+and I/O callbacks at `0x14030`, `0x13e74` and `0x13fa4`
+handle operating-point attributes including `lpcm.cur`,
+`cur` and per-point `MHz`. The matching configuration
+records at `0x58cd8` and `0x58ce4` both have a null
+configuration pointer and a clear enable byte. Reads
+of the current-level attributes branch from `0x13e9c`
+to the error return at `0x13f50` before calling the
+getter. The `0x205` power-domain dispatch uses the
+separate DPU LPCM ID `0x23` and PSM1.
+
+The exact stock `google_powerdashboard.ko` residency
+handler (`0x29e4`) has compiled labels for AOSS and GSA
+votes on FABSTBY and DRAM. The blocker handler (`0x1ce4`)
+labels a DPU wrapper row but has no DP0 or PSM1 row.
+Neither the named CPM directories nor these dashboard
+views provide a sample of physical DP0 state. The AP
+DP0 vote trace remains the available same-window
+evidence. No new PSM1, PHY TX or DSI0 host access is
+qualified by this audit.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
