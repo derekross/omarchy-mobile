@@ -7833,6 +7833,63 @@ host transfer callback and `vs_drm_postclose` as
 separate trace points to distinguish enumeration,
 panel traffic and teardown.
 
+###### Passive stock D1 CGYDA mode trace
+
+[The collector](bringup/stock-cgyda-mode-trace.sh)
+arms a dedicated tracefs instance beside an existing
+stock DRM client. It checks the D1 kernel release
+and exact loaded module symbols. It opens no DRM
+file and issues no DRM ioctl. Any enumeration,
+transfer or close must come from the system under
+observation.
+
+| Event | Fields |
+| --- | --- |
+| `cgyda_getconnector` | Connector ID for a zero-mode-count query. A query only reaches enumeration if its caller is DRM master. |
+| `cgyda_modes_enter`, `cgyda_modes_return` | Entry to `gs_panel_get_modes` and returned count or error. |
+| `cgyda_dsi_enter`, `cgyda_dsi_return` | Stock DSI2H host packet type, TX and RX lengths, and transfer result. No payload is collected. |
+| `cgyda_postclose` | Stock DRM driver's open count before it decides whether to run last-close shutdown and reset. |
+
+The trace retains timestamps and task IDs. Match the
+query and mode rows by task. Inspect the interval for
+DSI work on that task and other threads. A transfer
+within the window alone is insufficient to attribute
+it to the query. A window without a mode entry did
+not witness enumeration. A missing postclose row only
+means none was observed in the capture window.
+
+Use this helper only from an already privileged
+shell with writable tracefs and loaded D1 display
+modules. Stock production ADB previously could not
+access tracefs. The guarded discovery ramdisk has
+no existing Android DRM client. A live run needs a
+context with both prerequisites. The helper does
+not start or stop a display client to obtain events.
+
+```sh
+stock-cgyda-mode-trace.sh "$TRACEFS" "$BUSYBOX" arm
+# Observe a short window of existing stock client activity.
+umask 077
+stock-cgyda-mode-trace.sh "$TRACEFS" "$BUSYBOX" dump > cgyda-modes.local
+stock-cgyda-mode-trace.sh "$TRACEFS" "$BUSYBOX" cleanup
+```
+
+Stop if the symbols are unavailable or the instance
+cannot arm. If dump reports overwritten events,
+missed probes or an oversized capture, retain the
+output privately as incomplete and clean up the
+instance. Cleanup removes the dedicated group and
+probes. Run cleanup after the capture even if dump
+fails. Keep raw traces local.
+
+Offline checks verified the probe arguments against
+the factory Image and modules. Shell mocks exercised
+arming, capture, cleanup, duplicate-arm refusal,
+rollback after partial setup, and rejection of a
+wrong kernel, a missing symbol, overwritten events
+or missed probes. Live registration and capture
+remain unverified.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
