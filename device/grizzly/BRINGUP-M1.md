@@ -9778,6 +9778,56 @@ no register-to-scan-bit mapping for AP
 the PSM1 descriptor remains unverified. Keep
 direct PSM1, PHY TX and host reads disabled.
 
+###### Offline D1 scan2mem engine setup and block selection
+
+DBC looks up `scan2mem_init` in the DRAM BLFS
+archive at `0x15690`–`0x156a0`. Its reinit path
+looks up `scan2mem_reinit` at `0x7808`–`0x7814`.
+All 12 factory DRAM-init archives have both records.
+They hold setup sequences for the scan engine and
+memory path. The crash-reset policy test and the
+per-block capture mask are handled separately in GDMC.
+
+When the PD policy check is active, GDMC
+`0x3898` calls the all-bits test at
+`0x88c0`–`0x892a`. `fabdisp_scan_en` (PD
+vector bit `0x44`) is one of its 25 required bits.
+The archived vector is all zero. The log supplies no
+sample of GDMC's separate local policy-enforcement
+selector, which it initializes from `0x69894004`.
+
+The normal crash capture-mask builder at GDMC text
+`0x3708` uses a separate 33-row table at
+`0x20008784`. Each two-byte row gives a scan-mask
+bit and a wrapper-state selector. The test at
+`0x3234` takes the low two bits of the live wrapper
+word. A nonzero value sets the row's capture bit.
+The selector and capture bit pairings are:
+
+| Stock scan block | Capture bit | Wrapper selector | GDMC state word |
+| --- | --- | --- | --- |
+| DPU | 22 | 8 | `0x51540200` |
+| FABDISP | 13 | 9 | `0x51540240` |
+
+GDMC `0x4864` programs the scan engine mask, with
+a diagnostic override path and special handling
+for other blocks. ABL `0x56fa4`–`0x56fb8` uses
+the enabled bit indices as block IDs in a saved
+packet. Thus policy bit `0x44` can affect permission
+to start the scan. DPU block 22 selection on the
+normal path comes from its own wrapper.
+
+The two 33-entry layout tables selected by GDMC
+`0x7e0` both give DPU a scan length of `0x367c87`
+bits and FABDISP `0xb9363` bits. The setup loop
+at `0x48e6`–`0x491c` programs these per block. ABL
+`0x56910`–`0x5692c` converts the declared bit count
+to an aligned packet size. The lengths and ABL's decoded validation
+and link-state bits provide no mapping from AP
+`0x0f409018` to scan bits. No retained D1 capture
+supplies that mapping. PSM1, PHY TX and host reads
+remain disabled.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
