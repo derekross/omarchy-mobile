@@ -3,6 +3,100 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-659. A default-on descriptor key for a phone-changing step reaches every
+  descriptor the tool accepts, and a guarded phone may be kept out only by an
+  unrelated refusal.** #639's `BOOTLOADER_SLOT_PROBE` default covered ten
+  devices; the 9a was out only because its descriptor has no `SOC_*` key.
+  *Check:* run the tool's early refusals (`BOOT_METHOD`,
+  `SOC_IDS`/`SOC_COMPATIBLE`) over `device/*/device.conf`, list who passes,
+  name for each phone with an "ask first" rule the refusal that keeps it out,
+  and prefer opt-in after an attended run. Extends L-44, L-444 and L-601.
+  *From:* #639, round 49, 2026-11-10.
+- **L-658. A check that measures a hazard by doing the hazardous thing is
+  reviewed as that thing.** #639's installer read the other slot's bootloader
+  version by setting that slot active and restarting into its bootloader, the
+  event the "slots must match" check exists to prevent; Google's factory
+  images page warns of an unbootable state for an older bootloader in the
+  inactive slot (Pixel 6 and 8 families). *Check:* for any "measure X by
+  switching to it", write down what the guard protects against and whether the
+  measurement triggers it, and read Google's warnings for the device's family.
+  Extends L-3 and L-284. *From:* #639, round 49, 2026-11-10.
+- **L-324. A review reads the PR thread for identifiers, not only the diff.**
+  A contributor's evidence comments on kernel #98 quoted `bluetoothctl show`
+  with the phone's public Bluetooth address twice, and `tools/pr-check` sees
+  commits only. *Check:* every round, run the MAC pattern
+  (`[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}`) and the serial and IMEI patterns over
+  `gh pr view N --json comments,reviews` and the inline review comments, and
+  ask for an edit. Extends L-29; see C-22. *From:* kernel #98, round 29.
+- **L-323. A device that drops its forked init for the shared one also changes
+  its `INITRAMFS_INIT` to an absolute value.** A value without a leading `/`
+  is relative to `device/<codename>/`, so #111's unchanged `initramfs/init`
+  pointed at the file the same push deleted; `tests/boot-method` passed
+  because `images` stops at "build the kernel first" before the initramfs.
+  *Check:* `grep INITRAMFS_INIT device/<x>/device.conf`, then `git cat-file -e
+  <head>:device/<x>/<value>`, or run `bin/omamobile initramfs` with a scratch
+  `KERNEL_OUT` (it dies at the init check before any download). Extends L-134.
+  *From:* #111, round 29.
+- **L-322. Accepting a new `BOOT_METHOD` in `bin/omamobile` opens `flash` and
+  `push` too, and `flash` switches the slot.** On Qualcomm A/B, `fastboot
+  --set-active` hands slot state to ABL, which (as we understand it) resets
+  the successful flag; with the GPT mark allowed only by hand under a §3.1
+  entry, `flash` forces the next GPT write or a fallback. *Check:* for a new
+  method, list what each of `images`, `flash` and `push` does on that
+  bootloader, and refuse the ones whose follow-up isn't approved. Extends
+  L-284. *From:* #111, round 29.
+- **L-321. "The shared init covers this device" is checked against the LUNs on
+  any non-Pixel UFS.** `initramfs/init` leaves allowlisted partitions writable
+  only on `sda`, `boot_arch` finds `userdata` only there, and `cmd_push` finds
+  slot B's images only there. Pixels keep them on LUN 0; multi-LUN Qualcomm
+  layouts may not. The no-USB-host `sysrq c` fallback is a Tensor-era
+  assumption too. *Check:* ask for the read-only `PARTNAME` to `sdX` map of
+  every `UFS_RW` entry from sysfs before accepting "push updates `boot_b`",
+  and ask what a panic does on that bootloader. Extends L-1 and L-232. *From:*
+  #111, round 29.
+- **L-320. A one-boot helper a PR adds needs install, enable and removal steps
+  in its runbook.** #136's H5 created the early read's marker, but no step
+  installed or enabled the unit, so the run's main reading would silently not
+  happen. *Check:* for each script or unit a PR adds under `device/<x>/`, find
+  the runbook line that copies it and runs `systemctl enable`, and the one
+  that undoes it. *From:* #136, round 29.
+- **L-319. A meter check or stop rule written for one reset applies to every
+  reset that reaches the same state.** #136's "VBUS still up two minutes after
+  the reset" was attached to H5's planned `echo b`, but H4's swap timer and a
+  forced restart with the drive attached are the same crash with host mode on.
+  *Check:* for each stop rule that depends on hardware state, list the other
+  ways the runbook can reach that state (timers, dead-man, forced restart) and
+  state the rule once, at the top. Extends L-296 and L-133. *From:* #136,
+  round 29.
+- **L-318. A step that swaps the cable while no Type-C driver owns the port
+  can't expect its link back.** #136's H5 boots with a USB drive on the port
+  and the boost module blacklisted, so the charger and the TCPC defer and
+  nothing owns the MAX77779, which opens its USB data switch when the drive is
+  unplugged. The runbook said "put the laptop back in" as if SSH would return.
+  *Check:* for every step that ends with a cable swap, list which Type-C
+  driver is bound at that moment; if none, the Expect says "no link" and the
+  way back is a restart with the laptop attached. Extends L-81 and AGENTS
+  "USB". *From:* #136, round 29.
+- **L-298. A retry path is exercised on the phone by holding its dependency
+  down, not by breaking hardware.** #99's screen-on retry can be forced by
+  keeping neard stopped across a screen-on. *Check:* first confirm the daemon
+  isn't D-Bus-activatable (`/usr/share/dbus-1/system-services`, `BusName=`),
+  hold it with `systemctl mask --runtime` (gone at reboot), and give the step
+  an unmask rollback. *From:* #99, round 27.
+- **L-297. A gotcha that adds an unproven alternative to a proven safety step
+  says which one to run.** #137's "the hook should power the adapter off" sat
+  next to a 0-of-1 wake record, while stopping the poll loop was 35 of 35.
+  *Check:* every "should" in a safety gotcha points at the variant with the
+  passing record, and the untested one is marked "under test, attended".
+  Extends L-188 and L-284. *From:* #137, round 28.
+- **L-296. A crash-survival measurement uses a reset that skips shutdown, and
+  guards the replug.** #124's `.shutdown` turns the boost off, so the
+  runbook's `systemctl reboot` couldn't answer what a crash leaves behind, and
+  a boost that does survive meets the laptop's VBUS on replug. *Check:* for
+  every "measure after a reboot" step, list the `.shutdown` hooks of the
+  drivers involved and reset with `echo b > /proc/sysrq-trigger`; if the state
+  under test can source VBUS, a meter check with a stop condition comes before
+  any replug. Extends L-88 and L-81. *From:* #136 with kernel #124, round 28.
 - **L-295. `tools/usbc-deadman` is cheetah's MAX77759 tool,** with that
   phone's I2C bus and registers built in. For another phone's USB-C step, the
   dead-man we name is the generic `systemd-run --on-active=… systemctl reboot`
@@ -325,100 +419,3 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   ask for one attended read in each new state (after a wake, after a reset)
   before it goes into a loop. Extends L-199. *From:* #409, round 40,
   2026-11-04.
-- **L-457. A device PR that edits a file a sibling's test keeps identical
-  also edits the reference phone.** #436 widened lynx's devinfo layout
-  check, and lynx's `test/all` compares its `omamobile-bootctl.c` with
-  cheetah's, so the 7 Pro's copy changed too, and raven's third copy drifted
-  silently. *Check:* for every touched file, `git grep -l "<path>"
-  packages/*/test/all` and `git ls-tree -r origin/main | grep <basename>`;
-  prefer a compile-time or descriptor switch that keeps the shared copy and
-  the 7 Pro's binary unchanged. Extends L-8 and L-64. *From:* #436, round
-  41, 2026-11-05.
-- **L-458. An opt-in that relaxes a safety check is checked against every
-  stage it reaches, and the relaxed check keys on what the service did, not
-  on the setting.** #427's default-calibration mode left stage c9 reachable
-  through a stamp, and its watchdog accepted "calibration not applied"
-  whenever the setting was on, also on a phone with a calibration file.
-  *Check:* list the stages and modes each relaxing switch can reach, ask for
-  an explicit refusal where the relaxed state isn't verified, and have the
-  checker read a run-state record. Extends L-161 and L-443. *From:* #427,
-  round 41, 2026-11-05.
-- **L-459. A file capability is reviewed for secure-execution mode and for
-  where it is set.** A capability makes the kernel set `AT_SECURE`, which
-  changes how glibc and `secure_getenv` users (sd-bus) read the environment,
-  and a capability written inside a rootless build container may be
-  namespaced and not count on the phone. *Check:* ask for a session check
-  with the capability on, and `getcap` on a phone installed from a freshly
-  built image. *From:* #429, round 41, 2026-11-05.
-- **L-460. A port to an A/B phone with no stock left is held to the A/B
-  rules, not the single-slot ones.** #432 proposed a Linux rescue root on
-  slot A as its own exception, after #383 added rules for phones without
-  slots. *Check:* `getvar all` lists `_a`/`_b`; if so, §3.1's slot-A rule
-  stands, the way forward is stock restored under an approved plan, RAM-only
-  until then, and on Qualcomm also the GPT slot-flag entry. Extends L-135,
-  L-186, L-224 and L-322. *From:* issue #432, round 41, 2026-11-05.
-- **L-486. A docs or roadmap PR is read for safety disclosures, not only for
-  status words.** #472's roadmap said in one subordinate clause that the
-  contributor's phone marks slot B at every boot with a local unit, a
-  `devinfo` write under the #252 hold. *Check:* grep a docs PR's added lines
-  for `successful`, `devinfo`, `bootctl`, `setrw`, `local unit`, `by hand` and
-  `owner`, and send any hit through L-359. Extends L-267. *From:* #472, round
-  42, 2026-11-07.
-- **L-487. A guide that tells agents how to drive a phone carries AGENTS'
-  shared-phone rules in its prompt.** #463's prompt unlocked, woke and kept
-  the phone awake with no "tell the person first". *Check:* grep any doc with
-  an agent prompt for the AGENTS §1 verbs (announce, ask, DPMS, reboot) and
-  compare. *From:* #463, round 42, 2026-11-07.
-- **L-488. A plan's account of a safety deviation is checked against what the
-  contributor said in the thread.** #450's "short bursts at 817/8" was
-  narrower than the same author's #1 comment (tens of minutes of music, analog
-  12 to 17). *Check:* grep the author's comments on the device issue since
-  that date and diff the extent (levels, durations, parts). Extends L-435.
-  *From:* #450, round 42, 2026-11-07.
-- **L-531. An isolation check we suggest never reads the node it makes.**
-  Drafting W5's character-side check for #493 nearly suggested `head -c1` on a
-  `c 1:1` node, which, if the rule failed, reads physical address 0 through
-  `/dev/mem`. *Check:* every suggested proof of a device refusal stops at
-  `mknod` or `open` of a harmless device; `/dev/mem`, `/dev/port` and
-  register-backed nodes are tested by `mknod` only. Extends AGENTS.md section
-  1 and L-454. *From:* #493, round 44 (a near miss in drafting); 2026-11-08.
-- **L-532. A measuring tool we name for another phone is read for hard-coded
-  register addresses first.** `tools/display-hz` `devmem`-reads cheetah's
-  DECON at `0x1c24xxxx`; suggested for a 9a rate-switch check on kernel #212,
-  it would have read an unknown zumapro block. *Check:* `grep -n
-  'devmem\|0x[0-9a-f]\{8\}' tools/<tool>` before a draft names it for a phone
-  that isn't cheetah; name a log line or a compositor query instead. Extends
-  L-295 and L-276. *From:* kernel #212, round 44 (a near miss in drafting);
-  2026-11-08.
-  Again in round 45, the right way round: kernel #212's author counted the
-  DECON frame-start interrupt in `/proc/interrupts` under a redrawing terminal
-  (120/60/121 per second), read-only and device-neutral; name that (`grep -i
-  decon /proc/interrupts` twice, a second apart) when asking another phone for
-  a rate.
-- **L-533. A lens or OIS controller at the same I2C address as the module's
-  calibration EEPROM is a calibration part.** Stock's tegu DT puts
-  `eeprom-nessie`, `act-nessie` and `ois-nessie` all at 0x24: the LC898129
-  holds the module's calibration. *Check:* grep the device's `*-camera.dtsi`
-  for nodes sharing the actuator's `i2c-addr`; if one is an EEPROM, the driver
-  writes only the registers it names, and the notes list every register
-  written during bring-up. Extends L-90 and L-108. *From:* kernel #213, round
-  44, 2026-11-08.
-- **L-562. A custom recovery or installer in a contributor's record is a slot
-  question first.** Kodiak's notes said a step was "taken from" a third-party
-  recovery and sat merged through two rounds; the answer, "installed to
-  `vendor_boot` on both slots, may have mounted persist", means slot A was
-  written, the fallback recovery is no longer stock's, and the calibration
-  backup and slot B's rollback set may not be stock's either. *Check:*
-  whenever a third-party recovery, root tool or installer appears, ask which
-  partitions on which slots it wrote (`vbmeta` flags included), when relative
-  to each backup, and what it mounted; record a slot A write as a §3.1 event
-  and downgrade any backup taken under it (L-198). Extends L-186, L-198 and
-  L-35. *From:* #511 with #489 and #231, round 45, 2026-11-08.
-- **L-563. A locally administered MAC that a PR makes persistent is an
-  identifier, and `tools/pr-check` exempts it and reads no commit message or
-  PR body.** #510 saves a random address pair per phone, so the contributor's
-  example in the body and commit now names their phone to every host it meets.
-  *Check:* for a PR that stores generated addresses or IDs, grep the body,
-  every commit message and the thread for them (the L-324 pattern without the
-  locally-administered exemption), and ask for placeholders and a rotation.
-  Extends L-324 and L-145. *From:* #510, round 45, 2026-11-08.
