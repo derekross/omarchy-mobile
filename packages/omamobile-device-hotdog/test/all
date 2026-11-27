@@ -215,6 +215,8 @@ echo "ok - camera software ISP"
 # unit never restarts (QSEE keeps an app until a reboot)
 grep -cx 'options qcom_qseecom_compat app_allowlist=gfp9558,keymaster64 .*' vendor/modprobe.d/omamobile-fp-hotdog.conf >/dev/null ||
   { echo "not ok - qseecom allow-list"; exit 1; }
+grep -cx 'options qcom_qseecom_compat app_signed_names=gfp9558:fingerprint' vendor/modprobe.d/omamobile-fp-hotdog.conf >/dev/null ||
+  { echo "not ok - the Goodix TA's signed name (QSEE knows gfp9558 as fingerprint)"; exit 1; }
 grep -cx 'Restart=no' vendor/systemd/system/omamobile-fp-hotdog.service >/dev/null ||
   { echo "not ok - omamobile-fp-hotdog must not restart"; exit 1; }
 echo "ok - fingerprint"

@@ -334,6 +334,25 @@ comes only after F10 passes.
 
 ## 7. Results
 
+**2026-11-27, the qseecom driver as revised for linux-omamobile#283's
+review, RAM-booted** (`7.3.0-rc6-omamobile-prtest2-gd8605e53486d`, the
+stacked pull-request branches with #283's head; `boot_a` unchanged,
+`fastboot boot`, the owner's yes). The review asked the driver to look the
+TA's name up after the load and refuse unless QSEE knows it by the id the
+load returned. As written, that refused every load: `TA gfp9558: the
+image loaded as app id 3, but the lookup of gfp9558 failed (-2):
+refused`, then `shut down app id 3`, the HAL's retry the same with app id
+4, and `GF_ERROR_OPEN_TA_FAILED`. QSEE registers a TA under the name in
+its signed image's metadata, and the Goodix TA's says `n=fingerprint`
+(its `.b03` segment): `gfp9558` is only the name the HAL loads it by. The
+fix (a fixup to #283's driver commit) adds `app_signed_names`,
+`client:signed` pairs that both lookups use; the package sets
+`gfp9558:fingerprint`. With it, after a reboot (the runner starts once
+per boot): `loaded TA gfp9558 (signed as fingerprint), app id 3`, the
+service active, no failed units, and the owner's finger unlocked the lock
+screen. The older driver on `boot_a` (`-crypt1-gf3a11a5f5062`) logs
+`unknown parameter 'app_signed_names' ignored` and loads the TA as before.
+
 **2026-11-05, the stack from the kernel and the package**
 (`7.3.0-rc6-omamobile-push1-g41a6c1235a0b`, `omamobile-device-hotdog`
 0.1.2): `boot_a` flashed with that kernel (fastboot, tries back to 7), no
@@ -446,7 +465,10 @@ TrustZone and modem images are the phone's. The `.ops` (md5 as in its
   `vendor.goodix.hardware.biometrics.fingerprint@2.1.so`). The service
   checks `persist.vendor.oem.fp.version` against the module's version.
   `qseecomd` and `libQSEEComAPI.so` are in `vendor/`.
-- **The TA is `gfp9558`** (U1). `goodix::initCustomizedParams` writes the
+- **The TA is `gfp9558`** (U1), signed as `fingerprint`: QSEE knows it by
+  the name in its metadata segment (`n=fingerprint`), so the compat
+  driver's lookups need `app_signed_names=gfp9558:fingerprint` (Results,
+  2026-11-27). `goodix::initCustomizedParams` writes the
   name byte by byte (no plain string), and `CaEntry::startTap` tries
   `QSEECom_start_app(…, path, "gfp9558", 0x1000)` for each of
   `TA_PATH_LIST`: `/vendor/firmware_mnt/image`, `/system/etc/firmware`,
