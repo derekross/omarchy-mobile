@@ -4609,10 +4609,24 @@ Both base FDTs, the merged B0 tree and the v73 fixture have no
 `simple-framebuffer` node, no child under `/chosen` and no named
 boot framebuffer reservation. The v73 kernel builds simpledrm
 in, but the retained console from the live SSH trial has no
-framebuffer registration. An earlier D1 ABL trace reaches
-display PHY power-off in the final callback. The G logo does
-not establish that Linux inherits a writable scanout buffer.
-Leave the framebuffer address, stride and format unspecified.
+framebuffer registration.
+
+The exact D1 factory FBPK contains ABL's private splash-buffer
+setup. At ABL file offset `0x59fcc`, the framebuffer-info function
+gets the dimensions from the panel callback and derives a stride
+of `ALIGN(width, 8) * 4` with internal format token `7`.
+The retained D1 `bl_data.bin` records 1280×2856 for display 0,
+which gives a 5120-byte stride. The scanout setup at `0x7c5f8`
+uses the private address from this record. The address and
+format token have no verified Linux memory reservation or
+DRM fourcc mapping.
+
+During system handoff, ABL `0x5f13c` calls `0x59fc4`, which
+branches to the display teardown function at `0x7c89c`. The
+retained D1 bootloader log corroborates the D-PHY power-off.
+Keep simple-framebuffer disabled. Enabling it would require
+evidence of an AP-visible reserved buffer, its exported pixel
+layout and scanout continuing past handoff.
 
 D1's supplier display stack has a separate power handoff.
 In the stock 4 KiB-page GKI module set,
@@ -4624,9 +4638,12 @@ register `0x0c` bit 0 and logs
 the handoff vote when both are set. `vs_drm.ko` also checks
 `google,boot-stay-on` on its power domains. The flag is absent
 from both base FDTs and all 55 entries in the retained DTBO.
-The local D1 ABL binary is unavailable, so these files cannot
-establish whether firmware adds the flag at runtime. The
-flag would establish power state, not a framebuffer layout.
+In the saved D1 stock Android bugreport, the existing DSI0
+probe logged `DSI power handoff from bootloader: dt=0 reg=0`
+at 1.160279 s, then the stock CGYDA panel driver bound at
+1.225111 s. The probe did not find a handoff flag or an enabled
+host on that boot. The offline audit introduced no PHY TX or
+host register accesses.
 
 | Stage | D1 evidence |
 | --- | --- |
