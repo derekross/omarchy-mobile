@@ -7110,6 +7110,40 @@ registration, parsing, loss checks and cleanup. Probe
 registration on stock D1 and the hardware capture
 remain pending.
 
+###### Attended stock D1 UIC trace result
+
+On 2026-11-27 the first backup rescue did not enumerate
+over USB. After returning to Fastboot, the same rescue
+booted and verified all nine read-only, unmounted NV
+partitions. The private Mac copy totaled 3,392,151,552
+bytes and passed SHA-256 verification. The rescue
+returned directly to Fastboot. The five UIC trace
+images were staged, full `vendor_boot_b` readback
+matched, and the UIC fixture booted once.
+
+| Kernel uptime | Stock trace result |
+| ---: | --- |
+| 1.031180 s | Seven probes armed before `ufs.ko` loaded. |
+| 1.594844–1.595396 s | Early `PA_PWRMODE=0x44` completed asynchronously with pending `0x10` and returned 0. |
+| 2.534196 s | Local `DME_GET 0x1587` sent. |
+| 2.534206 s | IRQ had `IS=0x400`, `IE=0x71ef5`. Command completion was enabled. |
+| 2.534213–2.534222 s | `ARG2=0`, `ARG3=5` and wait result 0. The read returned HS gear 5, 26 µs after send. |
+| 2.540926–2.542942 s | Final `PA_PWRMODE=0x11` completed with `IS=0x410`, `IE=0x171af5`, asynchronous pending `0x10` and result 0. |
+| 5.729903 s | NV guard passed on the trace boot. |
+| 90.916912 s | Warm return timer requested restart. |
+
+The trace retained 15 of 15 rows with no missed probes,
+malformed rows or loss. Ramoops and the matching
+`SYSTEM_LAST_KMSG` entry agree on all 52 selected
+lines. The `0x1586` fallback did not run. This is a
+successful baseline for the UIC request, IRQ and wait
+sequence. The earlier `0x1587` timeout did not recur,
+so the point where its completion was lost remains open.
+
+Fastboot returned 134 seconds after the trace boot
+request. Stock A completed boot with enforcing verity
+and the original VBMeta digest.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
