@@ -1,0 +1,50 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Build the sm8250-mainline kernel for the OnePlus 8T (kebab) in a native
+# arm64 Ubuntu container: Image.gz, the kebab DTB, modules. Touches no phone.
+# Source and objects live in Docker volumes (bind mounts are too slow for a
+# kernel build); only the artifacts are copied to OUT.
+#   tools/build-kebab-kernel            # build
+#   OUT=/some/dir tools/build-kebab-kernel
+set -euo pipefail
+ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+OUT=${OUT:-$ROOT/out/kebab/kernel}
+BRANCH=${BRANCH:-sm8250/v6.13}
+JOBS=${JOBS:-8}
+mkdir -p "$OUT"
+docker run --rm \
+  -v kebab_mainline_src:/src -v kebab_mainline_out:/obj \
+  -v "$ROOT":/repo:ro -v "$OUT":/out \
+  -e BRANCH="$BRANCH" -e JOBS="$JOBS" \
+  ubuntu:24.04 bash -euxo pipefail -c '
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update -qq
+    apt-get install -y -qq --no-install-recommends build-essential bc bison flex git ca-certificates \
+      libssl-dev libelf-dev libdw-dev lz4 xz-utils kmod cpio rsync python3 perl >/dev/null
+    if [ ! -d /src/linux/.git ]; then
+      git clone --depth 1 --branch "$BRANCH" https://gitlab.com/sm8250-mainline/linux /src/linux
+    fi
+    # our copy of the board DTS (board ids, ramoops, firmware paths) replaces the one in the tree
+    cp /repo/device/kebab/dts/sm8250-oneplus-kebab.dts /src/linux/arch/arm64/boot/dts/qcom/
+    cd /src/linux
+    make ARCH=arm64 O=/obj defconfig
+    scripts/kconfig/merge_config.sh -m -O /obj /obj/.config /repo/kernel/configs/omamobile.config
+    scripts/kconfig/merge_config.sh -m -O /obj /obj/.config /repo/device/kebab/kernel.config
+    make ARCH=arm64 O=/obj olddefconfig
+    # report kebab options that olddefconfig dropped (a wrong symbol name) or
+    # changed: a =y that came out =m (a dependency that is a module) leaves a
+    # boot-path driver out of the initramfs
+    grep -E "^CONFIG_[A-Z0-9_]+=" /repo/device/kebab/kernel.config | while IFS== read -r o want; do
+      got=$(sed -n "s/^$o=//p" /obj/.config)
+      [ -n "$got" ] || { echo "DROPPED: $o"; continue; }
+      [ "$got" = "$want" ] || echo "CHANGED: $o=$want is $o=$got"
+    done | tee /obj/dropped-options.txt
+    make ARCH=arm64 O=/obj -j"$JOBS" Image.gz dtbs modules
+    cp /obj/arch/arm64/boot/Image.gz /obj/arch/arm64/boot/Image /out/
+    cp /obj/arch/arm64/boot/dts/qcom/sm8250-oneplus-kebab.dtb /out/
+    cp /obj/.config /out/config
+    cp /obj/dropped-options.txt /out/
+    make ARCH=arm64 O=/obj INSTALL_MOD_PATH=/out/modroot modules_install >/dev/null
+    make -s ARCH=arm64 O=/obj kernelrelease > /out/kernelrelease
+    ls -lh /out
+  '
