@@ -29,7 +29,9 @@
 #  - pkgrel 3.4: no source change, a rebuild against Arch Linux ARM's
 #    hyprgraphics 0.7.0 (libhyprgraphics.so=6), which replaced 0.6.x (so=5)
 #    on 2026-11-25; 3.3 still needed so=5, so nothing that installs it could
-#    be resolved any more (3.3 is published).
+#    be resolved any more (3.3 is published; #1098). Arch Linux ARM is at
+#    0.57.2-2 now, so this sorts below its build and wins only by repository
+#    order.
 #  - arch=(aarch64) only.
 #  - build() runs the two cmake steps of `make release` itself, with
 #    CMAKE_SKIP_RPATH (Arch's Makefile sed) and the job count from MAKEFLAGS

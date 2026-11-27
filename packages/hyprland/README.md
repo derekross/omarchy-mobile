@@ -39,7 +39,10 @@ reported the screen off, but the CRTC never turned off. See
   383 ms and the alpha-out curve, since 3.2 is published; `.4` a rebuild,
   with no source change, against hyprgraphics 0.7.0 (`libhyprgraphics.so=6`),
   which replaced 0.6.x in Arch Linux ARM on 2026-11-25: 3.3 needed so=5, and
-  nothing that installs it resolved any more.
+  nothing that installs it resolved any more (#1098). Arch Linux ARM has
+  since moved on to 0.57.2-2, so 3.4 no longer sorts above its build; ours
+  is the one installed because `[omamobile]` comes first in `pacman.conf`
+  (Pinning, below), not because of the version.
 - `arch=(aarch64)` only.
 - `build()` runs the two cmake steps of `make release` itself:
   - with Arch's `-DCMAKE_SKIP_RPATH=ON` (Arch's PKGBUILD seds it into the
@@ -57,6 +60,14 @@ of hyprwm/Hyprland#16343. 0.57.0 includes that change
 Omarchy dropped the patch, so it is gone here too.
 
 ## Status
+
+**0.57.0-3.4, built in the Arch Linux ARM container on the laptop
+(2026-11-27) against hyprgraphics 0.7.0, not yet run on a phone.** A
+rebuild only: 3.3 needed `libhyprgraphics.so=5`, which Arch Linux ARM
+dropped on 2026-11-25, and from then on the daily publish and phones'
+updates failed to resolve (#1098). 3.3 can't come back on its own: a
+rollback installs the cached hyprgraphics 0.6.x and hyprland 3.3 together
+(`pacman -U` of both from `/var/cache/pacman/pkg`).
 
 **0.57.0-3.1, built natively on the phone (2026-11-02), not installed yet.**
 Arch Linux ARM moved `extra` to aquamarine 0.16.0 (`libaquamarine.so=15`)
