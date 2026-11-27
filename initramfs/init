@@ -47,16 +47,18 @@ fi
 ufs_ro_log() { echo "omamobile: ufs-ro: $*" > /dev/kmsg; }
 # Storage guard. Everything on the UFS is read-only except an allowlist of
 # partitions we own: the running slot's boot images (in-place kernel
-# updates) and userdata (the Arch root). The kernel only lets a partition be written if
-# its whole disk is writable too, so the main disk (sda) stays writable but
-# its whole-disk node is removed, so nothing can write across partitions by
-# accident; a LUN the descriptor's UFS_RW_LUNS names is guarded the same way.
+# updates) and userdata (the Arch root). The kernel only lets a partition be
+# written if its whole disk is writable too. With an effective allowlist,
+# the main disk (sda) stays writable and its whole-disk node is removed.
+# With a closed allowlist, set it read-only before removing the node.
+# A LUN named in UFS_RW_LUNS is guarded the same way. NFS root keeps
+# whole-disk nodes present and read-only.
 # The other LUNs (on Pixels sdb, sdc, sdd: bootloader images) are read-only
 # at the disk level. Calibration partitions (efs, persist, modem_userdata...)
 # and all of the other slot stay read-only.
 # The allowlist is the descriptor's UFS_RW, which bin/omamobile initramfs
 # checks and packs into /etc/omamobile-ufs-rw. It fails closed: a missing,
-# empty or malformed file leaves every partition read-only, so Arch does not
+# empty or malformed file leaves every disk and partition read-only, so Arch does not
 # start and the initramfs shell stays up over SSH. Whatever the file says,
 # only slot B's boot images and userdata can be named.
 # The packed names are in slot form: X_b means "X of the slot this boot runs
@@ -69,8 +71,8 @@ ufs_ro_log() { echo "omamobile: ufs-ro: $*" > /dev/kmsg; }
 # say this init maps the list so; any other content in it closes the guard.
 UFS_RW=""
 UFS_RW_LUNS=""
-# Is $1 a disk that holds allowlisted partitions? sda always.
-ufs_rw_disk() { case " sda $UFS_RW_LUNS " in *" $1 "*) true ;; *) false ;; esac; }
+# Is $1 a parent whose whole-disk node is hidden outside NFS root?
+ufs_guarded_parent() { case " sda $UFS_RW_LUNS " in *" $1 "*) true ;; *) false ;; esac; }
 # The running slot's suffix: _a or _b, or nothing. Run it in a subshell
 # ($(...)): it turns off globbing for the command line's words.
 ufs_slot_add() { # one value: the first is kept, another one makes it unknown
@@ -140,14 +142,16 @@ ufs_rw_load() {
       *) mapped="$mapped $p" ;;
     esac
   done
-  if [ -n "$slot" ]; then
-    ufs_ro_log "running from slot ${slot#_}: its boot images are the allowlisted ones, the other slot stays read-only"
-  else
-    ufs_ro_log "no slot suffix in /proc/bootconfig or /proc/cmdline: every boot partition read-only, userdata writable"
-  fi
   # shellcheck disable=SC2086 # split into names on purpose
   set -- $mapped
   UFS_RW="$*"
+  if [ -n "$slot" ]; then
+    ufs_ro_log "running from slot ${slot#_}: its boot images are the allowlisted ones, the other slot stays read-only"
+  elif [ -n "$UFS_RW" ]; then
+    ufs_ro_log "no slot suffix in /proc/bootconfig or /proc/cmdline: every boot partition read-only, userdata writable"
+  else
+    ufs_ro_log "no slot suffix and no writable partitions: every disk and partition read-only"
+  fi
   ufs_ro_log "allowlist: $UFS_RW"
   # LUNs besides sda that hold allowlisted partitions (the descriptor's
   # UFS_RW_LUNS: enchilada's boot_b is on sde). Each is guarded as sda is.
@@ -171,61 +175,66 @@ ufs_rw_load
 mkdir -p /run/ufs-ro
 ufs_partname() { sed -n 's/^PARTNAME=//p' "$1/uevent" 2>/dev/null; }
 ufs_ro_pass() {
-  local s ro name part disk
+  local s ro name part hide_disk
   for s in /sys/block/sd* /sys/block/sd*/sd*; do
     [ -r "$s/ro" ] || continue
     name=${s##*/}
     [ -e "/run/ufs-ro/$name" ] && continue
     [ -b "/dev/$name" ] || continue  # devtmpfs node not there yet: next pass
-    if ufs_rw_disk "$name"; then
-      if [ -s /etc/omamobile-nfsroot ]; then
-        blockdev --setro "/dev/$name"
-        read -r ro < "$s/ro"
-        if [ "$ro" = 1 ]; then
-          : > "/run/ufs-ro/$name"
-          ufs_ro_log "/dev/$name set read-only for NFS root"
-          continue
-        fi
-        ufs_ro_log "FAILED to set /dev/$name read-only for NFS root"
-        echo "omamobile: WARNING: /dev/$name is NOT read-only" > /dev/tty0 2>/dev/null
-        continue
+    hide_disk=
+    if [ ! -s /etc/omamobile-nfsroot ] && ufs_guarded_parent "$name"; then
+      hide_disk=1
+    fi
+    if [ -n "$hide_disk" ] && [ -n "$UFS_RW" ]; then
+      if rm -f "/dev/$name"; then
+        : > "/run/ufs-ro/$name"
+        ufs_ro_log "/dev/$name: whole-disk node removed (partitions guarded individually)"
       fi
-      rm -f "/dev/$name"
-      : > "/run/ufs-ro/$name"
-      ufs_ro_log "/dev/$name: whole-disk node removed (partitions guarded individually)"
       continue
     fi
     part=$(ufs_partname "$s")
-    if [ -n "$part" ] && ufs_rw_disk "${name%%[0-9]*}" && \
+    if [ -n "$part" ] && ufs_guarded_parent "${name%%[0-9]*}" && \
        case " $UFS_RW " in *" $part "*) true ;; *) false ;; esac; then
       : > "/run/ufs-ro/$name"
       ufs_ro_log "/dev/$name ($part) left writable (allowlist)"
       continue
     fi
-    blockdev --setro "/dev/$name"
-    read -r ro < "$s/ro"
-    if [ "$ro" = 1 ]; then
+    if blockdev --setro "/dev/$name" && read -r ro < "$s/ro" && [ "$ro" = 1 ]; then
+      if [ -n "$hide_disk" ]; then
+        rm -f "/dev/$name" || continue
+        ufs_ro_log "/dev/$name: whole-disk node removed after setting it read-only"
+      fi
       : > "/run/ufs-ro/$name"
       ufs_ro_log "/dev/$name${part:+ ($part)} set read-only"
-    elif [ ! -e "/run/ufs-ro/$name.failed" ]; then
-      : > "/run/ufs-ro/$name.failed"  # keep retrying, but log once
+      continue
+    fi
+    # Even a failed ioctl must not leave a protected whole-disk node open.
+    # Its sysfs ro value still prevents the hand-over from passing.
+    if [ -n "$hide_disk" ] && rm -f "/dev/$name"; then
+      ufs_ro_log "/dev/$name: whole-disk node removed after read-only check failed"
+    fi
+    if [ ! -e "/run/ufs-ro/$name.failed" ]; then
+      : > "/run/ufs-ro/$name.failed"  # log once; retry if the node is available
       ufs_ro_log "FAILED to set /dev/$name read-only"
       echo "omamobile: WARNING: /dev/$name is NOT read-only" > /dev/tty0 2>/dev/null
     fi
   done
 }
-# Prints every disk or partition that is writable but not on the allowlist
-# (sda itself excepted: its node is removed). Empty means the guard holds.
+# Prints writable disks and partitions outside the allowlist. A writable
+# parent is exempt only when its whole-disk node was removed. Empty means
+# the writable nodes are within the allowlist.
 ufs_unguarded() {
   local s name part ro
   for s in /sys/block/sd* /sys/block/sd*/sd*; do
     [ -r "$s/ro" ] || continue
     name=${s##*/}
-    ufs_rw_disk "$name" && [ ! -s /etc/omamobile-nfsroot ] && continue
+    if [ -n "$UFS_RW" ] && ufs_guarded_parent "$name" && [ ! -e "/dev/$name" ]; then
+      continue
+    fi
     read -r ro < "$s/ro"
     [ "$ro" = 0 ] || continue
     part=$(ufs_partname "$s")
-    if [ -n "$part" ] && ufs_rw_disk "${name%%[0-9]*}"; then
+    if [ -n "$part" ] && ufs_guarded_parent "${name%%[0-9]*}"; then
       case " $UFS_RW " in *" $part "*) continue ;; esac
     fi
     echo "$name${part:+ ($part)}"
