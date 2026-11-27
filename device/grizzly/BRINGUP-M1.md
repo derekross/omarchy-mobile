@@ -6993,6 +6993,67 @@ Fastboot returned 133 seconds after the trace boot
 request. Stock D1 completed boot on A with enforcing
 verity and the original VBMeta digest.
 
+###### Offline comparison of the stock UFS timeout
+
+Both display trials followed a verified NV rescue with a
+warm return to Fastboot and no intervening Android boot.
+The four non-`init_boot` images, effective kernel command
+line and all 37 module entries through `ufs.ko` match.
+The extracted factory `ufs.ko` matches the pinned D1
+SHA-256. The ramdisk overlays differ only in PID 1, the
+display trace helper and the mode marker. Before the UFS
+scan the new mode adds a marker check. Its debugfs mount,
+probe registration and field reads run after the NV
+guard.
+
+| Stock UFS step | Successful genpd boot | PHY reset boot |
+| --- | --- | --- |
+| `ufs.ko` load | 1.356423 s | 1.415109 s |
+| M-PHY calibration complete | 1.583949 s, 4,932 µs | 1.658052 s, 4,934 µs |
+| Asymmetric power-mode workaround applied | 2.017316 s | 1.668058 s |
+| ESI and MCQ setup, then SCSI host registration | Host registered at 2.460063 s | Host registered at 2.539264 s, after a UIC timeout |
+| Final power mode and device discovery | HS gear 5, series 1 and rate 2 at 2.461129 s. First direct-access LUN at 2.481410 s. | HS negotiation returned `-524`. The subsequent power-mode command and asynchronous scan failed with `-110`. No LUNs were discovered. |
+
+Both report REXT trim 34, PHY patch mode 0 and the same
+missing optional `hsios_aux_clk`. In exact `ufs.ko`,
+`ufs_google_link_startup_notify` sets two active RX and
+TX lanes at `0xa588` and `0xa5a4`, then sends the
+automatic power-mode request at `0xa5c4`. Each error
+branches away from the success log at `0xa5f4`. The
+different timing of that log precedes the first explicit
+error. Other successful stock display captures also show
+variation in the delay between the workaround and ESI.
+
+The first failed command was local `DME_GET` for
+`PA_MAXRXHSGEAR` (`0x1587`). The exact stock Image
+branches from that DME request at `0xebf2dc` to its error
+path at `0xebfb94`, clears the RX gear and tries
+`PA_MAXRXPWMGEAR` (`0x1586`) at `0xebf2ec`.
+The PWM fallback sets RX to slow mode at
+`0xebf320`–`0xebf324`. The Google variant calls
+`ufshcd_negotiate_pwr_params` at module `0xa850`
+and reports `-524` when HS negotiation fails. The
+later `DME_SET PA_PWRMODE` had mode `0x21`, slow
+RX and fast TX. Its separate timeout caused the scan
+failure. The HC PSM wait for `0x11` failed afterward
+during cleanup.
+
+At the power-mode timeout the host dump showed
+`IS=0x400` and `IE=0x00171af5`. Generic UIC command
+completion was latched. The exact stock power-control
+path masks `0x400` before waiting for the asynchronous
+event (Image `0xdca5c`–`0xdca70`) and restores it
+after the timeout (`0xdcb00`–`0xdcb08`). Power-mode completion
+(`0x10`) was enabled and absent from that status word.
+The following interrupt logged `0x400` as unhandled
+and the next dump showed `IS=0` and `IE=0x00171ef5`.
+The successful genpd boot logged a similar unhandled
+`0x400` only during timed shutdown, after partition and
+display checks passed. The snapshots identify which
+completion was missing during the failed transition.
+They leave the cause of the earlier capability read
+timeout and the hardware state at handoff unresolved.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
