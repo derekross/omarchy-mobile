@@ -435,6 +435,11 @@ stock_inventory_modules() (
             if [ "$module" = mipi-cdphy.ko ] && [ "${dsi0_pll_arming:-no}" = yes ]; then
                 "$bb" sh "$helper" "$tracefs" "$bb" --pll-probes || return 1
             fi
+            if [ "$module" = mipi-cdphy.ko ] && [ "${dsi0_phy_reset_requested:-no}" = yes ] &&
+               [ "$manifest" = "$dsi0_manifest" ]; then
+                "$bb" sh "$helper" "$tracefs" "$bb" --phy-reset-probe || return 1
+                sample_dsi0_phy_resets after-phy || return 1
+            fi
         fi
     done < "$manifest"
 
@@ -471,6 +476,22 @@ log_dsi0_genpd() (
     done
 )
 
+sample_dsi0_phy_resets() {
+    for field in phy_rst_n shutdown_n; do
+        path=$phy_debugfs/f7c0000.dw_mipi_cdphy/phy_ctrl0_rw_$field
+        printf 'DSI0 PHY reset begin %s %s\n' "$1" "$field" > "$instance/trace_marker" || return 1
+        sampled=unavailable
+        # The stock getter holds an in-use runtime PM reference across the read.
+        if [ -r "$path" ] && IFS= read -r value < "$path"; then
+            case $value in
+                0|1|00000000|00000001|0x0|0x1|0x00000000|0x00000001) sampled=$value ;;
+            esac
+        fi
+        printf 'DSI0 PHY reset end %s %s %s\n' "$1" "$field" "$sampled" > "$instance/trace_marker" ||
+            return 1
+    done
+}
+
 run_stock_dsi0_trace() (
     tracefs=/grizzly-inventory/dsi0-tracefs
     instance=$tracefs/instances/grizzly_dsi0
@@ -480,10 +501,15 @@ run_stock_dsi0_trace() (
         return 1
     fi
     armed=no
+    phy_debugfs=/grizzly-inventory/dsi0-phy-debugfs
+    phy_debugfs_mounted=no
     helper=/grizzly-inventory/stock-dsi0-trace.sh
     trap 'if [ "$armed" = yes ]; then
               "$bb" sh "$helper" "$tracefs" "$bb" --cleanup ||
                   stock_inventory_log "DSI0 trace cleanup failed"
+          fi
+          if [ "$phy_debugfs_mounted" = yes ]; then
+              "$bb" umount "$phy_debugfs" && "$bb" rmdir "$phy_debugfs"
           fi
           "$bb" umount "$tracefs" && "$bb" rmdir "$tracefs"' 0
 
@@ -494,6 +520,14 @@ run_stock_dsi0_trace() (
     elif [ "$dsi0_genpd_requested" = yes ]; then
         mode=--genpd
         dsi0_genpd_arming=yes
+    elif [ "$dsi0_phy_reset_requested" = yes ]; then
+        mode=--phy-reset
+        "$bb" mkdir -m 0700 "$phy_debugfs" || return 1
+        if ! "$bb" mount -t debugfs -o ro,nosuid,nodev,noexec,mode=0700 debugfs "$phy_debugfs"; then
+            "$bb" rmdir "$phy_debugfs"
+            return 1
+        fi
+        phy_debugfs_mounted=yes
     fi
     "$bb" sh "$helper" "$tracefs" "$bb" "$mode" || return 1
     armed=yes
@@ -501,7 +535,10 @@ run_stock_dsi0_trace() (
     log_dsi0_genpd || stock_inventory_log 'DSI0 genpd pre-load snapshot unavailable'
     stock_inventory_modules load "$dsi0_manifest" || return 1
 
-    if [ "$dsi0_pll_requested" = yes ]; then
+    if [ "$dsi0_phy_reset_requested" = yes ]; then
+        sample_dsi0_phy_resets after-display || return 1
+        "$bb" echo 0 > "$instance/tracing_on" || return 1
+    elif [ "$dsi0_pll_requested" = yes ]; then
         # Capture existing work queued by probe without initiating a modeset.
         "$bb" sleep 3 || return 1
         "$bb" echo 0 > "$instance/tracing_on" || return 1
@@ -513,32 +550,35 @@ run_stock_dsi0_trace() (
         done
         [ "$active" = 0 ] || return 1
     fi
-    "$bb" awk -v pll="$dsi0_pll_requested" -v genpd="$dsi0_genpd_requested" '
+    "$bb" awk -v pll="$dsi0_pll_requested" -v genpd="$dsi0_genpd_requested" -v phy="$dsi0_phy_reset_requested" '
         $1 ~ /^dsi0_(clk|rst)_(call|result)$/ { found++; missed += $3 }
         $1 ~ /^dsi0_pll_/ { pll_probes++; missed += $3 }
         $1 ~ /^dsi0_genpd_(sync|queue_result|off_begin|off_end)$/ { genpd_probes++; missed += $3 }
+        $1 == "dsi0_phy_reset_result" { phy_probes++; missed += $3 }
         END {
             if (found != 4 || missed != 0 || (pll == "yes" && pll_probes != 7) ||
-                (genpd == "yes" && genpd_probes != 4)) exit 1
+                (genpd == "yes" && genpd_probes != 4) || (phy == "yes" && phy_probes != 1)) exit 1
         }
     ' "$tracefs/kprobe_profile" || {
         stock_inventory_log 'DSI0 CPM probe profile incomplete or missed events'
         return 1
     }
     # Preserve the tracefs header and scoped rows for offline correlation.
-    capture=$("$bb" awk -v pll="$dsi0_pll_requested" -v genpd="$dsi0_genpd_requested" '
+    capture=$("$bb" awk -v pll="$dsi0_pll_requested" -v genpd="$dsi0_genpd_requested" -v phy="$dsi0_phy_reset_requested" '
         NR > 128 || length($0) > 512 { invalid=1; exit }
-        /entries-in-buffer\/entries-written:|: (regmap_reg_read|power_domain_target|rpm_resume|rpm_return_int|rpm_status|clk_enable|clk_disable|clk_set_rate|send_mail_mbfs|recv_result_mbfs|dsi0_(clk|rst)_(call|result)|dsi0_(pll|genpd)_[a-z_]+|tracing_mark_write): / {
+        /entries-in-buffer\/entries-written:|: (regmap_reg_read|power_domain_target|rpm_resume|rpm_return_int|rpm_status|clk_enable|clk_disable|clk_set_rate|send_mail_mbfs|recv_result_mbfs|dsi0_(clk|rst)_(call|result)|dsi0_(pll|genpd|phy_reset)_[a-z_]+|tracing_mark_write): / {
             print
         }
         /: regmap_reg_read: f7d8000\.dsi2host[^ ]* reg=0*c val=/ { reads++ }
         /: tracing_mark_write: DSI0 CPM provider probes armed$/ { armed++ }
         /: tracing_mark_write: DSI0 PLL lock probes armed$/ { pll_armed++ }
         /: tracing_mark_write: DSI0 genpd probes armed$/ { genpd_armed++ }
+        /: tracing_mark_write: DSI0 PHY reset probe armed$/ { phy_armed++ }
         END {
             if (invalid || reads < 1 || armed != 1) exit 1
             if (pll == "yes" ? pll_armed != 1 : reads != 1) exit 1
             if (genpd == "yes" && genpd_armed != 1) exit 1
+            if (phy == "yes" && phy_armed != 1) exit 1
         }
     ' "$instance/trace") || return 1
     while IFS= read -r line; do
@@ -724,6 +764,7 @@ stock_inventory_modules check || end_inventory "module manifest rejected"
 dsi0_manifest=/grizzly-inventory/dsi0.modules
 dsi0_pll_requested=no
 dsi0_genpd_requested=no
+dsi0_phy_reset_requested=no
 dsi0_genpd_marker=/grizzly-inventory/dsi0-genpd-trace
 if [ -e "$dsi0_genpd_marker" ] || [ -L "$dsi0_genpd_marker" ]; then
     if [ ! -f "$dsi0_genpd_marker" ] || [ -L "$dsi0_genpd_marker" ] || [ ! -f "$dsi0_manifest" ]; then
@@ -738,6 +779,14 @@ if [ -e "$dsi0_pll_marker" ] || [ -L "$dsi0_pll_marker" ]; then
         end_inventory "DSI0 PLL trace fixture is incomplete"
     fi
     dsi0_pll_requested=yes
+fi
+dsi0_phy_reset_marker=/grizzly-inventory/dsi0-phy-reset-trace
+if [ -e "$dsi0_phy_reset_marker" ] || [ -L "$dsi0_phy_reset_marker" ]; then
+    if [ "$dsi0_genpd_requested" = yes ] || [ "$dsi0_pll_requested" = yes ] ||
+       [ ! -f "$dsi0_phy_reset_marker" ] || [ -L "$dsi0_phy_reset_marker" ] || [ ! -f "$dsi0_manifest" ]; then
+        end_inventory "DSI0 PHY reset trace fixture is incomplete"
+    fi
+    dsi0_phy_reset_requested=yes
 fi
 if [ -e "$dsi0_manifest" ] || [ -L "$dsi0_manifest" ]; then
     if [ "$fixture" != inventory ] || [ "$nv_guard_requested" != yes ] ||

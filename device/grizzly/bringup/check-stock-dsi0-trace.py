@@ -44,6 +44,14 @@ GENPD_EVENTS = ("dsi0_genpd_sync", "dsi0_genpd_off_begin", "dsi0_genpd_off_end")
 GENPD_QUEUE_RESULT = "dsi0_genpd_queue_result"
 GENPD_SAMPLE = re.compile(r' domain="dpu_dsi0_pd" work=(0x[0-9a-fA-F]+)$')
 GENPD_QUEUED = re.compile(r" queued=([01])$")
+PHY_RESET_ARM = "DSI0 PHY reset probe armed"
+PHY_RESET_RESULT = "dsi0_phy_reset_result"
+PHY_RESET_PREFIX = "DSI0 PHY reset "
+PHY_RESET_BEGIN = re.compile(r"DSI0 PHY reset begin (after-phy|after-display) (phy_rst_n|shutdown_n)")
+PHY_RESET_END = re.compile(
+    r"DSI0 PHY reset end (after-phy|after-display) (phy_rst_n|shutdown_n) "
+    r"(unavailable|(?:0x)?0*[01])"
+)
 
 
 def display_resource(kind, lpcm, resource):
@@ -136,7 +144,73 @@ def summarize_genpd(timeline, status, required):
     print("dsi0_early_off_correlated=yes")
 
 
-def summarize(trace, require_genpd=False):
+def summarize_phy_reset(timeline, host_status, required):
+    rows = [row for row in timeline if row[3] == PHY_RESET_RESULT or
+            (row[3] == "tracing_mark_write" and row[4].startswith(PHY_RESET_PREFIX))]
+    if not (required or rows):
+        return
+    if not rows or rows[0][3:] != ("tracing_mark_write", PHY_RESET_ARM) or rows[0][:2] >= host_status:
+        raise ValueError("expected the PHY reset probe to arm before host status")
+
+    position = 1
+    confirmed = 0
+    for phase, before_host in (("after-phy", True), ("after-display", False)):
+        for field in ("phy_rst_n", "shutdown_n"):
+            if position >= len(rows):
+                raise ValueError("missing PHY reset attempt")
+            begin = rows[position]
+            marker = PHY_RESET_BEGIN.fullmatch(begin[4]) if begin[3] == "tracing_mark_write" else None
+            if not marker or marker.groups() != (phase, field):
+                raise ValueError("unexpected PHY reset begin marker")
+            position += 1
+            result = None
+            sample = begin
+            if position < len(rows) and rows[position][3] == PHY_RESET_RESULT:
+                sample = rows[position]
+                result = CPM_RESULT.search(sample[4])
+                if not result or sample[2] != begin[2]:
+                    raise ValueError("invalid PHY reset regmap result")
+                result = int(result[1])
+                position += 1
+            if position >= len(rows):
+                raise ValueError("missing PHY reset end marker")
+            end = rows[position]
+            marker = PHY_RESET_END.fullmatch(end[4]) if end[3] == "tracing_mark_write" else None
+            if (not marker or marker.groups()[:2] != (phase, field) or begin[2] != end[2]
+                    or any((row[:2] < host_status) != before_host for row in (begin, end))):
+                raise ValueError("invalid PHY reset end marker or host ordering")
+            position += 1
+
+            value = marker[3]
+            if result == 0 and value != "unavailable":
+                state = f"value={int(value, 16)}"
+                confirmed += 1
+            elif result is None and value == "unavailable":
+                state = "unobserved=no_regmap_read"
+            elif result is None:
+                raise ValueError("PHY reset value lacks a regmap result")
+            elif result != 0:
+                state = f"unobserved=regmap_error regmap_result={result}"
+            else:
+                state = "unobserved=debugfs_unavailable regmap_result=0"
+
+            last_on = None
+            for timestamp, index, _, event, body in timeline:
+                if (timestamp, index) >= sample[:2]:
+                    break
+                if event == "recv_result_mbfs" and (vote := MBFS.fullmatch(body)):
+                    if int(vote[1], 16) == 0x203 and vote[3] == "0":
+                        last_on = timestamp if vote[2] == "1" else None
+            on_delta = "unknown" if last_on is None else f"{(sample[0] - last_on) * 1000:.3f}"
+            host_delta = f"{(sample[0] - host_status[0]) * 1000:.3f}"
+            print(f"{sample[0]} DSI0 PHY reset {phase} {field} {state} "
+                  f"since_dsi0_on_ms={on_delta} from_pwr_up_ms={host_delta}")
+    if position != len(rows):
+        raise ValueError("unexpected extra PHY reset trace events")
+    print(f"dsi0_phy_reset_confirmed={confirmed}/4")
+
+
+def summarize(trace, require_genpd=False, require_phy_reset=False):
     counts = re.search(r"entries-in-buffer/entries-written:\s*(\d+)/(\d+)", trace)
     if not counts or counts[1] != counts[2] or "LOST EVENTS" in trace:
         raise ValueError("trace buffer loss or missing tracefs header")
@@ -268,6 +342,7 @@ def summarize(trace, require_genpd=False):
     if pll_markers:
         summarize_pll(timeline, pll_markers[0], host_id_time)
     summarize_genpd(timeline, (read_time, read_index), require_genpd)
+    summarize_phy_reset(timeline, (read_time, read_index), require_phy_reset)
     print("APB clock and external reset state require separate evidence.")
     return correlated
 
@@ -276,9 +351,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("trace", type=Path, help="saved tracefs instance trace")
     parser.add_argument("--require-genpd", action="store_true", help="require the early DSI0 OFF correlation")
+    parser.add_argument("--require-phy-reset", action="store_true", help="require the four PHY reset attempts")
     args = parser.parse_args()
     try:
-        return 0 if summarize(args.trace.read_text(), args.require_genpd) else 1
+        return 0 if summarize(args.trace.read_text(), args.require_genpd, args.require_phy_reset) else 1
     except (OSError, ValueError) as error:
         parser.exit(1, f"{parser.prog}: {error}\n")
 

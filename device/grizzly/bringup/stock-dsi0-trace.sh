@@ -5,7 +5,7 @@ set -eu
 
 if [ "$#" -lt 2 ] || [ "$#" -gt 3 ] || [ ! -f "$1/available_events" ] ||
    [ ! -d "$1/instances" ] || [ ! -x "$2" ]; then
-    echo 'usage: stock-dsi0-trace.sh TRACEFS BUSYBOX [--mbfs|--apb-reset|--genpd|--pll-lock|--pll-probes|--cleanup]' >&2
+    echo 'usage: stock-dsi0-trace.sh TRACEFS BUSYBOX [--mbfs|--apb-reset|--genpd|--pll-lock|--pll-probes|--phy-reset|--phy-reset-probe|--cleanup]' >&2
     exit 2
 fi
 bb=$2
@@ -16,6 +16,7 @@ group=grizzly_dsi0_cpm
 events='dsi0_clk_call dsi0_clk_result dsi0_rst_call dsi0_rst_result'
 pll_events='dsi0_pll_first dsi0_pll_last dsi0_pll_relock_first dsi0_pll_relock_last dsi0_pll_cfg_first dsi0_pll_cfg_last dsi0_pll_cfg_timeout'
 genpd_events='dsi0_genpd_sync dsi0_genpd_queue_result dsi0_genpd_off_begin dsi0_genpd_off_end'
+phy_reset_event=dsi0_phy_reset_result
 
 remove_probes() {
     result=0
@@ -41,7 +42,7 @@ add_probe() {
 
 case $mode in
     --cleanup)
-        for name in $pll_events $genpd_events; do
+        for name in $pll_events $genpd_events "$phy_reset_event"; do
             if [ -d "$1/events/$group/$name" ]; then
                 events="$events $name"
             fi
@@ -70,12 +71,24 @@ case $mode in
         add_probe p dsi0_pll_cfg_timeout "mipi_cdphy:dw_dphy_configure_g301+0x20fc $samples" "$bank"
         "$bb" echo 'DSI0 PLL lock probes armed' > "$instance/trace_marker"
         exit 0 ;;
-    ''|--mbfs|--apb-reset|--genpd|--pll-lock) ;;
+    --phy-reset-probe)
+        [ -d "$instance" ] || exit 1
+        "$bb" awk '
+            $3 == "dw_mipi_debugfs_u32_get" && $4 == "[mipi_cdphy]" { found++ }
+            END { if (found != 1) exit 1 }
+        ' /proc/kallsyms || exit 1
+        created=
+        # Observe the real regmap return, which the stock getter discards.
+        # This instruction executes only after the in-use PM check passed.
+        add_probe p "$phy_reset_event" 'mipi_cdphy:dw_mipi_debugfs_u32_get+0x5c result=%x0:s32'
+        "$bb" echo 'DSI0 PHY reset probe armed' > "$instance/trace_marker"
+        exit 0 ;;
+    ''|--mbfs|--apb-reset|--genpd|--pll-lock|--phy-reset) ;;
     *) exit 2 ;;
 esac
 
 provider_probes=no
-case $mode in --apb-reset|--genpd|--pll-lock) provider_probes=yes ;; esac
+case $mode in --apb-reset|--genpd|--pll-lock|--phy-reset) provider_probes=yes ;; esac
 
 if [ ! -r /proc/modules ]; then
     echo 'stock-dsi0-trace: mount proc before arming the trace' >&2
@@ -87,7 +100,7 @@ while IFS=' ' read -r module rest; do
             echo 'stock-dsi0-trace: display module already loaded' >&2
             exit 1;;
         mipi_cdphy)
-            if [ "$mode" = --genpd ]; then
+            if [ "$mode" = --genpd ] || [ "$mode" = --phy-reset ]; then
                 echo 'stock-dsi0-trace: PHY probe already ran or can be in progress' >&2
                 exit 1
             fi;;
@@ -173,10 +186,11 @@ if [ "$mode" = --genpd ]; then
     add_probe p dsi0_genpd_off_end "genpd_power_off_work_fn+0x50 $worker_fields" "$dsi0_domain"
 fi
 
-# The PLL path may run after host probe. PID 1 stops that capture.
-if [ "$mode" != --pll-lock ]; then
-    "$bb" echo "traceoff:1 if $status" > "$instance/events/regmap/regmap_reg_read/trigger"
-fi
+# PID 1 stops captures that need observations after the host probe.
+case $mode in
+    --pll-lock|--phy-reset) ;;
+    *) "$bb" echo "traceoff:1 if $status" > "$instance/events/regmap/regmap_reg_read/trigger" ;;
+esac
 "$bb" echo 1 > "$instance/tracing_on"
 if [ "$provider_probes" = yes ]; then
     "$bb" echo 'DSI0 CPM provider probes armed' > "$instance/trace_marker"

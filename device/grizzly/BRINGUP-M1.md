@@ -6916,6 +6916,53 @@ assertion. These fields report PHY-local control latches.
 External CMU resets and DSI0 host reset coverage remain
 unverified. No direct AP or host read was enabled.
 
+##### Passive stock D1 PHY reset trace
+
+`pack-stock-inventory.py --dsi0-phy-reset-trace` uses the
+same pinned D1 NV rescue images and B0 DTBO entry 19 merge
+as the genpd fixture. Packaging verifies the stock
+`mipi-cdphy.ko` hash. PID 1 keeps the NV guard ahead of
+display module load and leaves the independent 90-second
+warm return armed.
+
+The fixture attempts both PHY-local debugfs reads just
+after `mipi-cdphy.ko` loads and again just after the stock
+display module load finishes. It mounts debugfs read-only.
+The stock getter calls `pm_runtime_get_if_in_use()` and
+skips the hardware read unless it can hold a reference to
+a PHY already in use. The fixture adds no explicit resume,
+power vote, modeset, reset write or direct MMIO access.
+
+The trace brackets each file read and records the signed
+regmap return at `dw_mipi_debugfs_u32_get+0x5c` in the
+exact D1 module. This instruction runs after
+`regmap_field_read()` at module offset `0xb794`.
+The regmap result must be zero on the same task before
+the checker accepts the debugfs value. For a confirmed
+sample, 0 means asserted and 1 means released. The two
+files are sampled separately. The fixture cannot see a
+transition between samples, and a PHY active only inside
+probe may yield no confirmed reads.
+
+Run `check-stock-dsi0-trace.py --require-phy-reset TRACE`
+against the retained trace. It checks all four attempts
+and pairs them with the latest successful DSI0
+`0x203` ON reply without a succeeding successful OFF,
+and with the stock host `pwr_up` read. A skipped or
+failed read remains unobserved. An incomplete trace or
+an inconsistent result is rejected.
+
+The packed `init_boot` SHA-256 is
+`a824c9066a4691e8dd8fa329242e01445fc0894de4a139180e12887467c8db09`.
+All five image hashes, AVB packaging, initramfs readback,
+handoff bounds and saved slot fit passed. The four other
+images match the attended genpd fixture byte for byte.
+Offline checks covered shell syntax, sampler output,
+legacy replay, successful reads, skipped reads, a failed
+regmap read returning zero through debugfs, and malformed
+correlations. Probe registration and PHY values remain
+pending on the Pixel.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
