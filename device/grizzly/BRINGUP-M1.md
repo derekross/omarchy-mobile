@@ -6963,6 +6963,36 @@ regmap read returning zero through debugfs, and malformed
 correlations. Probe registration and PHY values remain
 pending on the Pixel.
 
+###### Attended stock D1 PHY reset trace
+
+On 2026-11-27 the read-only rescue verified nine unmounted
+NV partitions and saved 3,392,151,552 bytes privately on
+the Mac. The remote and local SHA-256 checks passed.
+The rescue returned directly to Fastboot. All five trace
+images were staged to B, the full `vendor_boot_b`
+readback matched, and B booted once.
+
+| Kernel uptime | Trace boot result |
+| ---: | --- |
+| 0.912 s | Independent 90-second return timer armed. |
+| 2.529 s | Stock UFS `DME_GET` for attribute `0x1587` timed out. |
+| 3.041 s | Stock UFS power mode change failed with `-110`. |
+| 3.052 s | HC PSM still reported `0x10` while waiting for `0x11`. Asynchronous SCSI scan failed with `-110`. |
+| 21.698 s | All nine expected NV labels were missing. PID 1 stopped at `inventory incomplete`, before the NV guard and display module load. |
+| 90.913 s | Timer requested the warm restart. |
+
+Ramoops and the matching `SYSTEM_LAST_KMSG` entry agree
+on the 25 selected lines. The NV guard passed in the
+backup rescue. The trace boot never reached it and
+produced no DSI0 ON, `pwr_up` or PHY reset samples.
+The earlier genpd fixture passed UFS initialization with
+the same four other images. This run leaves the cause of
+the stock UFS failure open.
+
+Fastboot returned 133 seconds after the trace boot
+request. Stock D1 completed boot on A with enforcing
+verity and the original VBMeta digest.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
