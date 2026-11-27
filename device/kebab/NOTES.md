@@ -54,6 +54,25 @@ peripheral, no panel node and the wrong touch controller (S6SY761).
 [tree72]: https://gitlab.postmarketos.org/soc/qualcomm-sm8250/linux
 [tree]: https://gitlab.com/sm8250-mainline/linux
 
+## 2026-11-28: Wi-Fi (`fastboot boot`, Arch root on `userdata`)
+
+Same kernel. With `linux-firmware-atheros` (20261124) in the root,
+`ath11k_pci` brings up the QCA6390 over PCIe at boot (`qca6390 hw2.0`,
+MHI to mission mode, firmware `0x10121492`) as `wlp1s0`, and
+NetworkManager joins a WPA2 network from Omarchy's own Wi-Fi picker:
+
+- 5 GHz, 80 MHz, Wi-Fi 6 (HE, 2 streams): rx 864.8 Mbit/s (HE-MCS 8), tx
+  576.4 Mbit/s (HE-MCS 5) at -61 dBm;
+- DHCP, DNS and HTTPS work; the default route goes through Wi-Fi (metric
+  600) with `usb0` behind it (900), as `omamobile-device-kebab`'s networkd
+  file intends;
+- systemd-timesyncd syncs from ntp.omarchy.org, which fixes the 1970 clock
+  (and pacman's signature checks) whenever Wi-Fi is up.
+
+The chip reports `board_id 0xff`, so ath11k takes a generic board-data
+entry from `board-2.bin`; the phone's own `bdwlan.elf` (odm partition)
+isn't needed for the rates above. No device-specific change was needed.
+
 ## 2026-11-28: display, GPU and touch (`fastboot boot`, Arch root on `userdata`)
 
 Kernel `7.2.0-omamobile-push1-00084-g3c5440e9dd3c` with `pd-disable` and
