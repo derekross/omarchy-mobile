@@ -3,6 +3,107 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-1214. A driver change that drops old compatibles, beside an overlay that
+  moves a board to the new one, is checked against the omamobile overlays that
+  use the old ones, applied to the published kernel's DTB to read which driver
+  binds, and checked for a version tie between the packages that carry each
+  half.** Kernel #193 removed the old compatibles as "nothing published uses
+  them", true of the kernel tree only: the 7 Pro's card lives in an omamobile
+  overlay in `DTB_OVERLAYS`. #1091's overlay and #193 each apply and build
+  with the other's old half, and the card then binds to nothing; on a release
+  7 Pro the overlay ships in `omamobile-device-cheetah` and the DTB and driver
+  in `linux-omamobile`, with no versioned dependency between them, so a kernel
+  package that reaches phones ahead of the device package (the boot-update
+  path rebuilds their DTBs) leaves them without call audio. *Check:* `git grep
+  -n '<old compatible>' origin/main -- 'device/*/overlays'` and the device's
+  `DTB_OVERLAYS`; `fdtoverlay` the whole `DTB_OVERLAYS` onto the published
+  board DTB with the new overlay, then `git grep '\.compatible = ' <published>
+  <PR head> -- <driver>` for the compatibles each side matches. If neither
+  side keeps the other's, the merge plan names the device package version that
+  must reach phones no later than the kernel, and "a versioned pair or a
+  one-release fallback" goes to the maintainer in both reviews. Extends L-678,
+  L-679, L-827 and L-37. *From:* kernel #193 with #1091, round 69, 2026-11-26.
+- **L-1213. A gate that fails any W=1 warning in a touched C file turns a
+  pre-existing warning into the PR's red check whenever a PR touches that file
+  for anything else.** #193 dropped an OF match table at line 953 of
+  `aoc_alsa_compr.c`, and two `-Wformat` warnings at lines 671-672 on the base
+  failed CI, while CONTRIBUTING §6.2 asks only for no new warnings. *Check:*
+  for a red `W=1 builds` line, `git diff <base>...<head> -- <file> | grep
+  '^@@'` against the warning's line numbers, and `git show <base>:<file> | sed
+  -n '<line>p'` with the types it names; if the line is untouched, say so,
+  offer the one-line fix as its own commit, and put the tool's rule (compare
+  with the base's warnings, as the device-tree check does) to the maintainer.
+  Extends L-30 and L-246. *From:* kernel #193, round 69.
+- **L-1212. A "the rail stayed at use count 1 across the sleep" result is read
+  through the controller's suspend code before it is called "not powered
+  down".** dwc3 in device mode calls `dwc3_core_exit()` on every system sleep,
+  so the PHY chain's `phy_exit()`/`phy_init()` ran each time and left the same
+  count; the reading alone looked like "nothing calls phy_exit". *Check:* for
+  a "use count unchanged across suspend", read the consumer's `suspend_common`
+  for the role the board runs in and the PHY driver's exit for its child PHYs,
+  and say which calls ran in between. Extends L-116. *From:* kernel #107,
+  round 69.
+- **L-1211. A driver that writes a new mode for a feature is walked through
+  the next probe after a reset that skips its shutdown, for each mode it can
+  leave behind.** #124's probe knew the inhibit (mode 4) survives a warm reset
+  and handled it, but the new standby mode (0), written while sourcing VBUS,
+  only got a warning, and every later write path was gated on flags a fresh
+  probe clears, so charging never resumed. The question had been asked as
+  "read the boost after a reset", which the hardware answered, and the charger
+  side sat in the same code. *Check:* list every value the driver writes to a
+  persistent PMIC register, then for each one read probe's handling and every
+  later writer's condition (`git grep -n 'set_mode('`), and say what the boot
+  after a `sysrq b` does with it. Extends L-213 and L-628. *From:* kernel
+  #124, round 69.
+- **L-1210. An energy model split away from idle states is asked for its own
+  idle measurement, because the EM's inefficient-OPP marking raises a
+  cluster's floor and, with no idle state, the cores wait in WFI at that
+  floor.** Kernel #300's figures (560 to 464 mA) were taken with #280's C2
+  states on; alone, its table keeps the 9a's A520s at 1197 MHz and above, and
+  the published 9a tree has no idle states. *Check:* when a PR carries only
+  part of a measured set, list which of the measured effects each part can
+  cause; for an EM, recompute the inefficient OPPs (L-1139) and ask for the
+  idle current from a boot of the part alone, beside the base. Extends L-1139,
+  L-482 and C-12. *From:* kernel #300 with #280, round 69, 2026-11-26.
+- **L-1209. A driver change that starts reporting the hardware's rate to
+  devfreq is read for every governor line that uses `previous_freq`, because
+  those lines now see the report, not the request.** Kernel #299's `target()`
+  reports a floor-held MIF rate so `trans_stat` counts it, while
+  `get_target()`'s hold still compares the new request with
+  `devfreq->previous_freq`. *Check:* `grep -n previous_freq <driver>` and
+  `drivers/devfreq/devfreq.c` (`devfreq_update_target`,
+  `devfreq_monitor_resume`), and for each use say whether it meant "what we
+  asked" or "what runs"; then name the floors that can hold the rate above the
+  request on each board (`git grep clk_set_min_rate` for the clock, and their
+  values against the lowest OPP). Extends L-1068 and L-206. *From:* kernel
+  #299, round 69, 2026-11-26.
+- **L-1208. When a contributor confirms an assistant co-wrote their commits in
+  one repository, their kernel PRs of the same series are checked for
+  `Assisted-by:` before the rebase merge.** The johannSo series restored
+  `Co-Authored-By` on every omamobile commit after round 66's question, while
+  the kernel commits (#282, #283) carry no `Assisted-by:`, and
+  `kernel-pr-check` doesn't look for it. *Check:* `git log --format='%h
+  %(trailers:key=Assisted-by)' base..head` on each kernel PR of an author who
+  answered yes elsewhere. Extends L-216 and L-510. *From:* kernel #282 and
+  #283 with #931, round 69.
+- **L-1207. A ported driver whose message names another author is checked for
+  that author in the commit's `Author:` and sign-offs, not only in the file's
+  copyright.** Kernel #304's modemsmem driver kept Richard Acayan's copyright
+  and `MODULE_AUTHOR`, while the commit's author and only sign-off were the
+  porter's, and the gate said "signed off by their authors". *Check:* `git log
+  --format='%an%n%B' base..head | grep -n -i "is .*'s from\|taken from\|ported
+  from\|based on"`, and for each hit ask whether the named person is the
+  commit author with a sign-off. Extends L-62 and L-594. *From:* kernel #304,
+  round 69, 2026-11-26.
+- **L-1206. An imported RFC's missing author sign-off is looked for in the
+  RFC's own thread before the contributor is asked to get one.** Kernel #302
+  carried a driver patch without Joel Selvaraj's `Signed-off-by` and asked how
+  to handle it; Joel had posted it in a reply to the RFC two days after it
+  went out ("You can include them in future revisions"). *Check:*
+  `https://patchwork.kernel.org/api/1.3/patches/<id>/comments/` for the patch
+  the gate names, grep the replies for `Signed-off-by:` from the author, and
+  hand over the line with a `Link:`. Extends L-594 and L-1146. *From:* kernel
+  #302, round 69, 2026-11-26.
 - **L-1189. A firmware-written address read through a sliding BAR window is
   range-checked before it is read.** Kernel #295 read a trap record at the
   address the BCM4389 left in its shared area; `brcmf_pcie_tcm_addr()` moves
@@ -310,102 +411,3 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   which of QoS min and max wins, and find the board's cooling map for the
   device; for cpufreq the same question is `freq_qos`. *From:* #922, round 63,
   2026-11-20.
-- **L-997. New `dev_pm_ops` in a shared driver are read hook by hook for what
-  runs before the board test.** Kernel #267's suspend hook gated its float
-  step on the husky table but disabled the guard work for every board, and its
-  resume hook queued a guard run for every board, while the message said other
-  boards were unchanged; the object differs either way, so only reading shows
-  it. *Check:* for each new `.suspend`, `.resume` and `.shutdown`, list the
-  statements above the first board or match-data test, and say what each does
-  on the reference phone at every sleep and wake (the 7 Pro wakes every few
-  minutes with the modem up). Extends L-206 and L-627. *From:* kernel #267 and
-  #277, round 63, 2026-11-20.
-- **L-996. When a split moves commits to a new PR, re-list what the remaining
-  PR's reference-phone run no longer covers.** Kernel #266's 7 Pro run was
-  planned for seven commits, one of which added a `.shutdown` that stops the
-  guard work on every board; after the split that hunk sits in kernel #277,
-  behind a "husky" title, and the planned run of #266 doesn't exercise it.
-  *Check:* `git diff <old head> <new head of the remaining PR>` for removed
-  hunks outside the board's own gate (`grep -n 'of_machine_is_compatible'` and
-  the board's table name around each), and carry each ungated one into the new
-  PR's review as its own reference-phone point. Extends L-610 and L-665.
-  *From:* kernel #266 with #277, round 63, 2026-11-20.
-- **L-903. A disabled PCIe endpoint node is still read for its DMA
-  confinement, because the overlay that enables it is written from the node as
-  merged.** Kernel #255's `wifi@0,0` met "disabled behind an overlay", but
-  nothing confined it, and the bench runs it records connected to a network
-  with the chip able to reach all RAM. *Check:* for each new endpoint node,
-  `grep -n 'memory-region\|iommus'` in it and its controller, compare with the
-  reference phone's node, and ask for the confinement in the same commit even
-  when `status = "disabled"`; where the pool goes is C-55's question.
-  Extends L-777. *From:* kernel #255 with #822, round 61, 2026-11-18.
-- **L-902. An "optional" call from a generic driver into a SoC driver's
-  exported symbol is a module dependency for every board that loads the
-  generic driver.** Kernel #253's check returns 0 without the DT property, but
-  `pwrseq-qcom-wcn.ko` would still depend on `aoc_core.ko`, so the 7a's
-  Bluetooth and the SDM845 phones would load the AoC core at boot (kernel #254
-  did the same to the reference phone's Wi-Fi controller); a blacklist doesn't
-  stop that. *Check:* for each new cross-subsystem call, find the exporting
-  module (`obj-$(CONFIG_...)` in its Makefile) and both symbols' values in the
-  built `.config`; if both are `m`, list the boards whose DT loads the caller
-  (`git grep '<caller compatible>' arch/`) and what the callee's load does
-  there. Extends L-20, L-238 and L-393. *From:* kernel #253 and #254, round
-  61, 2026-11-18.
-- **L-901. "Driver X already owns this range" in a commit message is checked
-  against the published DTs for a second node on that address.** Kernel #252
-  dropped the AoC's claim of `0x10000000` because exynos-chipid "already owns"
-  it; on `github/omamobile` no gs201 or zumapro node but the AoC's names that
-  range, so the conflict lived only in the author's test tree. *Check:* `git
-  grep -n '<address>' <base> -- arch/arm64/boot/dts/exynos/google/` and the
-  claiming driver's match table against the compatibles those nodes carry.
-  Extends L-314 and L-489. *From:* kernel #252, round 61, 2026-11-18.
-- **L-900. A driver that calls `set_dma_ops()` works on arm64 only while Xen
-  is configured, and nothing says so.** `ARCH_HAS_DMA_OPS` is selected by
-  arm64 only `if XEN`; elsewhere `set_dma_ops()` is an empty inline. Our
-  Trusty transport hands Trusty its buffer ids through such ops, and
-  `drivers/trusty/Kconfig` has no dependency on it, so a config without Xen
-  would pass kernel addresses instead, silently. *Check:* `git grep -n
-  set_dma_ops drivers/` on the base; for each hit on a phone's path, `grep
-  ARCH_HAS_DMA_OPS` in the built `.config` and the driver's Kconfig for a
-  dependency. Extends L-20 and L-238. *From:* kernel #251, round 61,
-  2026-11-18.
-- **L-898. A branch that a probe-time table lookup keeps dead goes live when
-  another PR adds a matching row, and the rebase onto that PR is its first
-  run.** Kernel #202's panel-modes branch needs `dc->dsim`, which survives
-  only for timers in `gs_dsim_rates[]`; kernel #181 adds the Pixel 7's row,
-  and the 7a's bootloader pair is the same, so the rebase turns on a path no
-  boot has taken, with a 90 Hz mode the DECON refuses. *Check:* when a PR is
-  to be rebased onto another, `git diff <base> <other head>` for new rows in
-  every table the PR's gating pointer depends on, and compare each new row
-  with the PR's own board values. Extends L-490 and L-730. *From:* kernel #202
-  with #181, round 61, 2026-11-18.
-- **L-883. A first board file with its only link disabled is a build
-  artifact, not a first light, and the review says "don't flash it" in
-  words.** Kernel #273 disabled USB pending a glue PR; with our init's
-  no-USB-host panic and a marked slot B, booting it means a reset loop and the
-  buttons. *Check:* for a new board, find the node that carries the link
-  (`&usb` and its PHYs) and read its `status` in the built DTB; if it is
-  disabled, the draft comment says not to boot it and names the PR that
-  settles how it is enabled. Extends L-28, L-158 and L-31. *From:* kernel #273
-  with #271, round 61, 2026-11-18.
-- **L-882. Google publishes a device-tree repository per Pixel 9 family
-  device too.** `kernel/devices/google/comet` (branch
-  `android-gs-caimito-6.1-android16`) has `dts/zuma-comet-camera.dtsi`,
-  `-hall-sensor.dtsi`, `-usb.dtsi` and the `zumapro-comet-*.dts` boards, which
-  settled kernel #272's power order and shared reset and #273's board id.
-  *Check:* `git ls-remote
-  https://android.googlesource.com/kernel/devices/google/<codename>`, then
-  `.../+/<commit>/dts/<file>?format=TEXT | base64 -d`. Extends L-177 and
-  L-220. *From:* kernel #272 and #273, round 61, 2026-11-18.
-- **L-881. Before calling an ungated fix "another phone's", grep the reference
-  phone's logs for its error line.** `ak7375_vcm_resume I2C failure: -6` was
-  in a 7 Pro log from three days before kernel #272, which turned "gate it on
-  the Fold" into "a 7 Pro change with a 7 Pro reason: run it there". *Check:*
-  `grep -rh '<the message>' logs/ | sed 's/^.*kernel: //' | sort | uniq -c`,
-  and read which code path prints it. Extends L-565 and L-493. *From:* kernel
-  #272, round 61, 2026-11-18. (Extended 2026-11-23: the evidence can also be
-  in the commit message of the code the fix changes. "Every boot of a Pixel 7
-  Pro starts with no reading" in `1a9d1d4e9289` made kernel #290 a 7 Pro fix
-  with a 7 Pro reason, while the review laptop's logs had no such line; read
-  `git log --format=%B -3 -- <file>` or `git log -L` for the touched function
-  before writing "another phone's fix". *From:* kernel #290, round 66.)

@@ -332,6 +332,173 @@ cmp -s "${staged[0]}" "$t/nv-six" || { cat "${staged[0]}"; fail "modem-nv.sha256
 rm -rf "${t:?}/work/"run.*
 pass "first install, no Docker: the six NV lines staged (mode 644), then props.conf written on the phone, the value in no command"
 
+# Raven's NV backup check and staging: same per-image sha256sum strictness as
+# cheetah's first install, exercised through a dry run under umask 077 so the
+# mode-644 assertion fails if chmod is dropped (extraction is skipped and the
+# phone is never contacted; --keep keeps the staged files to inspect)
+printf '[%s]: [%s]\n' ro.boot.cdt_hwid 0xTEST ro.hardware raven ro.boot.hardware.platform gs101 > "$t/raven-getprop.txt"
+raven() {
+  (umask 077 && HOME=$H PHONE_SSH=$t/no-ssh tools/phone-provision -d raven --dry-run \
+    --getprop "$t/raven-getprop.txt" --work "$t/work" "$@" "$t/factory.zip") 2>&1
+}
+raven_staged_ok() {
+  local staged=("$t"/work/run.*/modem-stage/etc/omamobile/modem-nv.sha256)
+  cmp -s "${staged[0]}" "$t/nv-six" || { cat "${staged[0]}"; fail "raven stages exactly the six NV lines ($1)"; }
+  [[ $(stat -c %a "${staged[0]}") == 644 ]] || fail "raven stages modem-nv.sha256 mode 644 ($1)"
+  rm -rf "${t:?}/work/"run.*
+}
+no_nv_sums() {
+  local sum
+  while read -r sum _; do
+    if grep -qF "$sum" <<<"$out"; then fail "$1"; fi
+  done < "$N/SHA256SUMS"
+}
+out=$(raven --keep --nv-backup "$N") || { echo "$out"; fail "raven dry run succeeds with a valid NV backup"; }
+[[ ! -e $t/ssh.calls ]] || fail "raven dry run never contacts the phone"
+for line in \
+  "SHA256SUMS: one line for each of modem_a modem_b efs efs_backup modem_userdata persist" \
+  "modem: board id from raven-getprop.txt, NV checksums from nv-backup" \
+  "would write /var/lib/omamobile-vendor/modem/props.conf and /etc/omamobile/modem-nv.sha256" \
+  "Done (raven)"; do
+  grep -qF -- "$line" <<<"$out" || { echo "$out"; fail "raven dry run: $line"; }
+done
+no_nv_sums "raven dry run doesn't print NV checksums"
+raven_staged_ok "valid backup, devinfo left out"
+# Extra non-matching lines (commented, suffix-extended, or holding a NUL byte)
+# aren't staged and never break staging
+modem_a_line=$(grep ' modem_a\.img$' "$N/SHA256SUMS")
+{ cat "$N/SHA256SUMS"; printf '# %s\n%s.bak\n' "$modem_a_line" "$modem_a_line"; } > "$t/nv-short/SHA256SUMS"
+out=$(raven --keep --nv-backup "$t/nv-short") || { echo "$out"; fail "raven accepts extra commented and suffixed lines beside the six valid NV lines"; }
+raven_staged_ok "extra commented and suffixed lines"
+{ cat "$N/SHA256SUMS"; printf 'extra\0line\n'; } > "$t/nv-short/SHA256SUMS"
+out=$(raven --keep --nv-backup "$t/nv-short") || { echo "$out"; fail "raven accepts an extra NUL-byte line beside the six valid NV lines"; }
+raven_staged_ok "extra NUL-byte line"
+pass "raven dry run: valid SHA256SUMS passes the per-image check and stages exactly the six NV lines (mode 644), incl. beside a NUL line"
+
+# Refusals on raven: missing image, repeated image (including six of efs.img
+# and missing-plus-repeated totalling six lines), and malformed checksum lines,
+# all before anything is staged in modem-stage or the phone is contacted
+raven_refused() {
+  local want=$1 why=$2 staged
+  if out=$(raven --keep --nv-backup "$t/nv-short"); then echo "$out"; fail "raven refuses $why"; fi
+  grep -qE "needs one '<sha256>  NAME\\.img' line for each of the six NV images; none or more than one for ${want//./\\.}\$" <<<"$out" || { echo "$out"; fail "raven names $want ($why)"; }
+  staged=("$t"/work/run.*/modem-stage)
+  [[ ! -e ${staged[0]} ]] || fail "raven stages nothing ($why)"
+  [[ ! -e $t/ssh.calls ]] || fail "raven never contacts the phone ($why)"
+  rm -rf "${t:?}/work/"run.*
+}
+: > "$t/nv-short/SHA256SUMS"
+raven_refused "modem_a.img modem_b.img efs.img efs_backup.img modem_userdata.img persist.img" "empty SHA256SUMS"
+for p in modem_a modem_b efs efs_backup modem_userdata persist; do
+  grep -v "  $p\\.img\$" "$N/SHA256SUMS" > "$t/nv-short/SHA256SUMS"
+  raven_refused "$p.img" "missing $p.img"
+done
+{ cat "$N/SHA256SUMS"; printf '%s\n' "$modem_a_line"; } > "$t/nv-short/SHA256SUMS"
+raven_refused "modem_a.img" "modem_a.img repeated"
+{ grep -v '  efs\.img$' "$N/SHA256SUMS"; printf '%s\n' "$modem_a_line"; } > "$t/nv-short/SHA256SUMS"
+raven_refused "modem_a.img efs.img" "efs.img missing with modem_a.img repeated (six lines)"
+efs_line=$(grep '  efs\.img$' "$N/SHA256SUMS")
+printf '%s\n' "$efs_line" "$efs_line" "$efs_line" "$efs_line" "$efs_line" "$efs_line" > "$t/nv-short/SHA256SUMS"
+raven_refused "modem_a.img modem_b.img efs.img efs_backup.img modem_userdata.img persist.img" "six efs.img lines"
+for how in upper one-space binary short prefix trailing-space crlf; do
+  case $how in
+    upper) sed -E '/ modem_a\.img$/ s/^[0-9a-f]+/\U&/' "$N/SHA256SUMS" ;;
+    one-space) sed -E '/ modem_a\.img$/ s/  / /' "$N/SHA256SUMS" ;;
+    binary) sed -E '/ modem_a\.img$/ s/  / */' "$N/SHA256SUMS" ;;
+    short) sed -E '/ modem_a\.img$/ s/^[0-9a-f]//' "$N/SHA256SUMS" ;;
+    prefix) sed -E '/ modem_a\.img$/ s/^/junk /' "$N/SHA256SUMS" ;;
+    trailing-space) sed -E '/ modem_a\.img$/ s/$/ /' "$N/SHA256SUMS" ;;
+    crlf) sed -E '/ modem_a\.img$/ s/$/\r/' "$N/SHA256SUMS" ;;
+  esac > "$t/nv-short/SHA256SUMS"
+  raven_refused "modem_a.img" "malformed modem_a.img ($how)"
+done
+cp "$N/SHA256SUMS" "$t/nv-short/SHA256SUMS"
+chmod 000 "$t/nv-short/SHA256SUMS"
+if [[ ! -r $t/nv-short/SHA256SUMS ]]; then
+  if out=$(raven --keep --nv-backup "$t/nv-short"); then echo "$out"; fail "raven refuses unreadable SHA256SUMS"; fi
+  grep -qF "cannot read $t/nv-short/SHA256SUMS" <<<"$out" || { echo "$out"; fail "raven reports one clear read error"; }
+  [[ $(grep -c "^grep:" <<<"$out" || true) == 1 ]] || { echo "$out"; fail "unreadable SHA256SUMS reports one read error, not six"; }
+  rm -rf "${t:?}/work/"run.*
+fi
+chmod 644 "$t/nv-short/SHA256SUMS"
+[[ ! -e $t/ssh.calls ]] || fail "refused raven runs never contact the phone"
+pass "raven dry run: refused before staging for empty, missing, repeated (incl. six efs.img), malformed or unreadable NV checksum lines"
+# Non-ASCII letters (64 é) must be refused even under a UTF-8 locale where
+# GNU grep's [0-9a-f] matches them (en_US.UTF-8 on GNU/Linux; C.UTF-8 does not)
+e64=$(printf '%.0s\xc3\xa9' {1..64})
+utf8_locale=""
+if LC_ALL=en_US.UTF-8 grep -aE -q -e '^[0-9a-f]{64}$' <<<"$e64" 2>/dev/null; then
+  utf8_locale=en_US.UTF-8
+elif command -v locale >/dev/null; then
+  while IFS= read -r loc; do
+    LC_ALL=$loc grep -aE -q -e '^[0-9a-f]{64}$' <<<"$e64" 2>/dev/null && { utf8_locale=$loc; break; }
+  done < <(locale -a 2>/dev/null | grep -iE 'utf-?8$' || true)
+fi
+if [[ -n $utf8_locale ]]; then
+  { grep -v '  modem_a\.img$' "$N/SHA256SUMS"; printf '%s  modem_a.img\n' "$e64"; } > "$t/nv-short/SHA256SUMS"
+  LC_ALL=$utf8_locale raven_refused "modem_a.img" "non-ASCII 64-letter hash under $utf8_locale"
+  pass "raven dry run: non-ASCII 64-letter hash refused under locale $utf8_locale"
+else
+  echo "ok - # skip: no installed UTF-8 locale where grep [0-9a-f] matches non-ASCII letters"
+fi
+
+# Non-dry Raven run with stand-in extractors and the logging stand-in phone:
+# (1) a bad SHA256SUMS refuses before any extraction runs; (2) SHA256SUMS is
+# read once, so changing the file during extraction cannot alter what is staged
+mkdir -p "$t/raven-repo/tools"
+cp tools/phone-provision "$t/raven-repo/tools/phone-provision"
+cat > "$t/raven-repo/tools/extract-vendor-firmware" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+echo "fw" >> "$T/extract.calls"
+out=""
+while (($#)); do [[ $1 == -o ]] && out=$2; shift; done
+mkdir -p "$out/usr/lib/firmware/updates" "$out/usr/share/omamobile/sensors/registry"
+: > "$out/usr/lib/firmware/updates/fw.bin"
+: > "$out/usr/share/omamobile/sensors/registry/reg.json"
+[[ -z ${MUTATE_SUMS:-} ]] || sed -i -E 's/^0/1/; t; s/^./0/' "$MUTATE_SUMS"
+EOF
+cat > "$t/raven-repo/tools/extract-vendor-chroot" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+echo "chroot" >> "$T/extract.calls"
+out=""
+while (($#)); do [[ $1 == -o ]] && out=$2; shift; done
+mkdir -p "$out"
+: > "$out/MANIFEST"
+EOF
+chmod +x "$t/raven-repo/tools/extract-vendor-firmware" "$t/raven-repo/tools/extract-vendor-chroot"
+raven_real() {
+  (umask 077 && HOME=$H PHONE_SSH=$t/check-ssh "$t/raven-repo/tools/phone-provision" -d raven --user alice \
+    --getprop "$t/raven-getprop.txt" --work "$t/work" "$@" "$t/factory.zip" < /dev/null) 2>&1
+}
+rm -f "$t/extract.calls" "$t/pushes"
+grep -v '  efs\.img$' "$N/SHA256SUMS" > "$t/nv-short/SHA256SUMS"
+if out=$(raven_real --nv-backup "$t/nv-short"); then echo "$out"; fail "real raven run refuses bad SHA256SUMS"; fi
+grep -qE 'none or more than one for efs\.img$' <<<"$out" || { echo "$out"; fail "real raven run names missing efs.img"; }
+[[ ! -e $t/extract.calls ]] || { cat "$t/extract.calls"; fail "real raven run refuses bad SHA256SUMS before extraction"; }
+[[ ! -e $t/pushes ]] || { cat "$t/pushes"; fail "real raven run pushes nothing on bad SHA256SUMS"; }
+cp "$N/SHA256SUMS" "$t/nv-short/SHA256SUMS"
+out=$(MUTATE_SUMS="$t/nv-short/SHA256SUMS" raven_real --keep --nv-backup "$t/nv-short") || { echo "$out"; fail "real raven run succeeds when SHA256SUMS changes after check"; }
+[[ -s $t/extract.calls ]] || fail "real raven run invokes stand-in extractors"
+raven_staged_ok "single read despite later file change"
+rm -f "$t/extract.calls" "$t/pushes"
+pass "raven real run (no Docker): refuses bad SHA256SUMS before extraction and reads SHA256SUMS once"
+
+# Under bash -x, neither Raven nor cheetah first-install traces any NV checksum,
+# and xtrace stays active after the NV helpers return
+for dev in raven cheetah; do
+  extra=(--user alice --first-install)
+  [[ $dev != raven ]] || extra=(-d raven --getprop "$t/raven-getprop.txt")
+  out=$(HOME=$H PHONE_SSH=$t/no-ssh bash -x tools/phone-provision "${extra[@]}" \
+    --dry-run --nv-backup "$N" --work "$t/work" "$t/factory.zip" 2>&1) ||
+    { echo "$out"; fail "$dev dry run under bash -x succeeds"; }
+  grep -qE "^\+ say '?Done" <<<"$out" || { echo "$out"; fail "bash -x trace stayed active after NV helpers ($dev)"; }
+  no_nv_sums "NV checksums never appear in a bash -x trace ($dev)"
+done
+[[ ! -e $t/ssh.calls ]] || fail "bash -x dry runs never contact the phone"
+pass "bash -x dry runs (raven and cheetah first-install): succeed with no NV checksum in the trace"
+
 # --- a real run against a container standing in for the phone -----------------
 if ! command -v docker >/dev/null || ! docker image inspect archlinux:latest >/dev/null 2>&1; then
   echo "ok - # skip: no docker or archlinux:latest image for the end-to-end run"

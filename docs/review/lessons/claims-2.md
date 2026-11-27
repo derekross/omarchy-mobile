@@ -3,6 +3,86 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-918. A contributor's incident log is read for what it says about a
+  claim we published.** #881's log shows the network ending the IMS bearer
+  with the internet one; the 2026.11.15 release notes say calls and texts "use
+  a separate connection, which didn't drop". *Check:* `git grep -n -i
+  '<subsystem>' docs/release-notes/<latest>.md docs/DEVICES.md` for sentences
+  the new evidence contradicts, and put them in the maintainer's list. Extends
+  L-654 and L-433. *From:* #881, round 61, 2026-11-18.
+- **L-915. A timed client run that returns nothing is not yet a failure or a
+  pass: the timeout is compared with the receiver's recorded cold start.** On
+  #864 two of five 40 s `where-am-i` runs were empty, where the sibling PR
+  records a cold first fix of about 55 s on the other phone of that model.
+  *Check:* find the device's time to first fix in its plan or the sibling
+  thread; ask for the empty cases again with a wait above it and the daemon's
+  log for that window, before the title's claim is called shown or broken.
+  Extends L-440 and L-482. *From:* #864 with #863, round 61, 2026-11-18.
+- **L-914. A notes entry that names a package by a version an open PR claims
+  is checked against the merge order.** #846's MODEM-PLAN says
+  "omamobile-modem-sit 0.3.44, #837's branch" while #881 was about to take
+  0.3.44. *Check:* for each unmerged version a record cites, list the open PRs
+  claiming it and ask for the commit id beside it. Extends L-774 and L-426.
+  *From:* #846 with #837 and #881, round 61, 2026-11-18.
+- **L-869. A percent-per-time figure that disagrees with the measured current
+  is settled by integrating the current column, and the result is read against
+  every rule that uses the percentage.** On kernel #267, 7 % in 18 minutes was
+  103.6 mAh, 2 % of the pack: the gauge's percent runs ahead near full, which
+  is the input of the PR's own "recharge at 95 %" rule. *Check:* `awk` the
+  posted log (trapezoid over `current_now`), compare with the `capacity`
+  deltas, and grep the diff for uses of `POWER_SUPPLY_PROP_CAPACITY`. Extends
+  L-397. *From:* kernel #267, round 61, 2026-11-18.
+- **L-855. "The guard in this tree already covers it" is checked on main and
+  in the open PRs before the question it comes with is answered.** Kernel
+  #260's reply asked to enable the eMMC because the guard "already walks
+  mmcblk"; main's `initramfs/init` has no `mmcblk`, and no PR carries one.
+  *Check:* `git grep -n '<mechanism>' origin/main -- initramfs` and `gh pr
+  list --search '<device>'`; if it is only in the contributor's tree, the
+  answer is "send it first". Extends L-201, L-601 and L-321. *From:* kernel
+  #260, round 60, 2026-11-17.
+- **L-851. A test note stamped on every commit of a series is checked against
+  which commits existed when the kernel was built.** Kernel #202's
+  `Tested-on:` line named a release built from `61e15599a196` and was also on
+  the two commits made after it, one of which changes a command sequence.
+  *Check:* `git merge-base --is-ancestor <commit> <tested id>` (or `git diff
+  <tested id> <head>` per file) for each commit that carries the note. Extends
+  L-341 and L-379. *From:* kernel #202, round 60, 2026-11-17.
+- **L-841. A count of sightings ("the one case seen", "every") in a commit
+  message or a plan is compared with the linked issue at review time, not at
+  writing time, and again at each later push.** Kernel #261 was written on
+  11-15; issue #169 gained a second phone on 11-16, which also showed the
+  condition is not "every flat boot". Round 60 caught it in the commit message
+  and not in #815's plan beside it, whose third commit still said "the one
+  instance" and whose last runbook step rests on it. *Check:* for every
+  `Link:` or cited issue, `gh issue view N --json comments` filtered to
+  comments newer than the text's date; for each count word find the comment
+  that confirms or breaks it, and re-read every step whose Pass rests on it.
+  Extends L-266, L-723 and L-774. *From:* kernel #261, round 60; #815 with
+  issue #169, round 62, 2026-11-18.
+- **L-835. A cell that says "public node disabled" is checked for the node on
+  the published branch, not in the pull request that proposes it.** #871
+  called kernel #242's node "public" while #242 was open, and named an enable
+  overlay that is in no pull request. *Check:* `git grep` the node's
+  compatible in the board file on `github/omamobile`, `gh pr view` the kernel
+  PR's state, and `git ls-tree` the device's `overlays/` on main and the
+  author's open heads for each overlay a note names. Extends L-561 and L-774.
+  *From:* #871, round 60, 2026-11-17.
+- **L-832. A fix branch's "one commit on the published branch" is counted from
+  the release the phone runs.** #815's test kernel was called the fix alone;
+  its base is seven commits past `kernel-2026.11.15`, one of them in a driver
+  the 7 Pro binds. *Check:* `git log --oneline <release tag>..<fix>^`, and
+  list what touches a reference-phone driver in the runbook's push step.
+  Extends L-273 and L-646. *From:* #815 with kernel #261, round 60,
+  2026-11-17.
+- **L-826. A bring-up overlay's "the driver is blacklisted" is checked against
+  which package carries the blacklist and whether that phone installs it.**
+  #861's `gnss.dtso` leans on omamobile-gnss's `blacklist bcm4775x_gnss`;
+  panther's image and device package install no omamobile-gnss, so the promise
+  held only on the tester's phone. *Check:* `git grep -n "blacklist <module>"
+  origin/main -- packages`, then the device's `ROOTFS_PACKAGES` and its device
+  package's `depends=`; if neither brings the package, the notes name it as a
+  step before the first boot. Extends L-387, L-402 and L-442. *From:* #861,
+  round 60, 2026-11-17.
 - **L-824. A sibling device's plan that explains or contradicts an AGENTS
   gotcha about the reference phone is listed for the maintainer, with the run
   that would settle it.** #852 traces early RTC wakes to stale S2MPG12 reads
@@ -299,88 +379,3 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   `git grep` its key strings on main's plan and ask for a follow-up PR for any
   that are missing. Extends L-34 and L-201. *From:* issue #36 with #88, round
   25.
-- **L-260. A gotcha that changes recovery behaviour is checked against the
-  author's other open PRs, not only main.** #125 said stock on slot A
-  "reformats" `userdata`; the same author's #100 records that stock stops in
-  recovery and only a chosen factory reset wipes it, which turns the rule from
-  "mark the slot" into "never choose the reset". *Check:* `git grep -i` the
-  claim's key words (recovery, reformat, wipe, fallback) over that author's
-  open PR heads for the device. Extends L-188 and L-191. *From:* #125, round
-  25.
-- **L-256. An "inactive slot" install mode is walked for what a reinstall
-  does.** With `OMAMOBILE_SLOT=inactive`, rerunning #111's installer on a
-  phone already in Omarchy flashes the stock slot unless `--reflash` is
-  remembered. *Check:* name the slot written from each starting state. Extends
-  L-205. *From:* #111, round 24.
-- **L-257. A fix that "covers every device package" is re-counted at review
-  time.** #102 changed four copies of a file; lynx's package landed a fifth
-  after it opened. *Check:* `git grep -l '<changed line>' origin/main --
-  packages/` against the PR's file list. Extends L-164 and L-195. *From:*
-  #102, issue #103, round 24.
-- **L-258. A first-owner path is tested without the maintainer's private
-  inputs.** `phone-provision` defaulted to the maintainer's backup, so the
-  README quick start failed for every new owner. *Check:* `grep -n
-  'android/reference' tools/<tool>` for every tool the README names; each
-  such default needs a first-install path or a clear refusal. *From:* issue
-  #106, round 24.
-- **L-259. "Not in the published repository" is checked against the last
-  publish before it's read as policy.** The husky package was missing
-  because publishes had failed since its merge. *Check:* the publish tree's
-  last commit, the index's date, and open "publish failed" issues. *From:*
-  issue #1, round 24.
-- **L-28. "Works" needs merged notes and the phone it ran on.** A matrix row
-  claiming works/testing from a private kernel, or from an install of a
-  different branch, should say WIP or testing and link the notes.
-  *From:* #24, #25.
-- **L-29. PR bodies written with an AI over-claim.** "checkpatch clean",
-  "dtbs_check clean", "tested" were each untrue at least once this week.
-  Re-run the claim; never quote it. *From:* kernel #10-#12, #27.
-- **L-45. A rebased companion's evidence still counts if the tested commit
-  and the new head don't differ.** *Check:* `git diff <tested> <head> --
-  <files the test exercised>`; empty means the test stands, otherwise ask
-  for a re-test. *From:* #29, round 2 (994dd90 against d773f62: identical).
-  **Also (kernel #222, round 46):** a message-only re-push (`git diff <old>
-  <new>` empty, same parent) carries the evidence over only while the base's
-  blob for each touched file is unchanged too (`git rev-parse <old base>:<f>
-  <new base>:<f>`).
-- **L-46. A phone's settings reflect that phone's image, not the one we
-  build.** A contributor's `busctl` value (`HandlePowerKey=suspend`) came from
-  a local drop-in, while our image's `omarchy-settings` sets `ignore`.
-  *Check:* compare reported values with what `rootfs/packages.base`
-  installs before accepting or correcting a note about a default (with
-  L-32). *From:* #29, round 2.
-- **L-61. "Private kernel" evidence isn't evidence.** Ask for the public
-  source (Google's GPL tree, the stock DT lines, upstream) behind each value.
-  *From:* kernel #28-#31.
-- **L-62. Check a claimed upstream backport against that commit's own
-  `.patch`,** and list the file's later commits to find where any extra
-  lines came from; authorship and trailers must survive. *From:* #32
-  (0005 was two upstream commits with no `From:` line).
-- **L-65. A `-dirty` release means the tested code is in no commit.** Look
-  up its hash (`git log -1 <sha>`); if it predates the PR's code, the notes
-  must say the evidence came from an unpublished tree and name the
-  differences the PR admits. Hardware facts stand; claims about the PR's
-  code path don't (extends L-45). *From:* #34 with kernel #32.
-- **L-66. A matrix cell's word needs the qualifier its neighbours use and a
-  link to the notes entry.** "Touch: WIP" for a chip-id read reads as touch
-  input. *From:* #34.
-- **L-76. Fetch each `Link:` anchor and read the line it points at.**
-  *Check:* `curl -s '<url>?format=TEXT' | base64 -d | sed -n Np`. #29's was
-  two lines off: cosmetic there, but a wrong commit or file wouldn't be.
-  *From:* kernel #29, round 2.
-- **L-85. "Nothing else changed" needs a "before" from the same boot.** A
-  stop condition such as "no other rail changed" with only an after-read of
-  `regulator_summary` can't fail. *Check:* every "X didn't change" condition
-  has a snapshot step before the action and a diff after. *From:* #34,
-  round 2.
-- **L-86. When a revised driver keeps the protocol but changes the power
-  sequence, the earlier boot covers the protocol only.** Compare the trees
-  (L-69): a changed probe or remove order (rails, reset) needs its own boot,
-  even when the read path is identical. *From:* kernel #32, round 4.
-- **L-106. One PR's hardware evidence can land in another PR's commits.**
-  Husky test 23, the result #33 asked for, was in #23's BRINGUP-M1. *Check:*
-  read the companion PRs before saying "no evidence yet". Extends L-34.
-  *From:* kernel #33 with #23.
-- **L-107. A plan's claim about the DEVICES.md matrix is checked against
-  the open PRs that change that row.** Extends L-28 and L-44. *From:* #35
-  with #34.
