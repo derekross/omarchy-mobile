@@ -275,6 +275,32 @@ out=$(runaoc) || true; [[ $out != *"already online"* ]] || fail "Services : 0 is
 rm -f "$aoc/node/services"
 pass "a /run marker or an online AoC stops a second start before anything is loaded or written to firmware"
 
+# --- the speaker calibration: installed, not enabled, before user sessions ---
+bash -n bin/omamobile-husky-speaker-cal || fail "the speaker calibration parses"
+bash -n test/speaker-cal || fail "test/speaker-cal parses"
+[[ -x $tmp/root/usr/bin/omamobile-husky-speaker-cal && -f $tmp/root/usr/lib/systemd/system/omamobile-husky-speaker-cal.service ]] \
+  || fail "install stages the speaker calibration and its unit"
+[[ ! -e $tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-husky-speaker-cal.service ]] \
+  || fail "the speaker calibration is not linked into multi-user.target.wants (an owner enables it after an attended run)"
+[[ -z $(find "$tmp/root" vendor -path '*.wants/*' -name 'omamobile-husky-speaker-cal.service') ]] \
+  || fail "no wants link of any target pulls the speaker calibration in"
+spkunit=vendor/systemd/system/omamobile-husky-speaker-cal.service
+grep -qx 'WantedBy=multi-user.target' "$spkunit" || fail "the speaker calibration can be enabled"
+grep -qx 'ExecStart=/usr/bin/omamobile-husky-speaker-cal' "$spkunit" || fail "the speaker calibration unit runs the script"
+grep -qx 'Requires=omamobile-husky-aoc.service' "$spkunit" || fail "the speaker calibration needs the AoC start"
+grep -qE '^After=(.* )?omamobile-husky-aoc\.service( |$)' "$spkunit" || fail "the speaker calibration runs after the AoC start"
+grep -qE '^After=(.* )?alsa-restore\.service( |$)' "$spkunit" || fail "the speaker calibration runs after alsa-restore"
+grep -qE '^Before=(.* )?systemd-user-sessions\.service( |$)' "$spkunit" \
+  || fail "the speaker calibration runs before any user session (and its PipeWire) can open the speaker PCM"
+grep -qx 'ConditionPathExists=/sys/bus/platform/devices/154b0000.aoc' "$spkunit" || fail "the speaker calibration unit needs the AoC node"
+grep -qx 'TimeoutStopSec=15' "$spkunit" || fail "a timed-out speaker calibration gets SIGKILL 15 s after SIGTERM, not 90 s"
+grep -qx 'SuccessExitStatus=3' "$spkunit" || fail "the script's skip (exit 3) is not a failed unit"
+grep -qx 'export LC_ALL=C' bin/omamobile-husky-speaker-cal || fail "the speaker calibration matches amixer's text under LC_ALL=C"
+grep -qE "^depends=\(.*\bf2fs-tools\b" PKGBUILD || fail "the speaker calibration needs dump.f2fs (f2fs-tools)"
+pass "the speaker calibration is installed, not enabled, and ordered after the AoC and before user sessions"
+test/speaker-cal || fail "test/speaker-cal"
+pass "the speaker calibration: hang marker, reload of a DSP that already ran, the writes, check"
+
 test/display-start || fail "test/display-start"
 pass "the display start loads gs_decon after allowing DSI commands for google-hk3 only"
 

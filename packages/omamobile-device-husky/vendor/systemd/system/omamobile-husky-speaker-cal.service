@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: MIT
+# The speaker amplifiers' factory calibration on the Pixel 8 Pro. The
+# protection firmware takes it only before its first stream, so this runs
+# after the AoC and the amplifiers are up and before any user session (and
+# its PipeWire) can open the speaker PCM. After=alsa-restore.service orders it
+# after that one service only; a restore that udev starts by itself is not
+# covered. A failure turns back on a Preload Switch the script turned off, so
+# the DSPs run on the tuning's default calibration. If a run hangs, the next
+# boot skips it (marker; see the script). Requires= also means that a restart
+# of omamobile-husky-aoc by hand runs this again with the user's audio up: the
+# script then reloads the firmware under PipeWire, or refuses if a stream
+# holds a DSP. TimeoutStopSec=15: after the start timeout's SIGTERM, SIGKILL
+# follows in 15 s instead of the default 90 s, so a stuck run holds the boot
+# back less. SuccessExitStatus=3: the script exits 3 when it skips (a marker
+# from a run that never finished, or no sound card), so a hand run can tell a
+# skip from a calibration; for the unit a skip is not a failure. The package
+# installs this unit but does not enable it: enable it by hand only after an
+# attended run of the script has passed "check".
+[Unit]
+Description=Give the speaker protection DSPs this phone's factory calibration
+After=omamobile-husky-aoc.service alsa-restore.service
+Requires=omamobile-husky-aoc.service
+Before=systemd-user-sessions.service display-manager.service
+ConditionPathExists=/sys/bus/platform/devices/154b0000.aoc
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/omamobile-husky-speaker-cal
+RemainAfterExit=yes
+TimeoutStartSec=90
+TimeoutStopSec=15
+SuccessExitStatus=3
+
+[Install]
+WantedBy=multi-user.target

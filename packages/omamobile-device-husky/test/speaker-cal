@@ -1,0 +1,423 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# omamobile-husky-speaker-cal in a scratch root. amixer, blockdev, dump.f2fs
+# and sync are fakes on PATH; the fake amixer keeps the controls, their
+# values and which DSP "runs" in files, and refuses a volatile read
+# (CSPL_STATE, CAL_SET_STATUS) with the driver's EPERM while a DSP is not
+# running. As alsa-utils 1.2.16's amixer does, that refused cget still prints
+# the id and type lines and exits 0 (FAKE_EPERM_RC changes the exit code). No
+# hardware is touched, and the values are made up.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+script=$PWD/bin/omamobile-husky-speaker-cal
+fail() { printf 'not ok - speaker-cal: %s\n' "$1" >&2; exit 1; }
+pass() { printf 'ok - speaker-cal: %s\n' "$1"; }
+T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
+F=$T/fake st=$T/state
+mkdir -p "$T/bin" "$T/sysblock/sda1" "$T/run"
+echo PARTNAME=persist > "$T/sysblock/sda1/uevent"
+echo 8:1 > "$T/sysblock/sda1/dev"
+
+cat > "$T/bin/amixer" <<'FAKE'
+#!/bin/bash
+set -uo pipefail
+[[ $1 == -c && $2 == 0 ]] || { echo "fake amixer: no -c 0: $*" >&2; exit 99; }
+shift 2
+key() { echo "${1// /_}"; }
+listed() { grep -qxF "$1" "$FAKE/ctls"; }
+# a start run must have its marker on disk before the first amixer call
+[[ -n ${TEST_MARKER:-} && ! -s $TEST_MARKER ]] && echo "no-marker $1" >> "$FAKE/log"
+case $1 in
+  controls)
+    if [[ -s $FAKE/late ]]; then
+      n=$(<"$FAKE/late")
+      if ((n <= 1)); then cat "$FAKE/deferred" >> "$FAKE/ctls"; : > "$FAKE/late"; : > "$FAKE/deferred"
+      else echo $((n - 1)) > "$FAKE/late"; fi
+    fi
+    i=0; while IFS= read -r c; do i=$((i + 1)); echo "numid=$i,iface=MIXER,name='$c'"; done < "$FAKE/ctls" ;;
+  cget)
+    n=${2#name=}; echo "cget $n" >> "$FAKE/log"
+    listed "$n" || { echo "amixer: Cannot find the given element from control hw:0" >&2; exit 1; }
+    echo "numid=1,iface=MIXER,name='$n'"
+    echo "  ; type=BYTES,access=rw-v----,values=4"
+    case $n in
+      *" CSPL_STATE" | *" CAL_SET_STATUS" | *" CAL_R_SELECTED")
+        [[ -n ${FAKE_CSPL_ODD:-} && $n == *" CSPL_STATE" ]] && exit 0
+        [[ -e $FAKE/running/${n%% *} ]] || { echo "amixer: Control hw:0 element read error: Operation not permitted" >&2; exit "${FAKE_EPERM_RC:-0}"; } ;;
+    esac
+    echo "  : values=$(cat "$FAKE/val/$(key "$n")" 2>/dev/null || echo 0x00,0x00,0x00,0x00)" ;;
+  cset)
+    n=${2#name=} v=$3; echo "cset $n = $v" >> "$FAKE/log"
+    listed "$n" || { echo "amixer: Cannot find the given element from control hw:0" >&2; exit 1; }
+    amp=${n%% *} bad=
+    # FAIL_CSET: every write to that control fails (with FAIL_ONCE only the first)
+    if [[ -n ${FAIL_CSET:-} && $n == *"$FAIL_CSET"* ]]; then
+      [[ -z ${FAIL_ONCE:-} || ! -e $FAKE/failed ]] && bad=1; touch "$FAKE/failed"
+    fi
+    # FAIL_CAL_AFTER=N: every CAL_* write after the first N fails
+    if [[ -n ${FAIL_CAL_AFTER:-} && $n == *" CAL_"* ]]; then
+      k=$(cat "$FAKE/calcount" 2>/dev/null || echo 0); echo $((k + 1)) > "$FAKE/calcount"
+      ((k >= FAIL_CAL_AFTER)) && bad=1
+    fi
+    if [[ -n $bad ]]; then
+      # on a running DSP the driver caches the value (set = 1) before the DSP
+      # write that fails (cs_dsp.c:827-836); a stopped DSP's cache stays
+      [[ $n == *" CAL_"* && -e $FAKE/running/$amp ]] && echo "$v" > "$FAKE/val/$(key "$n")"
+      echo "amixer: Control hw:0 element write error: Input/output error" >&2; exit 1
+    fi
+    case $n in
+      *" DSP1 Preload Switch")
+        old=$(cat "$FAKE/val/$(key "$n")" 2>/dev/null || echo off)
+        if [[ $v == off ]]; then
+          # Preload off stops the DSP, unless an open stream holds it
+          [[ -e $FAKE/held/$amp ]] || rm -f "$FAKE/running/$amp"
+        elif [[ $old == off ]]; then
+          echo "load $amp" >> "$FAKE/log"
+          # the first load adds the firmware controls; with FAKE_LATE all but
+          # CAL_R appear only after that many more listings (the driver adds
+          # each from its own work item)
+          for c in CSPL_STATE CAL_AMBIENT CAL_R CAL_STATUS CAL_CHECKSUM CAL_SET_STATUS; do
+            c="$amp DSP1 Protection cd $c"
+            listed "$c" && continue
+            if [[ -n ${FAKE_LATE:-} && $c != *" CAL_R" ]]; then echo "$c" >> "$FAKE/deferred"; echo "$FAKE_LATE" > "$FAKE/late"
+            else echo "$c" >> "$FAKE/ctls"; fi
+          done
+        fi ;;
+      # START_ON_WRITE: a stream starts that DSP at its first CAL_* write (once;
+      # with START_HELD the stream keeps holding it)
+      *" CAL_"*)
+        if [[ ${START_ON_WRITE:-} == "$amp" && ! -e $FAKE/started ]]; then
+          touch "$FAKE/running/$amp" "$FAKE/started"
+          [[ -n ${START_HELD:-} ]] && touch "$FAKE/held/$amp"
+        fi ;;
+    esac
+    echo "$v" > "$FAKE/val/$(key "$n")"
+    # TERM_ON_CSET: the script gets SIGTERM while this write runs (as at the
+    # unit's timeout); TERM2_ON_CSET: a second one, on a later write to that
+    # control. Only plain `ctl cset` calls, whose parent is the script's own
+    # bash. FAKE_TERM_RC: this amixer then exits as if the signal (systemd
+    # sends it to the whole cgroup) had killed it too.
+    if [[ -n ${TERM_ON_CSET:-} && $n == *"$TERM_ON_CSET" && ! -e $FAKE/termed ]]; then
+      touch "$FAKE/termed"; kill -TERM "$PPID"; exit "${FAKE_TERM_RC:-0}"
+    fi
+    if [[ -n ${TERM2_ON_CSET:-} && $n == *"$TERM2_ON_CSET" && -e $FAKE/termed && ! -e $FAKE/termed2 ]]; then
+      touch "$FAKE/termed2"; kill -TERM "$PPID"; exit "${FAKE_TERM_RC:-0}"
+    fi ;;
+  *) echo "fake amixer: $*" >&2; exit 99 ;;
+esac
+exit 0
+FAKE
+cat > "$T/bin/blockdev" <<'FAKE'
+#!/bin/bash
+echo "blockdev $*" >> "$FAKE/log"
+case $1 in
+  --getro) cat "$FAKE/ro" ;;
+  --setro) echo 1 > "$FAKE/ro" ;;
+  --setrw) echo 0 > "$FAKE/ro" ;;
+esac
+FAKE
+cat > "$T/bin/dump.f2fs" <<'FAKE'
+#!/bin/bash
+echo "dump.f2fs $*" >> "$FAKE/log"
+[[ $(<"$FAKE/ro") == 1 ]] || { echo "dump.f2fs: the device is writable" >&2; exit 9; }
+[[ $1 == -r && $2 == -f && $3 == -o && $5 == /dev/sda1 ]] || exit 8
+mkdir -p "$4/audio" && cp "$FAKE/speaker.cal" "$4/audio/speaker.cal"
+FAKE
+printf '#!/bin/sh\nexit 0\n' > "$T/bin/sync"
+chmod +x "$T/bin/"*
+
+le32() { printf "\\x$(printf %02x $(($1 & 255)))\\x$(printf %02x $(($1 >> 8 & 255)))\\x$(printf %02x $(($1 >> 16 & 255)))\\x$(printf %02x $(($1 >> 24 & 255)))"; }
+# record 0 (Top) and record 1 (Bottom): R, status 1, checksum R + 1, ambient, two spare words
+# (R 0x123456 and 0x0a0b0c: below 2^24, as the range check wants)
+mkcal() { local v; for v in "$@"; do le32 "$v"; done > "$F/speaker.cal"; }
+goodcal() { mkcal 1193046 1 1193047 25 0 0 658188 1 658189 26 0 0; }
+
+# A sound card with both amplifiers and no firmware loaded yet (Preload off)
+reset() {
+  rm -rf "$F" "$st"; mkdir -p "$F/val" "$F/running" "$F/held"
+  : > "$F/log"; : > "$T/mountinfo"; echo 0 > "$F/ro"
+  printf '%s\n' "Top DSP1 Preload Switch" "Top DSP1 Firmware" "Bottom DSP1 Preload Switch" "Bottom DSP1 Firmware" > "$F/ctls"
+  echo off > "$F/val/Top_DSP1_Preload_Switch"; echo off > "$F/val/Bottom_DSP1_Preload_Switch"
+  goodcal
+}
+# both DSPs loaded and already run (Preload on, every firmware control listed)
+loaded_and_run() {
+  local p c
+  for p in Top Bottom; do
+    echo on > "$F/val/${p}_DSP1_Preload_Switch"
+    for c in CSPL_STATE CAL_AMBIENT CAL_R CAL_STATUS CAL_CHECKSUM CAL_SET_STATUS; do echo "$p DSP1 Protection cd $c" >> "$F/ctls"; done
+    touch "$F/running/$p"
+  done
+}
+run() {
+  PATH=$T/bin:$PATH FAKE=$F TEST_MARKER=${TEST_MARKER-$st/speaker-cal-started} OMAMOBILE_STATE_DIR=$st \
+    OMAMOBILE_SYSBLOCK=$T/sysblock OMAMOBILE_MOUNTINFO=$T/mountinfo OMAMOBILE_RUN_DIR=$T/run OMAMOBILE_SPK_CTL_WAIT=1 \
+    bash "$script" "$@" 2>&1
+}
+cal_writes() { grep '^cset .* CAL_' "$F/log" || true; }
+want_writes="cset Top DSP1 Protection cd CAL_AMBIENT = 0x00,0x00,0x00,0x19
+cset Top DSP1 Protection cd CAL_R = 0x00,0x12,0x34,0x56
+cset Top DSP1 Protection cd CAL_STATUS = 0x00,0x00,0x00,0x01
+cset Top DSP1 Protection cd CAL_CHECKSUM = 0x00,0x12,0x34,0x57
+cset Bottom DSP1 Protection cd CAL_AMBIENT = 0x00,0x00,0x00,0x1a
+cset Bottom DSP1 Protection cd CAL_R = 0x00,0x0a,0x0b,0x0c
+cset Bottom DSP1 Protection cd CAL_STATUS = 0x00,0x00,0x00,0x01
+cset Bottom DSP1 Protection cd CAL_CHECKSUM = 0x00,0x0a,0x0b,0x0d"
+# the run left nothing behind: marker, private copy, read-only flag, Preload off
+clean() {
+  [[ ! -e $st/speaker-cal-started ]] || fail "$1: the marker is left behind"
+  [[ -z $(ls -A "$T/run") ]] || fail "$1: the private copy of speaker.cal is left in the run dir"
+  [[ $(<"$F/ro") == 0 ]] || fail "$1: persist's read-only flag is not put back"
+  [[ $(<"$F/val/Top_DSP1_Preload_Switch") == on && $(<"$F/val/Bottom_DSP1_Preload_Switch") == on ]] \
+    || fail "$1: a Preload Switch is left off"
+  ! grep -q '^no-marker' "$F/log" || fail "$1: amixer ran before the marker was on disk"
+}
+novalues() {
+  [[ $1 != *0x12,0x34* && $1 != *0x0a,0x0b* && $1 != *1193046* && $1 != *658188* && $1 != *0x11,0x11* ]] \
+    || fail "a calibration value is in the output"
+}
+# no CAL_* control is read after it was written (that would only read the cache back)
+noreadback() {
+  awk '/^cset .* CAL_/ { n = $0; sub(/^cset /, "", n); sub(/ = .*/, "", n); w[n] = 1 }
+       /^cget .* CAL_/ { n = $0; sub(/^cget /, "", n); if (n in w) bad = 1 }
+       END { exit bad }' "$F/log" || fail "$1: a CAL_* control is read back after its write"
+}
+
+# Top's CAL_AMBIENT and CAL_R hold values before a run (pre); are they back after it?
+pre() { echo 0x00,0x00,0x00,0x07 > "$F/val/Top_DSP1_Protection_cd_CAL_AMBIENT"; echo 0x00,0x11,0x11,0x11 > "$F/val/Top_DSP1_Protection_cd_CAL_R"; }
+back() { [[ $(<"$F/val/Top_DSP1_Protection_cd_CAL_AMBIENT") == 0x00,0x00,0x00,0x07 && $(<"$F/val/Top_DSP1_Protection_cd_CAL_R") == 0x00,0x11,0x11,0x11 ]]; }
+
+# 1. no amplifier controls (the AoC was left off): nothing, persist not read
+reset; : > "$F/ctls"
+rc=0; out=$(run) || rc=$?
+[[ $rc == 3 && $out == *"nothing to do"* ]] || fail "without the amplifier controls it exits 3 (skipped): $out"
+! grep -q 'blockdev\|dump.f2fs' "$F/log" || fail "without the amplifier controls persist is not read"
+[[ ! -e $st/speaker-cal-started ]] || fail "the marker is removed when there is nothing to do"
+pass "no sound card: exits 3 (skipped) without reading persist"
+
+# 2. a marker left by a run that never finished: no amixer call at all, even
+# with a Preload Switch off, exit 3 (skipped); --retry clears it
+reset; loaded_and_run; echo off > "$F/val/Top_DSP1_Preload_Switch"; rm -f "$F/running/Top"
+mkdir -p "$st"; date -Is > "$st/speaker-cal-started"
+rc=0; out=$(run) || rc=$?
+[[ $rc == 3 && $out == *"never finished"* && $out == *"no amplifier control is touched"* ]] || fail "a marker skips the calibration with exit 3: $out"
+[[ ! -s $F/log ]] || fail "a marker run calls no amixer, blockdev or dump.f2fs: $(<"$F/log")"
+[[ -e $st/speaker-cal-started && $(<"$F/val/Top_DSP1_Preload_Switch") == off ]] || fail "the marker stays until --retry and Top's switch is left as it was"
+rc=0; out=$(run --retry) || rc=$?
+[[ $rc == 0 && $out != *"never finished"* && $out == *"handed to both DSPs"* ]] || fail "--retry runs again: $out"
+clean "--retry"
+pass "a hang marker skips the calibration without touching the card; --retry runs it"
+
+# 3. fresh boot: the script loads the firmware and writes both records, Top then Bottom
+reset
+rc=0; out=$(run) || rc=$?
+[[ $rc == 0 && $out == *"handed to both DSPs"* ]] || fail "a fresh boot passes: $out"
+[[ $(cal_writes) == "$want_writes" ]] || fail "the CAL writes: $(cal_writes)"
+[[ $(grep -c '^load ' "$F/log") == 2 ]] || fail "each firmware loads once"
+grep -q '^blockdev --setro /dev/sda1' "$F/log" || fail "persist is set read-only before dump.f2fs"
+! grep -q 'Preload Switch = off' "$F/log" || fail "a DSP that never ran is not reloaded"
+noreadback "fresh boot"
+clean "fresh boot"; novalues "$out"
+pass "fresh boot: firmware loaded, both records written in the driver's byte order, nothing read back, nothing left behind"
+
+# 3b. amixer's exit code on the EPERM read does not matter (the phone's alsa-utils is not read)
+reset
+rc=0; out=$(FAKE_EPERM_RC=1 run) || rc=$?
+[[ $rc == 0 && $(cal_writes) == "$want_writes" ]] || fail "an EPERM read that exits 1 counts as not running too: $out"
+clean "EPERM exit 1"
+pass "the EPERM text decides, whether cget exits 0 (alsa-utils 1.2.16) or 1"
+
+# 4. the firmware's controls appear one by one after the load
+reset
+rc=0; out=$(FAKE_LATE=3 run) || rc=$?
+[[ $rc == 0 && $(cal_writes) == "$want_writes" ]] || fail "late controls are waited for: $out"
+clean "late controls"
+pass "it waits for every firmware control it uses, not only CAL_R"
+
+# 5. both DSPs already ran: Preload off, then on (a reload), then the writes
+reset; loaded_and_run
+rc=0; out=$(run) || rc=$?
+[[ $rc == 0 && $(cal_writes) == "$want_writes" ]] || fail "a DSP that already ran is reloaded and written: $out"
+[[ $(grep -c 'Preload Switch = off' "$F/log") == 2 && $(grep -c '^load ' "$F/log") == 2 ]] || fail "each DSP is reloaded once"
+noreadback "reload"
+[[ $(grep -n 'cset Top DSP1 Preload Switch = off' "$F/log" | cut -d: -f1) -lt $(grep -n 'cset Top DSP1 Protection cd CAL_AMBIENT' "$F/log" | cut -d: -f1) ]] \
+  || fail "the reload comes before the writes"
+[[ $out == *"Top: the DSP has already run"* ]] || fail "the reload is logged"
+clean "reload"; novalues "$out"
+pass "a DSP that already ran gets its firmware reloaded before the writes"
+
+# 6. an open stream holds Top: refuse, write nothing, Preload back on
+reset; loaded_and_run; touch "$F/held/Top"
+rc=0; out=$(run) || rc=$?
+[[ $rc == 1 && $out == *"Top: the DSP still runs after Preload off"* ]] || fail "a held DSP is refused: $out"
+[[ -z $(cal_writes) ]] || fail "a held DSP gets no writes"
+clean "held stream"
+pass "a stream holding the DSP: no writes, the Preload Switch goes back on"
+
+# 6b. CSPL_STATE reads with neither a value nor EPERM: cannot tell, no writes
+reset; loaded_and_run
+rc=0; out=$(FAKE_CSPL_ODD=1 run) || rc=$?
+[[ $rc == 1 && $out == *"Top: cannot tell whether the DSP has run"* ]] || fail "an odd CSPL_STATE read is refused: $out"
+[[ -z $(cal_writes) ]] && ! grep -q 'Preload Switch = off' "$F/log" || fail "an odd CSPL_STATE read changes nothing"
+clean "odd CSPL_STATE"
+pass "a CSPL_STATE read with neither a value nor EPERM: cannot tell, nothing written"
+
+# 7. a stream starts Bottom at its first CAL write: the run fails, Bottom's
+# DSP is stopped (Preload off), its cache put back and its firmware loaded
+# again; Top keeps its whole record
+bzero() { local c; for c in CAL_AMBIENT CAL_R CAL_STATUS CAL_CHECKSUM; do [[ $(<"$F/val/Bottom_DSP1_Protection_cd_$c") == 0x00,0x00,0x00,0x00 ]] || return 1; done; }
+topkept="Top keeps its whole record (taken at its first stream); Bottom gets no calibration from this run"
+reset
+rc=0; out=$(START_ON_WRITE=Bottom run) || rc=$?
+[[ $rc == 1 && $out == *"Bottom: the DSP started during the writes; Preload Switch off to stop it"* && $out == *"Bottom: the DSP started while the calibration was written"* && $out == *"Bottom: the writes so far were undone"* ]] || fail "a start during the writes fails and is undone: $out"
+[[ $out == *"$topkept"* ]] || fail "the Top-keeps-its-record line is logged: $out"
+bzero || fail "Bottom's four CAL controls hold what they held before the run"
+[[ $(<"$F/val/Top_DSP1_Protection_cd_CAL_CHECKSUM") == 0x00,0x12,0x34,0x57 ]] || fail "Top keeps its whole record"
+off=$(grep -n 'cset Bottom DSP1 Preload Switch = off' "$F/log" | cut -d: -f1 || true); last=$(grep -n 'cset Bottom DSP1 Protection cd CAL_' "$F/log" | tail -n1 | cut -d: -f1 || true)
+[[ -n $off && $off -lt $last && $(grep -c '^load Bottom' "$F/log") == 2 ]] || fail "Bottom is stopped before its cache is put back, then its firmware loads again"
+clean "start during the writes"; novalues "$out"
+# the stream keeps holding Bottom: the DSP still runs after Preload off, reboot
+reset
+rc=0; out=$(START_ON_WRITE=Bottom START_HELD=1 run) || rc=$?
+[[ $rc == 1 && $out == *"Bottom: the DSP still runs after Preload off"*"reboot before any speaker stream"* ]] || fail "a held DSP that started during the writes says to reboot: $out"
+[[ $out != *"run again with the speaker PCM closed"* ]] || fail "a held DSP gets the reboot line only, not also 'run again': $out"
+clean "held start during the writes"; novalues "$out"
+# a write fails on a DSP that started during the writes: the driver cached
+# that value, so it is put back too (with the DSP stopped first)
+reset; pre
+rc=0; out=$(START_ON_WRITE=Top FAIL_CSET="Top DSP1 Protection cd CAL_R" FAIL_ONCE=1 run) || rc=$?
+[[ $rc == 1 && $out == *"Top: writing CAL_R failed"* && $out == *"Top: the writes so far were undone"* ]] || fail "a failed write on a running DSP is undone: $out"
+back || fail "the failed write that the driver cached on a running DSP is put back"
+grep -q 'cset Top DSP1 Preload Switch = off' "$F/log" || fail "a DSP that started during the writes is stopped"
+clean "failed write on a running DSP"; novalues "$out"
+pass "a DSP that starts during its writes: stopped, cache put back (a failed write too), firmware loaded again; held by a stream: reboot"
+
+# 8. a write that fails, after a reload: Preload goes back on, exit 1
+reset; loaded_and_run
+rc=0; out=$(FAIL_CSET="Top DSP1 Firmware" run) || rc=$?
+[[ $rc == 1 && $out == *"Top DSP1 Firmware failed"* ]] || fail "a failed firmware select fails: $out"
+grep -q 'cset Top DSP1 Preload Switch = on' "$F/log" || fail "the cleanup turns Top's Preload Switch on again"
+clean "failed firmware select"
+pass "a failed write exits 1 and leaves no Preload Switch off"
+
+# 8b. a CAL write that fails midway: the amplifier's earlier writes are put back
+reset; loaded_and_run; pre
+rc=0; out=$(FAIL_CSET=CAL_STATUS FAIL_ONCE=1 run) || rc=$?
+[[ $rc == 1 && $out == *"Top: writing CAL_STATUS failed"* && $out == *"Top: the writes so far were undone"* ]] || fail "a failed CAL write is undone: $out"
+back || fail "Top's CAL_AMBIENT and CAL_R hold what they held before the run"
+# the failed write keeps its undo entry: on a stopped DSP it puts back the value the cache still holds
+grep -q 'cset Top DSP1 Protection cd CAL_STATUS = 0x00,0x00,0x00,0x00' "$F/log" || fail "the write that failed is put back too"
+[[ -z $(grep 'cset Bottom .* CAL_' "$F/log") ]] || fail "Bottom is not written after Top failed"
+[[ $out != *"keeps its whole record"* ]] || fail "no Top-keeps-its-record line when Top failed"
+clean "failed CAL write"; novalues "$out"
+# a control that refuses every write: its put-back fails too, so the run says
+# to reboot (perhaps more than needed, never a false all-clear)
+reset; loaded_and_run; pre
+rc=0; out=$(FAIL_CSET=CAL_STATUS run) || rc=$?
+[[ $rc == 1 && $out == *"Top: putting the cached values back failed"*"reboot before any speaker stream"* ]] || fail "a control that refuses every write ends with the reboot line: $out"
+back || fail "the controls that took their writes are put back"
+clean "control that refuses every write"; novalues "$out"
+# Bottom fails after Top passed: Top keeps its full record, Bottom's writes are put back
+reset; loaded_and_run
+rc=0; out=$(FAIL_CSET="Bottom DSP1 Protection cd CAL_R" FAIL_ONCE=1 run) || rc=$?
+[[ $rc == 1 && $out == *"Bottom: the writes so far were undone"* && $out == *"$topkept"* ]] || fail "Bottom's failed write is undone and Top's kept record logged: $out"
+[[ $(<"$F/val/Top_DSP1_Protection_cd_CAL_CHECKSUM") == 0x00,0x12,0x34,0x57 && $(<"$F/val/Bottom_DSP1_Protection_cd_CAL_AMBIENT") == 0x00,0x00,0x00,0x00 ]] \
+  || fail "Top keeps its whole record and Bottom's CAL_AMBIENT is put back"
+clean "failed Bottom write"; novalues "$out"
+# the putting back fails too: say so, reboot before any speaker stream
+reset; loaded_and_run; pre
+rc=0; out=$(FAIL_CAL_AFTER=2 run) || rc=$?
+[[ $rc == 1 && $out == *"Top: putting the cached values back failed"*"reboot before any speaker stream"* ]] || fail "a failed undo says to reboot: $out"
+clean "failed undo"; novalues "$out"
+# SIGTERM (the unit's timeout) during a write: the trap waits for amixer, then
+# undoes; also when amixer itself dies of it (exit 143: systemd signals the
+# whole cgroup; bash runs the trap before the `||` branch)
+for trc in 0 143; do
+  reset; loaded_and_run; pre
+  rc=0; out=$(TERM_ON_CSET="Top DSP1 Protection cd CAL_R" FAKE_TERM_RC=$trc run) || rc=$?
+  [[ $rc == 143 && $out == *"Top: the writes so far were undone"* ]] || fail "SIGTERM during the writes is undone (amixer exit $trc, rc $rc): $out"
+  back || fail "after SIGTERM (amixer exit $trc) Top's CAL_AMBIENT and CAL_R hold what they held before"
+  clean "SIGTERM, amixer exit $trc"; novalues "$out"
+done
+# a second SIGTERM during the cleanup does not end it halfway
+reset; loaded_and_run; pre
+rc=0; out=$(TERM_ON_CSET="Top DSP1 Protection cd CAL_R" TERM2_ON_CSET="Top DSP1 Protection cd CAL_AMBIENT" run) || rc=$?
+grep -q '^cset Top DSP1 Protection cd CAL_AMBIENT = 0x00,0x00,0x00,0x07' "$F/log" || fail "the second SIGTERM came during the cleanup's put-back"
+[[ $rc == 143 && $out == *"Top: the writes so far were undone"* ]] || fail "a second SIGTERM during the cleanup (rc $rc): $out"
+back || fail "after two SIGTERMs Top's CAL_AMBIENT and CAL_R hold what they held before"
+clean "two SIGTERMs"; novalues "$out"
+# SIGTERM during the writes of a DSP that started during them: the cleanup
+# stops it before the put-back, and turning Preload on loads the firmware again
+reset; pre
+rc=0; out=$(START_ON_WRITE=Top TERM_ON_CSET="Top DSP1 Protection cd CAL_R" run) || rc=$?
+[[ $rc == 143 && $out == *"Top: the DSP started during the writes; Preload Switch off to stop it"* && $out == *"Top: the writes so far were undone"* ]] || fail "SIGTERM on a DSP that started during the writes (rc $rc): $out"
+off=$(grep -n 'cset Top DSP1 Preload Switch = off' "$F/log" | cut -d: -f1 || true); put=$(grep -n 'cset Top DSP1 Protection cd CAL_AMBIENT = 0x00,0x00,0x00,0x07' "$F/log" | cut -d: -f1 || true)
+[[ -n $off && -n $put && $off -lt $put && $(grep -c '^load Top' "$F/log") == 2 ]] || fail "the cleanup stops Top before the put-back, then its firmware loads again"
+back || fail "after SIGTERM on a started DSP Top's CAL_AMBIENT and CAL_R hold what they held before"
+clean "SIGTERM on a started DSP"; novalues "$out"
+# SIGTERM while Preload is being turned off for the reload: the cleanup turns it on again
+for trc in 0 143; do
+  reset; loaded_and_run
+  rc=0; out=$(TERM_ON_CSET="Top DSP1 Preload Switch" FAKE_TERM_RC=$trc run) || rc=$?
+  grep -q '^cset Top DSP1 Preload Switch = off' "$F/log" || fail "the SIGTERM came on Preload off"
+  [[ $rc == 143 && -z $(cal_writes) ]] || fail "SIGTERM on Preload off (amixer exit $trc, rc $rc) writes nothing: $out"
+  clean "SIGTERM on Preload off, amixer exit $trc"
+done
+pass "a write that stops midway (error, SIGTERM, a second SIGTERM in the cleanup, SIGTERM on a DSP that started) puts back that amplifier's writes; a failed undo says to reboot"
+
+# 9. persist: mounted (under any name), bad checksum, status not 1, R or ambient
+# out of range, short file, dump.f2fs fails
+reset; echo "36 25 8:1 / /mnt/persist ro,relatime shared:1 - f2fs /dev/disk/by-partlabel/persist ro" > "$T/mountinfo"
+rc=0; out=$(run) || rc=$?
+[[ $rc == 1 && $out == *"/dev/sda1 is mounted"* ]] || fail "a mounted persist is refused, whatever name it was mounted by: $out"
+! grep -q 'blockdev --setro\|dump.f2fs' "$F/log" || fail "a mounted persist is not touched"
+reset; echo "36 25 8:17 / /mnt/x ro,relatime shared:1 - f2fs /dev/sda1x ro" > "$T/mountinfo"
+rc=0; out=$(run) || rc=$?
+[[ $rc == 0 ]] || fail "another device's mount is not persist: $out"
+reset; mkcal 1193046 1 1193048 25 0 0 658188 1 658189 26 0 0
+rc=0; out=$(run) || rc=$?
+[[ $rc == 1 && $out == *"Top: calibration checksum does not match"* ]] || fail "a bad checksum is refused: $out"
+! grep -q 'Preload Switch\|CAL_' "$F/log" || fail "a bad record changes nothing on the card"
+[[ $(<"$F/ro") == 0 && -z $(ls -A "$T/run") ]] || fail "a bad record leaves no copy and no read-only flag"
+reset; mkcal 1193046 1 1193047 25 0 0 658188 2 658190 26 0 0
+rc=0; out=$(run) || rc=$?
+[[ $rc == 1 && $out == *"Bottom: calibration status is not 1"* ]] || fail "status 2 in a record is refused: $out"
+reset; mkcal 16777216 1 16777217 25 0 0 658188 1 658189 26 0 0
+rc=0; out=$(run) || rc=$?
+[[ $rc == 1 && $out == *"Top: calibration resistance out of range"* ]] || fail "R >= 2^24 is refused: $out"
+reset; mkcal 0 1 1 25 0 0 658188 1 658189 26 0 0
+rc=0; out=$(run) || rc=$?
+[[ $rc == 1 && $out == *"Top: calibration resistance out of range"* ]] || fail "R 0 is refused: $out"
+reset; mkcal 1193046 1 1193047 25 0 0 658188 1 658189 61 0 0
+rc=0; out=$(run) || rc=$?
+[[ $rc == 1 && $out == *"Bottom: calibration ambient temperature out of range"* ]] || fail "ambient 61 is refused: $out"
+! grep -q 'Preload Switch\|CAL_' "$F/log" || fail "an out-of-range record changes nothing on the card"
+reset; mkcal 1193046 1 1193047 25 0 0
+rc=0; out=$(run) || rc=$?
+[[ $rc == 1 && $out == *"speaker.cal is short"* ]] || fail "a short file is refused: $out"
+reset; rm "$F/speaker.cal"
+rc=0; out=$(run) || rc=$?
+[[ $rc == 1 && $out == *"speaker.cal not found"* && $(<"$F/ro") == 0 ]] || fail "a dump that fails is refused and the flag goes back: $out"
+reset; echo 1 > "$F/ro"
+rc=0; out=$(run) || rc=$?
+[[ $rc == 0 && $(<"$F/ro") == 1 ]] || fail "a persist that was read-only already stays read-only: $out"
+! grep -q 'blockdev --setrw' "$F/log" || fail "a flag the script did not set is not cleared"
+pass "persist: mounted, bad or out-of-range records, short or missing file are refused, and the read-only flag is only cleared if the script set it"
+
+# 10. check: CAL_SET_STATUS 2 on both passes; 1, or not running, fails; nothing is written
+reset; loaded_and_run
+echo 0x00,0x00,0x00,0x02 > "$F/val/Top_DSP1_Protection_cd_CAL_SET_STATUS"
+echo 0x00,0x00,0x00,0x02 > "$F/val/Bottom_DSP1_Protection_cd_CAL_SET_STATUS"
+rc=0; out=$(TEST_MARKER= run check) || rc=$?
+[[ $rc == 0 && $(grep -c 'calibration applied' <<< "$out") == 2 ]] || fail "check passes on status 2: $out"
+echo 0x00,0x00,0x00,0x01 > "$F/val/Top_DSP1_Protection_cd_CAL_SET_STATUS"
+rc=0; out=$(TEST_MARKER= run check) || rc=$?
+[[ $rc == 1 && $out == *"Top: firmware defaults"* ]] || fail "check fails on status 1: $out"
+rm -f "$F/running/Bottom"
+rc=0; out=$(TEST_MARKER= run check) || rc=$?
+[[ $rc == 1 && $out == *"Bottom: CAL_SET_STATUS unreadable"* ]] || fail "check fails when a DSP does not run: $out"
+! grep -q '^cset' "$F/log" || fail "check writes nothing"
+[[ ! -e $st/speaker-cal-started ]] || fail "check leaves no marker"
+rc=0; out=$(run bogus) || rc=$?
+[[ $rc == 2 ]] || fail "an unknown argument exits 2"
+pass "check: CAL_SET_STATUS 2 on both amplifiers passes, 1 or unreadable fails, nothing is written"
