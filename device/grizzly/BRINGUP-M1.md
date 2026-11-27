@@ -9494,6 +9494,57 @@ This audit used only saved artifacts.
 [malibu-lpdp-dp-encoder]: https://github.com/GrapheneOS/kernel_pixel/blob/cbc6305f4ca4f4a63c4e6f476fd0d0aa09fa2122/private/devices/google/malibu/dts/malibu-dpu.dtsi#L445-L472
 [malibu-lpdp-dptx]: https://github.com/GrapheneOS/kernel_pixel/blob/cbc6305f4ca4f4a63c4e6f476fd0d0aa09fa2122/private/devices/google/malibu/dts/malibu-base.dtsi#L890-L916
 
+###### Offline stock D1 DP-off firmware vote trace
+
+`pack-stock-inventory.py --dsi0-dp0-vote-trace` reuses the attended
+DP-off panel fixture. It checks that the live DT disables the DP
+encoder and keeps the same display module list, scoped I²C and VDDD
+trace. The stock kernel and modules are unchanged. The new trace
+starts after the five-parent, nine-target NV guard. The independent
+90-second warm return remains armed.
+
+The B0 power controller maps `dpu_dp0_pd` (`0x205`) to
+`cpm/syspm/clients/vm1/DpuDp0.v`. The stock
+`power_controller/dpu_dp0_pd/state` debugfs node is mode 0220 and
+has separate read and write handlers. The fixture opens it read-only
+as root under a read-only debugfs mount. The audited stock getter
+(`power_controller.ko+0x4f38`) calls `mbfs_read_file` with the
+resolved handle. In exact D1 CPM the read provider
+(`0x28c6c` → `0x288bc`) looks up the AP client's bitmaps. It
+returns `1` for the current vote bit, `2` if only the secondary
+bit is set, and `0` when both are clear. The fixture preserves
+the raw reply. These values describe the AP client vote. They
+leave physical DP0 power, other clients, and LPDP unresolved.
+
+The trace samples the vote before loading display modules. After
+`vs_drm.ko` loads, it waits up to four seconds for the stock
+`regmap_reg_read` at DSI0 CD-PHY offset `0x7124`, then samples
+the vote again. It requires exactly one matching PHY event between
+the sample markers without trace loss, and retains stock
+`send_mail_mbfs` and `recv_result_mbfs` events for `0x205` in
+the same monotonic trace. A missing getter, unknown reply or
+incomplete capture fails the diagnostic. Two zero replies and an
+empty `0x205` event span would show that the AP vote was clear at
+both samples and that the stock power controller logged no DP0
+request between them. The fixture adds no vote writes, PHY TX or
+host register accesses, or display commit.
+
+The 2026-11-27 offline bundle retained all four other boot images
+byte for byte from the attended DP-off fixture. Replacement
+`init_boot` SHA-256 is
+`72fbd775fadfc4c494952f177fd08955a64ac05e75c7449bbb440aa67ecdb72a`.
+All five image checksums, the AVB checks, the saved slot capacity
+check and the packed helper, guard and module manifests passed.
+The initrd ends at `0x88fb9b5d`, below the FDT at `0x8a000000`.
+Mocks using the packed ARM64 BusyBox checked the sample reader and
+trace validation. The stock getter and trace remain to be tested
+on the device.
+
+| Step and risk | Expect | Stop condition | Rollback |
+| --- | --- | --- | --- |
+| Offline verification, low | Build with `--dsi0-dp0-vote-trace`. Match the five checksums and the original DP-off DTBO. Confirm the NV guard and new trace marker in the archive. | Image, archive or scope mismatch. | Keep the previous verified DP-off bundle. |
+| Attended slot B trial, stock display and storage startup | After a fresh verified nine-partition NV backup and approval, verify the staged images and boot once. Collect the guard, both raw vote replies, the bracketed PHY line and any `0x205` requests and replies from the retained log. | Missing backup or guard, unexpected hardware access, read error, or incomplete trace. | Catch Fastboot with Volume Down at the timed return, select stock A and start Android. Retain the partial log for analysis. |
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler

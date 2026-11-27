@@ -459,6 +459,10 @@ stock_inventory_modules() (
             fi
             if [ "${dsi0_panel_requested:-no}" = yes ] && [ "$manifest" = "$dsi0_manifest" ]; then
                 case $module in
+                    vs_drm.ko)
+                        if [ "${dsi0_dp0_vote_requested:-no}" = yes ]; then
+                            stock_dp0_trace_finish || return 1
+                        fi ;;
                     i2c-designware-core.ko) stock_panel_trace_irq || return 1 ;;
                     s2dos07x02-regulator.ko) stock_panel_trace_disable_probe || return 1 ;;
                     da9188-gpio.ko)
@@ -916,6 +920,17 @@ if [ -e "$dsi0_panel_marker" ] || [ -L "$dsi0_panel_marker" ]; then
     dsi0_panel_requested=yes
     dsi0_helper=/grizzly-inventory/stock-dsi0-panel.sh
 fi
+dsi0_dp0_vote_requested=no
+dsi0_dp0_vote_marker=/grizzly-inventory/dsi0-dp0-vote-trace
+if [ -e "$dsi0_dp0_vote_marker" ] || [ -L "$dsi0_dp0_vote_marker" ]; then
+    if [ "$dsi0_panel_requested" != yes ] ||
+       [ ! -f "$dsi0_dp0_vote_marker" ] || [ -L "$dsi0_dp0_vote_marker" ] ||
+       [ ! -f /grizzly-inventory/dsi0-panel-dp-off ] || [ -L /grizzly-inventory/dsi0-panel-dp-off ] ||
+       [ ! -f /grizzly-inventory/stock-dsi0-dp0-vote.sh ] || [ -L /grizzly-inventory/stock-dsi0-dp0-vote.sh ]; then
+        end_inventory "DSI0 DP0 vote fixture is ambiguous or incomplete"
+    fi
+    dsi0_dp0_vote_requested=yes
+fi
 dc_cid_marker=/grizzly-inventory/dc-cid-trace
 if [ -e "$dc_cid_marker" ] || [ -L "$dc_cid_marker" ]; then
     if [ "$dsi0_genpd_requested" = yes ] || [ "$dsi0_pll_requested" = yes ] ||
@@ -1019,6 +1034,10 @@ if stock_inventory_scan /sys/class/block yes; then
                     end_inventory "DSI0 panel DP exclusion could not be verified"
             fi
             stock_panel_scope_i2c /sys || end_inventory "DSI0 panel I2C scope could not be verified"
+            if [ "$dsi0_dp0_vote_requested" = yes ]; then
+                # shellcheck source=stock-dsi0-dp0-vote.sh
+                . /grizzly-inventory/stock-dsi0-dp0-vote.sh
+            fi
             stock_panel_run "$dsi0_manifest" || end_inventory "DSI0 panel discovery incomplete"
             end_inventory "DSI0 panel discovery, VDDD trace and NV guard complete"
         fi

@@ -46,6 +46,7 @@ NV_RESCUE_INIT_SHA256 = "00784a6ea41f53acdac36ed5c7b81cf6fb90f35067b138bb7c79c07
 NV_RESCUE_FACTORY_RAMDISK_SIZE = 2969964
 DSI0_TRACE_BOARD_SHA256 = "df00e0d6736a3efefcb5bec99c1d7697bbf44830e0427fd3f889abd0f5bb37bb"
 DSI0_CDPHY_SHA256 = "e758f127694b54b47a0dc4b51acf2fd65325ed8f253cabf5c4f9b2738e439df5"
+DSI0_POWER_CONTROLLER_SHA256 = "17ab278a862d22f2ea7f62f4190c222c352756c702e85ad9adb16281f4f9cb7f"
 DSI0_MODULES = (
     "tzprot.ko", "gs-drm-connector.ko", "mipi-cdphy.ko", "mipi-dsi2h.ko",
     "google_icc.ko", "drm_display_helper.ko", "vs_drm.ko",
@@ -338,9 +339,18 @@ def pack(args):
                         write_payload(root / "grizzly-inventory/dsi0-panel-discovery", b"", 0o644)
                         if args.dsi0_panel_dp_off:
                             write_payload(root / "grizzly-inventory/dsi0-panel-dp-off", b"", 0o644)
+                    if args.dsi0_dp0_vote_trace:
+                        controller = capture("bsdtar", "-xOf", vendor_kernel_cpio,
+                                             "lib/modules/power_controller.ko")
+                        if hashlib.sha256(controller).hexdigest() != DSI0_POWER_CONTROLLER_SHA256:
+                            raise ValueError("factory power_controller.ko differs from the audited D1 module")
+                        write_payload(root / "grizzly-inventory/dsi0-dp0-vote-trace", b"", 0o644)
+                        write_payload(root / "grizzly-inventory/stock-dsi0-dp0-vote.sh",
+                                      (HERE / "stock-dsi0-dp0-vote.sh").read_bytes(), 0o644)
                     write_payload(root / "grizzly-inventory" / helper, (HERE / helper).read_bytes(), 0o755)
                     if (args.dsi0_pll_trace or args.dsi0_genpd_trace
-                            or args.dsi0_phy_reset_trace or args.dsi0_rmw_trace):
+                            or args.dsi0_phy_reset_trace or args.dsi0_rmw_trace
+                            or args.dsi0_dp0_vote_trace):
                         cdphy = capture("bsdtar", "-xOf", vendor_kernel_cpio, "lib/modules/mipi-cdphy.ko")
                         if hashlib.sha256(cdphy).hexdigest() != DSI0_CDPHY_SHA256:
                             raise ValueError("factory mipi-cdphy.ko differs from the audited D1 module")
@@ -519,6 +529,8 @@ def pack(args):
             print("NV guard prototype verifies read-only state without exporting block data.")
         if args.dc_cid_trace:
             print("Stock DC CID trace arms before the guarded display load with DSI hosts and PHYs disabled.")
+        elif args.dsi0_dp0_vote_trace:
+            print("Stock DP-off trace brackets the existing DSI0 PHY read with DP0 firmware vote samples.")
         elif args.dsi0_panel_discovery:
             print("Stock DSI0 panel fixture checks scoped I2C binding and the cached DRM connector.")
         elif args.dsi0_rmw_trace:
@@ -584,6 +596,8 @@ def main():
                       help="observe existing stock PHY 0x28 accesses if display activity occurs")
     mode.add_argument("--dsi0-panel-discovery", action="store_true",
                       help="qualify stock panel and connector binding after the NV guard")
+    mode.add_argument("--dsi0-dp0-vote-trace", action="store_true",
+                      help="bracket stock DSI0 PHY init with read-only DP0 vote samples on the DP-off fixture")
     mode.add_argument("--dc-cid-trace", action="store_true",
                       help="trace the stock DC customer ID with DSI host and PHY nodes disabled")
     mode.add_argument("--ufs-refclk-only", action="store_true",
@@ -612,6 +626,9 @@ def main():
     parser.add_argument("--dsi0-panel-dp-off", action="store_true",
                         help="exclude the DP encoder in the B0 DTBO for --dsi0-panel-discovery")
     args = parser.parse_args()
+    if args.dsi0_dp0_vote_trace:
+        args.dsi0_panel_discovery = True
+        args.dsi0_panel_dp_off = True
     if args.dsi0_panel_dp_off and not args.dsi0_panel_discovery:
         parser.error("--dsi0-panel-dp-off requires --dsi0-panel-discovery")
     if args.dsi0_phy_reset_uic_trace:

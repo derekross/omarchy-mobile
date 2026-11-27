@@ -297,14 +297,26 @@ stock_panel_run() (
         "$bb" rmdir "$panel_tracefs"
         return 1
     fi
-    trap 'if [ "$panel_instance_owned" = yes ]; then
+    trap 'if [ "${dsi0_dp0_vote_requested:-no}" = yes ]; then
+              stock_dp0_trace_cleanup || stock_inventory_log "DSI0 DP0 vote cleanup failed"
+          fi
+          if [ "$panel_instance_owned" = yes ]; then
               stock_panel_trace_cleanup || stock_inventory_log "DSI0 panel VDDD cleanup failed"
           fi
           "$bb" umount "$panel_tracefs" && "$bb" rmdir "$panel_tracefs"' 0
     stock_panel_trace_begin || return 1
+    if [ "${dsi0_dp0_vote_requested:-no}" = yes ]; then
+        stock_dp0_trace_begin "$panel_tracefs" || {
+            stock_inventory_log "DSI0 DP0 vote trace could not arm before display load"
+            return 1
+        }
+    fi
     loaded=no
     discovered=no
     if stock_inventory_modules load "$1"; then
+        if [ "${dsi0_dp0_vote_requested:-no}" = yes ]; then
+            stock_dp0_trace_cleanup || return 1
+        fi
         loaded=yes
         if "$bb" sleep 3 && stock_panel_discover /sys initial; then
             discovered=yes
