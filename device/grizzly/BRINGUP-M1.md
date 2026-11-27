@@ -8182,6 +8182,51 @@ Hardware trigger registration and attribution remain
 pending. A later attended boot requires a fresh
 verified nine-partition NV backup and stock A return.
 
+###### Attended stock D1 wrapper vote and display runtime PM trace
+
+On 2026-11-27 the first rescue did not enumerate
+over USB. The retry copied all nine NV partitions
+(3,392,151,552 bytes) privately to the Mac and
+verified their SHA-256 hashes. The trace image
+staged with a matching full `vendor_boot_b`
+readback, booted once on B and passed the NV guard.
+
+The second pulse is the stock display SMMU resuming
+and suspending during IOMMU setup. The ON call stack
+runs from `platform_dma_configure` through
+`of_iommu_configure`, `kvm_arm_smmu_probe_device`,
+`device_link_add`, `rpm_resume` and
+`genpd_runtime_resume`. The OFF stack runs through
+`pm_runtime_work`, `rpm_suspend` and
+`genpd_runtime_suspend`. Both match the named
+`f190000.disp_smmu` runtime PM events.
+
+| Trace time (s) | Witness |
+| --- | --- |
+| 6.460979–6.460982 | SMMU resume starts and enters `RPM_RESUMING` on the display-module task. |
+| 6.461050–6.462468 | That task sends wrapper `0x08` ON and receives result 0. |
+| 6.462506 | SMMU becomes `RPM_ACTIVE` with zero usage references, and the task requests idle. |
+| 6.462543–6.462545 | A worker starts SMMU suspend. |
+| 6.462562–6.462746 | That worker sends wrapper OFF, receives result 0 and completes SMMU suspend. |
+
+The later wrapper ON has a different stack through
+`of_platform_populate` in `dc_probe`. The separate DC
+runtime PM rows and the previously attributed DSI1
+attach and idle cycle were retained. The wrapper
+pulse is a consequence of stock supplier runtime PM.
+The trace does not independently qualify the APB
+gate or external reset for mainline host access.
+
+The trace retained all 194 records and decoded
+seven wrapper stacks and 78 scoped SMMU/DC runtime
+PM events. Ramoops and `SYSTEM_LAST_KMSG` contained
+identical trace rows and matched on all 391 selected
+lines present in both. Six earlier selected lines
+were present only in ramoops. Fastboot returned
+133 seconds after the B boot request. Stock A
+completed boot with enforcing verity and original
+VBMeta.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
