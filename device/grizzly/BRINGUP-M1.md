@@ -9577,6 +9577,61 @@ The timer requested the warm restart at 90.861067 s.
 Fastboot returned and stock D1 Android booted on A with
 enforcing verity and the original VBMeta digest.
 
+###### Offline D1 DP0 PSM1 hardware state audit
+
+Exact D1 CPM dispatches `0x205` through the DP0 record at
+`0x63008`. The pair selects DPU LPCM `0x23`, PSM1.
+The dispatch at `0x39b84`–`0x39ba4` reads the hardware
+state through `0x87c0` → `0x7f90` → `0x1942c`
+before comparing it with the requested state. DP0 ON
+requests `0`. OFF requests `3` and accepts state `4`
+as already off (the unsigned comparison at `0x3b898`).
+State `4` also satisfies BE OFF.
+
+| PSM1 transition | CPM callback | Operation at CPM `0x6f40a000` |
+| --- | --- | --- |
+| DP0 ON, 3 → 0 | `0x3a6a0` | Set bit 5. |
+| DP0 OFF, 0 → 3 | `0x3a678` | Clear bit 5 and set bit 2. |
+| BE OFF, 3 → 4 | `0x3a6c4` | Write zero. |
+| BE ON, 4 → 3 | `0x3a708` | Set bit 2. |
+
+The five-state matrix at `0x2000a79c` drives these
+requests. The request word is shared with other PSMs.
+The independent poll at `0x7ffc` reads sequencer status
+and checks the status flags before testing the low
+nibble against the target state.
+
+The read-only hardware candidate is the descriptor-derived
+status word. The PSM1 descriptor is at AP `0x0f409018`
+(CPM `0x6f409018`). The status formula is the same as
+in the PSM3 audit, with the PSM1 descriptor substituted.
+The DPU initializer leaves that descriptor untouched.
+The saved artifacts contain no captured PSM1 descriptor
+or qualified stock EL1 read of the resulting DPU word.
+Its possible pages span several GC rules. BL31's PMU read
+service excludes the entire AP range and the CPM alias.
+The factory legacy `lpm_pm_domains.ko` DP callbacks
+poll provider base + `0x1010` for states `0` and `3`
+(calls at `0x1fe0` and `0x2058`). That offset would
+map to AP `0x0f40a010` on the D1 LPCM base, outside
+the descriptor formula's possible words. The Grizzly DT
+has no matching provider binding, so the dormant poll
+supplies no stock EL1 access witness.
+
+LPCM operation 3 reads the requested operating level cached
+at `0x20009abf`. The DPU power-dashboard wrapper row reports
+the aggregate vote, and no publisher was found for its
+physical PSM1 row. CPM trace tags `0x230100`, `0x230103`
+and `0x230104` identify PSM1 transition targets, but the
+stock trace DMA path remains disabled and a transition
+record alone cannot supply the state at PHY init.
+
+The prior slot B run establishes what the AP voted.
+Physical DP0 OFF during the stock DSI0 PHY read still
+requires a qualified PSM1 observation at that point.
+The audit leaves both the candidate PSM1 read and the
+mainline PHY TX and host reads disabled.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
