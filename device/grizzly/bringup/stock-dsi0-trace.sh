@@ -16,7 +16,7 @@ group=grizzly_dsi0_cpm
 events='dsi0_clk_call dsi0_clk_result dsi0_rst_call dsi0_rst_result'
 pll_events='dsi0_pll_first dsi0_pll_last dsi0_pll_relock_first dsi0_pll_relock_last dsi0_pll_cfg_first dsi0_pll_cfg_last dsi0_pll_cfg_timeout'
 genpd_events='dsi0_genpd_sync dsi0_genpd_queue_result dsi0_genpd_off_begin dsi0_genpd_off_end'
-phy_reset_event=dsi0_phy_reset_result
+phy_reset_events='dsi0_phy_reset_pm dsi0_phy_reset_result'
 
 remove_probes() {
     result=0
@@ -42,7 +42,7 @@ add_probe() {
 
 case $mode in
     --cleanup)
-        for name in $pll_events $genpd_events "$phy_reset_event"; do
+        for name in $pll_events $genpd_events $phy_reset_events; do
             if [ -d "$1/events/$group/$name" ]; then
                 events="$events $name"
             fi
@@ -78,9 +78,11 @@ case $mode in
             END { if (found != 1) exit 1 }
         ' /proc/kallsyms || exit 1
         created=
+        # Observe the in-use check before the getter tests the return value.
+        add_probe p dsi0_phy_reset_pm 'mipi_cdphy:dw_mipi_debugfs_u32_get+0x48 result=%x0:s32'
         # Observe the real regmap return, which the stock getter discards.
         # This instruction executes only after the in-use PM check passed.
-        add_probe p "$phy_reset_event" 'mipi_cdphy:dw_mipi_debugfs_u32_get+0x5c result=%x0:s32'
+        add_probe p dsi0_phy_reset_result 'mipi_cdphy:dw_mipi_debugfs_u32_get+0x5c result=%x0:s32'
         "$bb" echo 'DSI0 PHY reset probe armed' > "$instance/trace_marker"
         exit 0 ;;
     ''|--mbfs|--apb-reset|--genpd|--pll-lock|--phy-reset) ;;

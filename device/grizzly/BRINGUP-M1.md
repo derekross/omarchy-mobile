@@ -7208,6 +7208,33 @@ The 90-second warm return worked. Fastboot returned
 134 seconds after the trace boot request, and stock A
 completed boot with enforcing verity and matching VBMeta.
 
+###### Offline PHY runtime PM follow-up
+
+The stock driver's successful probe calls
+`devm_pm_runtime_enable()` for the CD-PHY platform
+device. The host's generic PHY init holds a temporary
+runtime reference. A successful DSI0 genpd vote and
+the host's runtime resume leave the PHY platform
+device's own usage and runtime status unverified.
+
+The updated combined fixture records the exact result
+of `pm_runtime_get_if_in_use()` at
+`dw_mipi_debugfs_u32_get+0x48`, before stock checks
+that result. A zero means the PHY was not in use. A
+negative return identifies a runtime PM error. A
+positive return is paired on the same task with the
+existing `regmap_field_read()` result probe.
+The sampler also distinguishes a missing or unreadable
+debugfs file from a read that returns an error.
+The added probe observes a register already written by
+the stock call. The fixture keeps the existing
+in-use check, NV guard and timed return.
+
+The updated `init_boot` SHA-256 is
+`c77ca5e5304a0cebf9051a3a8966f2b68e62161e74eab2523b397fc2bd94796c`.
+Legacy hardware trace replay and synthetic runtime PM
+cases passed offline. The updated fixture has not booted.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler

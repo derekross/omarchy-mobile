@@ -480,11 +480,17 @@ sample_dsi0_phy_resets() {
     for field in phy_rst_n shutdown_n; do
         path=$phy_debugfs/f7c0000.dw_mipi_cdphy/phy_ctrl0_rw_$field
         printf 'DSI0 PHY reset begin %s %s\n' "$1" "$field" > "$instance/trace_marker" || return 1
-        sampled=unavailable
         # The stock getter holds an in-use runtime PM reference across the read.
-        if [ -r "$path" ] && IFS= read -r value < "$path"; then
+        if [ ! -e "$path" ]; then
+            sampled=missing
+        elif [ ! -f "$path" ] || [ ! -r "$path" ]; then
+            sampled=unreadable
+        elif ! IFS= read -r value < "$path"; then
+            sampled=read_failed
+        else
             case $value in
                 0|1|00000000|00000001|0x0|0x1|0x00000000|0x00000001) sampled=$value ;;
+                *) sampled=invalid ;;
             esac
         fi
         printf 'DSI0 PHY reset end %s %s %s\n' "$1" "$field" "$sampled" > "$instance/trace_marker" ||
@@ -554,10 +560,10 @@ run_stock_dsi0_trace() (
         $1 ~ /^dsi0_(clk|rst)_(call|result)$/ { found++; missed += $3 }
         $1 ~ /^dsi0_pll_/ { pll_probes++; missed += $3 }
         $1 ~ /^dsi0_genpd_(sync|queue_result|off_begin|off_end)$/ { genpd_probes++; missed += $3 }
-        $1 == "dsi0_phy_reset_result" { phy_probes++; missed += $3 }
+        $1 ~ /^dsi0_phy_reset_(pm|result)$/ { phy_probes++; missed += $3 }
         END {
             if (found != 4 || missed != 0 || (pll == "yes" && pll_probes != 7) ||
-                (genpd == "yes" && genpd_probes != 4) || (phy == "yes" && phy_probes != 1)) exit 1
+                (genpd == "yes" && genpd_probes != 4) || (phy == "yes" && phy_probes != 2)) exit 1
         }
     ' "$tracefs/kprobe_profile" || {
         stock_inventory_log 'DSI0 CPM probe profile incomplete or missed events'

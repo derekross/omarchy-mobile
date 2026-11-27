@@ -45,13 +45,15 @@ GENPD_QUEUE_RESULT = "dsi0_genpd_queue_result"
 GENPD_SAMPLE = re.compile(r' domain="dpu_dsi0_pd" work=(0x[0-9a-fA-F]+)$')
 GENPD_QUEUED = re.compile(r" queued=([01])$")
 PHY_RESET_ARM = "DSI0 PHY reset probe armed"
+PHY_RESET_PM = "dsi0_phy_reset_pm"
 PHY_RESET_RESULT = "dsi0_phy_reset_result"
 PHY_RESET_PREFIX = "DSI0 PHY reset "
 PHY_RESET_BEGIN = re.compile(r"DSI0 PHY reset begin (after-phy|after-display) (phy_rst_n|shutdown_n)")
 PHY_RESET_END = re.compile(
     r"DSI0 PHY reset end (after-phy|after-display) (phy_rst_n|shutdown_n) "
-    r"(unavailable|(?:0x)?0*[01])"
+    r"(unavailable|missing|unreadable|read_failed|invalid|(?:0x)?0*[01])"
 )
+PHY_RESET_VALUES = re.compile(r"(?:0x)?0*[01]")
 
 
 def display_resource(kind, lpcm, resource):
@@ -145,7 +147,7 @@ def summarize_genpd(timeline, status, required):
 
 
 def summarize_phy_reset(timeline, host_status, required):
-    rows = [row for row in timeline if row[3] == PHY_RESET_RESULT or
+    rows = [row for row in timeline if row[3] in (PHY_RESET_PM, PHY_RESET_RESULT) or
             (row[3] == "tracing_mark_write" and row[4].startswith(PHY_RESET_PREFIX))]
     if not (required or rows):
         return
@@ -163,8 +165,16 @@ def summarize_phy_reset(timeline, host_status, required):
             if not marker or marker.groups() != (phase, field):
                 raise ValueError("unexpected PHY reset begin marker")
             position += 1
+            pm_result = None
             result = None
             sample = begin
+            if position < len(rows) and rows[position][3] == PHY_RESET_PM:
+                sample = rows[position]
+                pm_match = CPM_RESULT.search(sample[4])
+                if not pm_match or sample[2] != begin[2]:
+                    raise ValueError("invalid PHY reset runtime PM result")
+                pm_result = int(pm_match[1])
+                position += 1
             if position < len(rows) and rows[position][3] == PHY_RESET_RESULT:
                 sample = rows[position]
                 result = CPM_RESULT.search(sample[4])
@@ -182,17 +192,25 @@ def summarize_phy_reset(timeline, host_status, required):
             position += 1
 
             value = marker[3]
-            if result == 0 and value != "unavailable":
+            has_value = PHY_RESET_VALUES.fullmatch(value) is not None
+            if pm_result is not None and ((pm_result > 0) != (result is not None)):
+                raise ValueError("PHY reset regmap result disagrees with runtime PM gate")
+            if result == 0 and has_value:
                 state = f"value={int(value, 16)}"
                 confirmed += 1
-            elif result is None and value == "unavailable":
-                state = "unobserved=no_regmap_read"
-            elif result is None:
+            elif result is None and has_value:
                 raise ValueError("PHY reset value lacks a regmap result")
+            elif result is None:
+                cause = "no_regmap_read" if value == "unavailable" else value
+                if pm_result is not None:
+                    cause = "phy_not_in_use" if pm_result == 0 else "pm_check_error"
+                state = f"unobserved={cause}"
             elif result != 0:
                 state = f"unobserved=regmap_error regmap_result={result}"
             else:
                 state = "unobserved=debugfs_unavailable regmap_result=0"
+            if pm_result is not None:
+                state += f" pm_result={pm_result}"
 
             last_on = None
             for timestamp, index, _, event, body in timeline:
