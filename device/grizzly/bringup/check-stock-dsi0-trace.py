@@ -37,6 +37,13 @@ PLL_PHASES = {
 }
 PLL_SAMPLE = re.compile(r" bank=(0x[0-9a-fA-F]+) value=(0x[0-9a-fA-F]+)$")
 DSI0_PLL_BANK = 0x0f7d8800
+GENPD_ARM = "DSI0 genpd probes armed"
+PHY_LOAD = "DSI0 loading mipi-cdphy.ko"
+HOST_LOAD = "DSI0 loading mipi-dsi2h.ko"
+GENPD_EVENTS = ("dsi0_genpd_sync", "dsi0_genpd_off_begin", "dsi0_genpd_off_end")
+GENPD_QUEUE_RESULT = "dsi0_genpd_queue_result"
+GENPD_SAMPLE = re.compile(r' domain="dpu_dsi0_pd" work=(0x[0-9a-fA-F]+)$')
+GENPD_QUEUED = re.compile(r" queued=([01])$")
 
 
 def display_resource(kind, lpcm, resource):
@@ -68,7 +75,68 @@ def summarize_pll(timeline, arm, host_id_time):
     print(f"dsi0_pll_samples={samples}")
 
 
-def summarize(trace):
+def summarize_genpd(timeline, status, required):
+    markers = defaultdict(list)
+    for timestamp, index, _, event, body in timeline:
+        if event == "tracing_mark_write" and body in (GENPD_ARM, PHY_LOAD, HOST_LOAD):
+            markers[body].append((timestamp, index))
+    probe_events = (*GENPD_EVENTS, GENPD_QUEUE_RESULT)
+    if not (required or markers or any(row[3] in probe_events for row in timeline)):
+        return
+    if any(len(markers[name]) != 1 for name in (GENPD_ARM, PHY_LOAD, HOST_LOAD)):
+        raise ValueError("expected one genpd arm, PHY load and host load marker")
+    arm, phy, host = (markers[name][0] for name in (GENPD_ARM, PHY_LOAD, HOST_LOAD))
+    if not arm < phy < host < status:
+        raise ValueError("DSI0 genpd markers out of order")
+
+    samples = defaultdict(list)
+    votes = defaultdict(list)
+    queue_results = defaultdict(list)
+    for timestamp, index, pid, event, body in timeline:
+        order = (timestamp, index)
+        if event in probe_events and order < arm:
+            raise ValueError("DSI0 genpd event precedes arm marker")
+        if not phy < order < host:
+            continue
+        if event in GENPD_EVENTS:
+            sample = GENPD_SAMPLE.search(body)
+            if not sample or not (work := int(sample[1], 16)):
+                raise ValueError("invalid DSI0 genpd work sample")
+            samples[event].append((order, pid, work))
+        elif event == GENPD_QUEUE_RESULT:
+            result = GENPD_QUEUED.search(body)
+            if not result:
+                raise ValueError("invalid genpd queue result")
+            queue_results[pid].append((order, result[1]))
+        elif event in ("send_mail_mbfs", "recv_result_mbfs") and (vote := MBFS.fullmatch(body)):
+            if int(vote[1], 16) == 0x203:
+                votes[event, vote[2]].append((order, pid, vote[3]))
+    on = votes["recv_result_mbfs", "1"]
+    off_request = votes["send_mail_mbfs", "0"]
+    off = votes["recv_result_mbfs", "0"]
+    if any(len(samples[event]) != 1 for event in GENPD_EVENTS) or any(
+        len(messages) != 1 for messages in (on, off_request, off)
+    ):
+        raise ValueError("missing or ambiguous early DSI0 sync, worker or MBFS events")
+    sync, begin, end = (samples[event][0] for event in GENPD_EVENTS)
+    [(on_order, on_pid, on_result)] = on
+    [(request_order, request_pid, _)] = off_request
+    [(off_order, off_pid, off_result)] = off
+    queued = next((result for order, result in queue_results[sync[1]] if order > sync[0]), None)
+    if not (on_order < sync[0] < begin[0] < request_order < off_order < end[0]
+            and on_pid == sync[1]
+            and begin[1] == request_pid == off_pid == end[1]
+            and sync[2] == begin[2] == end[2]
+            and queued == "1"
+            and on_result == off_result == "0"):
+        raise ValueError("early DSI0 OFF could not be matched to the sync and worker")
+    print(f"{sync[0][0]} DSI0 genpd sync pid={sync[1]}")
+    print(f"{begin[0][0]} DSI0 genpd power-off worker pid={begin[1]} "
+          f"off_reply={off_order[0]} worker_return={end[0][0]} result=0")
+    print("dsi0_early_off_correlated=yes")
+
+
+def summarize(trace, require_genpd=False):
     counts = re.search(r"entries-in-buffer/entries-written:\s*(\d+)/(\d+)", trace)
     if not counts or counts[1] != counts[2] or "LOST EVENTS" in trace:
         raise ValueError("trace buffer loss or missing tracefs header")
@@ -199,6 +267,7 @@ def summarize(trace):
         raise ValueError("missing CPM provider arm marker")
     if pll_markers:
         summarize_pll(timeline, pll_markers[0], host_id_time)
+    summarize_genpd(timeline, (read_time, read_index), require_genpd)
     print("APB clock and external reset state require separate evidence.")
     return correlated
 
@@ -206,9 +275,10 @@ def summarize(trace):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("trace", type=Path, help="saved tracefs instance trace")
+    parser.add_argument("--require-genpd", action="store_true", help="require the early DSI0 OFF correlation")
     args = parser.parse_args()
     try:
-        return 0 if summarize(args.trace.read_text()) else 1
+        return 0 if summarize(args.trace.read_text(), args.require_genpd) else 1
     except (OSError, ValueError) as error:
         parser.exit(1, f"{parser.prog}: {error}\n")
 

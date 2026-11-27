@@ -6661,6 +6661,55 @@ intervals are module sequencing, and the effect of omitting
 the early cycle on mainline host readiness remains untested.
 Keep direct mainline host reads disabled.
 
+##### Passive stock D1 genpd power-off trace
+
+Use `pack-stock-inventory.py --dsi0-genpd-trace` with the
+checked D1 NV rescue images and the B0 merge of isolation
+DTBO entry 19. Packaging pins the kernel image, vendor
+images, board DTB and the factory `mipi-cdphy.ko`. PID 1
+verifies the NV guard before arming tracefs and loading
+the seven stock display modules. The independent
+90-second warm return remains armed.
+
+The four new probes use the exact D1 kernel text and
+read registers or RAM-backed genpd data. They add no
+MMIO, power vote, clock request or reset operation.
+
+| Probe | D1 Image offset | Data |
+| --- | --- | --- |
+| `genpd_dev_pm_sync+0x3c` | `0xb2869c` | The DSI0 work pointer at the call to `queue_work_on` |
+| `genpd_dev_pm_sync+0x40` | `0xb286a0` | The queue result, paired by task because the inputs are caller-saved |
+| `genpd_power_off_work_fn+0x4c` | `0xb25524` | The DSI0 work pointer before calling `genpd_power_off` |
+| `genpd_power_off_work_fn+0x50` | `0xb25528` | The same pointer after the call returns |
+
+Run `check-stock-dsi0-trace.py --require-genpd TRACE` on
+the retained trace. Between the PHY and host module load
+markers, require the early DSI0 ON reply on the sync task
+and a successful queue result. The worker must execute the
+same work item. Its task must issue the DSI0 OFF request and
+receive result zero between the two worker probes. Preserve
+the existing clock/reset and host status records. A missing
+marker, lost events, missed probes or an ambiguous sequence
+leaves the correlation unconfirmed. The worker match alone
+cannot establish the APB gate or external reset state.
+
+Offline, the checker replayed four saved profiles with
+identical output and passed 13 synthetic correlation cases.
+A tracefs mock checked probe registration and cleanup,
+DSI0 filters, the stock host-read stop trigger and refusal
+when the PHY was already loaded. Actual D1 probe registration
+and the hardware correlation are pending.
+
+The packed `init_boot` SHA-256 is
+`efa1456c8f96248b0ee353f318adbef64662e67795001919d4b4b1b46aa3165a`.
+The other four images match the attended PHY-init fixture
+byte for byte. All five image hashes, replacement AVB seal,
+archive readback, saved slot fit and handoff bounds passed.
+For an attended run, take a fresh guarded NV backup after
+the latest stock boot, return the rescue to Fastboot and
+keep Android off until the approved trace boot. Use the
+timed return to Fastboot and select stock A.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler

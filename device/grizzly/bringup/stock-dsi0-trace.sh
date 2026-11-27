@@ -5,7 +5,7 @@ set -eu
 
 if [ "$#" -lt 2 ] || [ "$#" -gt 3 ] || [ ! -f "$1/available_events" ] ||
    [ ! -d "$1/instances" ] || [ ! -x "$2" ]; then
-    echo 'usage: stock-dsi0-trace.sh TRACEFS BUSYBOX [--mbfs|--apb-reset|--pll-lock|--pll-probes|--cleanup]' >&2
+    echo 'usage: stock-dsi0-trace.sh TRACEFS BUSYBOX [--mbfs|--apb-reset|--genpd|--pll-lock|--pll-probes|--cleanup]' >&2
     exit 2
 fi
 bb=$2
@@ -15,6 +15,7 @@ probes=$1/kprobe_events
 group=grizzly_dsi0_cpm
 events='dsi0_clk_call dsi0_clk_result dsi0_rst_call dsi0_rst_result'
 pll_events='dsi0_pll_first dsi0_pll_last dsi0_pll_relock_first dsi0_pll_relock_last dsi0_pll_cfg_first dsi0_pll_cfg_last dsi0_pll_cfg_timeout'
+genpd_events='dsi0_genpd_sync dsi0_genpd_queue_result dsi0_genpd_off_begin dsi0_genpd_off_end'
 
 remove_probes() {
     result=0
@@ -40,7 +41,7 @@ add_probe() {
 
 case $mode in
     --cleanup)
-        for name in $pll_events; do
+        for name in $pll_events $genpd_events; do
             if [ -d "$1/events/$group/$name" ]; then
                 events="$events $name"
             fi
@@ -69,12 +70,12 @@ case $mode in
         add_probe p dsi0_pll_cfg_timeout "mipi_cdphy:dw_dphy_configure_g301+0x20fc $samples" "$bank"
         "$bb" echo 'DSI0 PLL lock probes armed' > "$instance/trace_marker"
         exit 0 ;;
-    ''|--mbfs|--apb-reset|--pll-lock) ;;
+    ''|--mbfs|--apb-reset|--genpd|--pll-lock) ;;
     *) exit 2 ;;
 esac
 
 provider_probes=no
-case $mode in --apb-reset|--pll-lock) provider_probes=yes ;; esac
+case $mode in --apb-reset|--genpd|--pll-lock) provider_probes=yes ;; esac
 
 if [ ! -r /proc/modules ]; then
     echo 'stock-dsi0-trace: mount proc before arming the trace' >&2
@@ -85,6 +86,11 @@ while IFS=' ' read -r module rest; do
         mipi_dsi2h|vs_drm)
             echo 'stock-dsi0-trace: display module already loaded' >&2
             exit 1;;
+        mipi_cdphy)
+            if [ "$mode" = --genpd ]; then
+                echo 'stock-dsi0-trace: PHY probe already ran or can be in progress' >&2
+                exit 1
+            fi;;
     esac
 done < /proc/modules
 if [ "$provider_probes" = yes ]; then
@@ -153,6 +159,20 @@ if [ "$provider_probes" = yes ]; then
     add_probe r64 dsi0_rst_result 'rst_cpm:goog_cpm_rst_send_mba_mail result=$retval:s32'
 fi
 
+if [ "$mode" = --genpd ]; then
+    # The pinned D1 Image puts genpd->name at 0x508. The sync probe
+    # uses x8 = genpd and x2 = &genpd->power_off_work at queue_work_on.
+    # Both worker probes use x20 = genpd and x19 = the same work pointer
+    # on either side of the genpd_power_off call.
+    dsi0_domain='domain == "dpu_dsi0_pd"'
+    add_probe p dsi0_genpd_sync 'genpd_dev_pm_sync+0x3c domain=+0(+1288(%x8)):string work=%x2:x64' "$dsi0_domain"
+    # queue_work_on returns bool in w0; the input registers are caller-saved.
+    add_probe p dsi0_genpd_queue_result 'genpd_dev_pm_sync+0x40 queued=%x0:u8'
+    worker_fields='domain=+0(+1288(%x20)):string work=%x19:x64'
+    add_probe p dsi0_genpd_off_begin "genpd_power_off_work_fn+0x4c $worker_fields" "$dsi0_domain"
+    add_probe p dsi0_genpd_off_end "genpd_power_off_work_fn+0x50 $worker_fields" "$dsi0_domain"
+fi
+
 # The PLL path may run after host probe. PID 1 stops that capture.
 if [ "$mode" != --pll-lock ]; then
     "$bb" echo "traceoff:1 if $status" > "$instance/events/regmap/regmap_reg_read/trigger"
@@ -161,5 +181,8 @@ fi
 if [ "$provider_probes" = yes ]; then
     "$bb" echo 'DSI0 CPM provider probes armed' > "$instance/trace_marker"
     "$bb" echo 'DSI0 PHY init read trace armed' > "$instance/trace_marker"
+fi
+if [ "$mode" = --genpd ]; then
+    "$bb" echo 'DSI0 genpd probes armed' > "$instance/trace_marker"
 fi
 trap - 0
