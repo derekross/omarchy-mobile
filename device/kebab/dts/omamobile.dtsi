@@ -11,9 +11,15 @@
  * configured", the laptop's network interface re-created): the gadget's
  * SSH session died within a minute. Plain Type-C still picks the data role
  * and draws default USB current.
+ *
+ * TCPM needs typec-power-opmode on a port without PD: without it the
+ * Type-C driver fails its probe (-EINVAL), its DP HPD bridge never
+ * registers, the DP controller defers forever and msm DRM never binds,
+ * so the panel stays on simpledrm.
  */
 &pm8150b_typec {
 	connector {
 		pd-disable;
+		typec-power-opmode = "default";
 	};
 };

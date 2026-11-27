@@ -67,8 +67,22 @@ and our `omamobile.dtsi`.
   laptop port that never completes a PD contract, and each is followed by
   `dwc3 a600000.usb: remote wakeup not configured` and a new network
   interface on the laptop: an SSH session lasts seconds to a minute.
-  `pd-disable` on the connector (`omamobile.dtsi`) is built; its boot is
-  the next test.
+  `pd-disable` on the connector (`omamobile.dtsi`) stops it: no `tx_sig`,
+  no link resets, SSH holds. But TCPM also needs `typec-power-opmode` on
+  a port without PD: with `pd-disable` alone `qcom,pmic-typec` failed its
+  probe with -22, so its DP HPD bridge never registered (`aux_bridge:
+  failed to acquire drm_bridge`), the DP controller deferred forever and
+  msm DRM never bound. With `typec-power-opmode = "default"` it probes
+  (`/sys/class/typec/port0` and its partner).
+- **Display.** udev loads `msm`, `panel_samsung_amb655x` and
+  `synaptics_s3908` from the root. msm DRM binds (`card1`, `msm_dpu`:
+  DSI-1, DP-1, writeback), DSI-1 is connected and enabled at 1080x2400,
+  `fb0` is `msmdrmfb`, the backlight is `ae94000.dsi.0` (0-1023). The
+  panel's probe logs `DSI PLL(0) lock failed` and unbalanced clock
+  disable/unprepare warnings, then works. The GPU waits for firmware:
+  `failed to load a650_sqe.fw`.
+- **Touch.** `synaptics_s3908` registers "Synaptics TCM Oncell
+  Touchscreen" (i2c-13, 0x4b).
 - **Root without modules.** Booted into the root on `userdata` before its
   modules were installed, the phone answered ping but not SSH: ufw sets
   its default-deny policy and then can't load its rules, which need
@@ -82,8 +96,8 @@ and our `omamobile.dtsi`.
   link-local address (found with `ping6 ff02::1%<if>`) needs no address on
   the laptop at all.
 
-Next: boot the root with `pd-disable`, then the display (msm DRM and the
-AMB655X panel take over from simpledrm) and touch.
+Next: the GPU (Adreno 650: `a650_sqe.fw`, `a650_gmu.bin` and the zap
+shader signed for this phone, from its own vendor partition).
 
 ## 2026-11-28: Omarchy from `userdata` (`fastboot boot`, Arch root on `userdata`)
 
