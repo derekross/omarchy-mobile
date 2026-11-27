@@ -65,7 +65,7 @@ on an empty part does nothing:
 | --- | --- |
 | Battery | Omarchy's own power panel (`plugins/panels/power/Panel.qml` from `OMARCHY_PATH`) |
 | Wi-Fi or Ethernet | Omarchy's network panel (`plugins/panels/network`) |
-| Bluetooth | Omarchy's Bluetooth panel (`plugins/panels/bluetooth`); on a phone it pairs through `omamobile-bt-agent` (omamobile-omarchy patch 0036) |
+| Bluetooth | Omarchy's Bluetooth panel (`plugins/panels/bluetooth`), which handles the devices the phone knows: connect, disconnect, forget. A new device is paired from quick settings' Bluetooth panel, which runs the phone's agent (`omamobile-bt-agent`). A disconnect from either blocks the device so its own reconnect is refused (omamobile-omarchy patch 0035 for the card), and the block lifts by itself two minutes later, through a timer of the user's manager, or at once on a connect from the phone. A restart inside those two minutes loses the timer: the device then stays blocked until it is connected from the phone |
 | Cellular signal | `CellularPanel.qml`: the carrier, its state, a mobile data switch (`omamobile-sit data on/off`), the signal and whether calls, texts and mobile data work |
 | Clock | `TimePanel.qml`: the day, the date, the time and the time zone |
 

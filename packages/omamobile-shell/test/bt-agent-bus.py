@@ -248,7 +248,38 @@ def disconnect_holds(run):
     run.close()
 
 
+def accepted_pairing_trusted(run):
+    # A car pairs to the phone: the owner says yes to its code, and once it
+    # has paired it is Trusted, so its calls and audio are let in.
+    run.test_call("IncomingPair")
+    assert wait_for(lambda: run.read() and any(e.get("event") == "request" for e in run.lines)), run.lines
+    request = [e for e in run.lines if e.get("event") == "request"][-1]
+    assert request["type"] == "confirm" and request["passkey"] == 123456, request
+    assert request["address"] == "02:00:00:00:00:01", request
+    run.send({"cmd": "reply", "id": request["id"], "accept": True})
+    assert wait_for(lambda: any(e.get("incoming") == "paired" for e in run.entries())), run.entries()
+    assert wait_for(lambda: {"device_set": "Trusted", "value": True} in run.entries()), run.entries()
+    run.test_call("Reconnect")
+    assert wait_for(lambda: any(e.get("reconnect") for e in run.entries())), run.entries()
+    assert [e for e in run.entries() if e.get("reconnect")][-1]["reconnect"] == "trusted", run.entries()
+    run.close()
+
+
+def refused_pairing_untrusted(run):
+    # The owner says no: the pairing is refused and nothing is trusted.
+    run.test_call("IncomingPair")
+    assert wait_for(lambda: run.read() and any(e.get("event") == "request" for e in run.lines)), run.lines
+    request = [e for e in run.lines if e.get("event") == "request"][-1]
+    run.send({"cmd": "reply", "id": request["id"], "accept": False})
+    assert wait_for(lambda: any(e.get("incoming") == "rejected" for e in run.entries())), run.entries()
+    time.sleep(0.5)
+    assert not any(e.get("device_set") == "Trusted" for e in run.entries()), run.entries()
+    run.close()
+
+
 check("disconnect: Blocked first (for two minutes), the device's own reconnect refused; connect lifts it", [], disconnect_holds)
+check("a pairing the owner accepted is Trusted once paired", [], accepted_pairing_trusted)
+check("a pairing the owner refused stays untrusted", [], refused_pairing_untrusted)
 check("--pairable-window: off after registering, on only when asked, off at exit", ["--pairable-window", "120"], window)
 check("--pairable-window: a Busy off is tried again when no change signal follows",
       ["--pairable-window", "120"], missed_signal, quiet=True)

@@ -96,7 +96,10 @@ class Device(dbus.service.Object):
     """One paired, trusted device (a placeholder address), which can be
     connected and disconnected, and whose own reconnect (Reconnect, a test
     call) is refused while it is Blocked and asks the default agent to
-    authorize a service, as src/device.c does, while it isn't Trusted."""
+    authorize a service, as src/device.c does, while it isn't Trusted. With
+    IncomingPair (a test call) it pairs to us as a car's "add phone" does:
+    unpaired and untrusted, it asks the default agent to confirm a passkey
+    and, on yes, is Paired (a PropertiesChanged signal, as BlueZ sends)."""
 
     def __init__(self, bus, manager):
         super().__init__(bus, DEVICE)
@@ -104,6 +107,10 @@ class Device(dbus.service.Object):
         self.props = {"Address": "02:00:00:00:00:01", "Paired": dbus.Boolean(True),
                       "Trusted": dbus.Boolean(True), "Blocked": dbus.Boolean(False),
                       "Connected": dbus.Boolean(False)}
+
+    @dbus.service.signal(PROPS_IFACE, signature="sa{sv}as")
+    def PropertiesChanged(self, interface, changed, invalidated):
+        pass
 
     @dbus.service.method(PROPS_IFACE, in_signature="ss", out_signature="v")
     def Get(self, interface, name):
@@ -147,6 +154,26 @@ class Device(dbus.service.Object):
             dbus.ObjectPath(DEVICE), "0000110b-0000-1000-8000-00805f9b34fb",
             reply_handler=lambda: log(reconnect="authorized"),
             error_handler=lambda error: log(reconnect="rejected", why=error.get_dbus_name()))
+
+
+    @dbus.service.method("org.omamobile.Test", in_signature="", out_signature="")
+    def IncomingPair(self):
+        self.props["Paired"] = dbus.Boolean(False)
+        self.props["Trusted"] = dbus.Boolean(False)
+        agent = self.manager.agent
+        if not agent:
+            log(incoming="rejected", why="no agent")
+            return
+
+        def paired():
+            log(incoming="paired")
+            self.props["Paired"] = dbus.Boolean(True)
+            self.PropertiesChanged(DEVICE_IFACE, {"Paired": dbus.Boolean(True)}, [])
+
+        bus = dbus.SystemBus()
+        dbus.Interface(bus.get_object(agent[0], agent[1]), "org.bluez.Agent1").RequestConfirmation(
+            dbus.ObjectPath(DEVICE), dbus.UInt32(123456), reply_handler=paired,
+            error_handler=lambda error: log(incoming="rejected", why=error.get_dbus_name()))
 
 
 class Root(dbus.service.Object):

@@ -33,7 +33,10 @@ soon as they're dropped) are refused, and only a connect from the panel, which
 lifts the block and marks it Trusted, brings it back. Untrusting it wasn't
 enough: BlueZ then refused its audio, but AirPods still brought their link
 back, showed as connected and played nothing. A service is authorized for a
-Trusted device only, never for one that is merely paired.
+Trusted device only, never for one that is merely paired. A device that pairs
+to the phone (a car's "add phone") is marked Trusted once it has paired, if
+the owner said yes to its request here; otherwise the car's calls and audio
+would be refused right after the owner accepted it.
 
 With --pairable-window SECONDS the helper also owns the adapter's Pairable
 (the panel passes it when Pairable was off as it opened). BlueZ turns
@@ -190,11 +193,13 @@ def main():
 
     pending = {}
     next_id = [1]
+    # Devices whose pairing request the owner said yes to: Trusted once paired.
+    accepted = set()
 
     def ask(kind, device, ok, err, **fields):
         request_id = next_id[0]
         next_id[0] += 1
-        pending[request_id] = (kind, ok, err)
+        pending[request_id] = (kind, ok, err, str(device))
         event = {"event": "request", "id": request_id, "type": kind, "address": address_of(device)}
         event.update(fields)
         emit(event)
@@ -237,6 +242,10 @@ def main():
                 # Paired but not Trusted is a device the owner disconnected.
                 if bool(props.Get(DEVICE_IFACE, "Trusted")):
                     return
+                # One the owner just accepted, asking before its Paired change reached us.
+                if str(device) in accepted and bool(props.Get(DEVICE_IFACE, "Paired")):
+                    trust_accepted(str(device))
+                    return
             except dbus.DBusException:
                 pass
             raise Rejected("Not paired")
@@ -244,7 +253,7 @@ def main():
         @dbus.service.method(AGENT_IFACE, in_signature="", out_signature="")
         def Cancel(self):
             for request_id in list(pending):
-                _, _, err = pending.pop(request_id)
+                _, _, err, _ = pending.pop(request_id)
                 err(Canceled("Canceled"))
             emit({"event": "cancel"})
 
@@ -312,6 +321,8 @@ def main():
             discovery["running"] = False
         if interface == ADAPTER_IFACE and path == adapter_path and "Pairable" in changed:
             run_plan("changed", bool(changed["Pairable"]))
+        if interface == DEVICE_IFACE and path in accepted and (changed.get("Paired") or changed.get("Bonded")):
+            trust_accepted(path)
         # RSSI moves constantly during discovery: update a cache from the
         # change itself rather than asking BlueZ again.
         if interface == DEVICE_IFACE and path in extras and any(key in changed for key in EXTRA_KEYS):
@@ -332,6 +343,7 @@ def main():
 
     def removed(path, interfaces):
         extras.pop(str(path), None)
+        accepted.discard(str(path))
         if DEVICE_IFACE in interfaces:
             # The address is gone with the object; it's the path's tail.
             tail = str(path).rsplit("/", 1)[-1]
@@ -363,6 +375,12 @@ def main():
             dbus.Interface(bus.get_object(BLUEZ, path), PROPS_IFACE).Set(DEVICE_IFACE, name, dbus.Boolean(on))
         except dbus.DBusException:
             pass
+
+    def trust_accepted(path):
+        # The owner said yes to its pairing here, so its calls and audio are
+        # welcome, now and when it reconnects with no panel open.
+        accepted.discard(path)
+        set_flag(path, "Trusted", True)
 
     def connect(address, path, op):
         # The owner wants it: a disconnect's block goes, and its own reconnects are welcome again
@@ -430,14 +448,16 @@ def main():
             entry = pending.pop(command.get("id"), None)
             if not entry:
                 return
-            kind, ok, err = entry
+            kind, ok, err, device = entry
             if not command.get("accept"):
                 err(Rejected("Rejected"))
                 return
             value = reply_value(kind, command.get("value"))
             if value is None:
                 err(Rejected("Bad input"))
-            elif kind == "pin":
+                return
+            accepted.add(device)
+            if kind == "pin":
                 ok(dbus.String(value))
             elif kind == "passkey":
                 ok(dbus.UInt32(value))
