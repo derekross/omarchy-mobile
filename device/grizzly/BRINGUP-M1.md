@@ -9378,6 +9378,63 @@ unverified. Keep PHY TX and DSI0 host reads disabled.
 [malibu-axi2apb5-dpu-dt]: https://github.com/GrapheneOS/kernel_pixel/blob/cbc6305f4ca4f4a63c4e6f476fd0d0aa09fa2122/private/devices/google/malibu/dts/malibu-dpu.dtsi#L271-L294
 [malibu-axi2apb5-clock-dt]: https://github.com/GrapheneOS/kernel_pixel/blob/cbc6305f4ca4f4a63c4e6f476fd0d0aa09fa2122/private/devices/google/malibu/dts/malibu-cpm-clk.dtsi#L14-L62
 
+###### Offline D1 `dbg_clk_ctrl_wrap` readback
+
+In the CID-selected `0x20000005` layout, `dbg_clk_ctrl_wrap`
+is named in two wrapper Q-channel input masks. Setting
+`0x0f791028` bit 1 excludes its asynchronous activity input.
+Setting `0x0f79102c` bit 9 excludes its synchronous
+Q-channel handshake. Both bits default to zero. A read
+would give the exclusion settings. The header supplies
+no debug selector encoding for either input and no field
+for TX gate or reset state.
+[Wrapper input masks][gpcsr-20000005-input-masks]
+
+The same layout's `DPU_GSPAN_DEBUG_APB_PATH_CLKEN` at
+`0x0f7910a0` holds an AON GSPAN debug APB clock-gating
+disable bit, an activity mask and an idle debounce count.
+Those fields describe the debug APB gating policy. The
+`0x32a` variant's ATB gate control at `0x0f791094` names
+the DPU TCU ELA, the DPU funnel and the ATB initiator.
+At that address the `0x20000005` layout defines the BE
+asynchronous activity mask. Neither header connects these
+controls to `dbg_clk_ctrl_wrap` or the DSI0 TX interface.
+[GSPAN debug APB control][gpcsr-gspan-apb] · [0x32a ATB control][gpcsr-32a-atb-control] · [0x20000005 BE mask][gpcsr-20000005-be-async]
+
+Exact D1 ABL records `0x236d58` and `0x236d70` name
+the DPU and FABDISP endpoints of `dpu_atb`. The crash
+diagnostic at `0x55d58` resolves the pair through the
+scan database. The load at `0x58a18` extracts FSM bits
+from the captured scan buffer. The adjacent `dpu_cfg`
+record is a separate configuration link. The stock GIA
+test description names a configuration-link error IRQ
+for that link.
+[FABDISP GIA test description][malibu-fabdisp-gia-test]
+
+Exact D1 GDMC lists `funnel_dpu` at AP `0x0f506000`
+and `funnel_fabdisp` at `0x0f383000` in its CoreSight
+table. That table establishes the funnel addresses.
+The `fabdisp_debug_clocks` path (`0xe1fe`) changes four
+FABDISP clock cells. The DPU ICD test (`0xe0d8` →
+`0xc6bc`) reads each ICD block at offsets `+0x8` and
+`+0xc`, then writes `1` at `+0x10`. These paths supply
+no qualified passive readback for the PHY TX clock or
+external reset.
+
+GC rule `0x30303` covers the DPU funnel and the GPCSR
+page in separate address ranges. The exact FBPK and CPM
+image lack direct AP or CPM literals for the two masks
+and GSPAN debug APB control. The saved B0 DT and
+checked Linux drivers have no identified readback consumer
+for the funnel or GSPAN debug APB control. The saved stock
+display bugreport and 84 retained stock log files yielded
+no exact name or address witness. Keep PHY TX and DSI0
+host reads disabled. This audit used only saved artifacts.
+
+[gpcsr-32a-atb-control]: https://github.com/GrapheneOS/kernel_pixel/blob/cbc6305f4ca4f4a63c4e6f476fd0d0aa09fa2122/private/google-modules/display/vsi-drm/verisilicon/9x00/info/sswrp_dpu_gpcsr_pg_9400_0x32a.h#L1241-L1264
+[gpcsr-20000005-be-async]: https://github.com/GrapheneOS/kernel_pixel/blob/cbc6305f4ca4f4a63c4e6f476fd0d0aa09fa2122/private/google-modules/display/vsi-drm/verisilicon/9x00/info/sswrp_dpu_gpcsr_pg_9400_0x20000005.h#L1346-L1375
+[malibu-fabdisp-gia-test]: https://github.com/GrapheneOS/kernel_pixel/blob/cbc6305f4ca4f4a63c4e6f476fd0d0aa09fa2122/private/devices/google/malibu/dts/malibu-gia-test.dtsi#L1292-L1315
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
