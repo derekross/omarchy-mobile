@@ -9696,6 +9696,47 @@ would supply CPU context and would still leave the
 PSM1 descriptor and its EL1 access unresolved.
 The audit used only saved artifacts.
 
+###### Offline D1 GDMC DPU crash snapshot coverage
+
+The exact GDMC DPU and FABDISP GEM records are
+interconnect monitor descriptors. The five DPU
+records (GDMC image offsets `0x3dbd8`–`0x3dc28`)
+select monitor blocks at CPM aliases `0x6f500000`
+through `0x6f504000` in 4 KiB steps. The related
+FABDISP records select blocks at `0x6f3c0000`,
+`0x6f3c1000`, `0x6f3c4000`, `0x6f3c6000` and
+`0x6f3c7000`. The GEM snapshot path handles monitor
+counters. None of these blocks covers the descriptor
+at AP `0x0f409018` (CPM alias `0x6f409018`).
+
+GDMC's DPU ICD entries (`0x2d95c`–`0x2d988` in
+the image) point to four control words at
+`0x6f4094fc`, `0x6f40953c`, `0x6f4095b8` and
+`0x6f4095f8`, with paired banks at `0x6f78f0xx`.
+The helper at text offset `0xc6bc` reads the
+paired bank's interrupt enable and mask at
+`+0x8` and `+0xc`, then writes at `+0x10`.
+These are individual locations on an interrupt-control
+path. The `DPU_RFW_LPCM` table row points to the
+firewall at `0x6f401000`, and `DPU_LPCM_0` is
+an interconnect ID in the QoS table. Neither defines
+a dump of the LPCM register page.
+
+ABL `0x55d8c`–`0x55ea4` walks pairs of
+interconnect deadlock peers. The DPU/DP0 pair
+uses decode indices `0x1d614` and `0x1d61b`.
+Through `0x58fac` and `0x58854`, the indices
+select five bits of link FSM state from an existing
+scan image. They are independent of the AP MMIO
+address. The retained stock D1 crash log reports
+power-domain scandump disabled (`0/27`) and no
+scan preparation. It contains no decoded DPU/DP0
+peer or PSM1 descriptor. The inspected tables
+provide no stock capture for the descriptor.
+Coverage of a hardware scan chain absent from the
+saved artifacts remains unverified. Keep direct
+PSM1, PHY TX and host reads disabled.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
