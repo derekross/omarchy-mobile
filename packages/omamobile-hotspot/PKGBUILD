@@ -14,7 +14,7 @@ pkgdesc="Omamobile shared Wi-Fi hotspot on its own interface (opt-in per device)
 arch=(aarch64)
 url="https://github.com/derekross/omamobile"
 license=(MIT)
-depends=(bash systemd iw iproute2 networkmanager dnsmasq polkit)
+depends=(bash systemd iw iproute2 networkmanager dnsmasq polkit nftables)  # nftables: client isolation, always on
 optdepends=('ufw: the hotspot opens DHCP, DNS and forwarding on its interface while it is on')
 
 check() {

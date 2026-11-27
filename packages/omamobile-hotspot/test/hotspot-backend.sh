@@ -31,6 +31,7 @@ s=$(be state)
 # on without a profile: one is made with pmf 3 on ap0, 2.4 GHz, then the unit starts
 : > "$ST/log"; be on
 grep -c "^nmcli -e no connection add type wifi con-name Hotspot ifname ap0 ssid Hotspot-husky .*802-11-wireless.band bg .*802-11-wireless-security.pmf 3 802-11-wireless-security.proto rsn 802-11-wireless-security.pairwise ccmp 802-11-wireless-security.group ccmp" "$ST/log" >/dev/null || fail "on makes an RSN/CCMP profile with pmf 3 on ap0 (without proto wpa_supplicant can't build its WPA IE)"
+grep -c "^nmcli -e no connection add .* 802-11-wireless.ap-isolation yes" "$ST/log" >/dev/null || fail "a new profile asks for AP isolation"
 grep -c "^systemctl start omamobile-hotspot.service" "$ST/log" >/dev/null || fail "on starts the unit"
 [[ $(be active) == off ]] || fail "active while off"
 echo activating > "$ST/unit"; [[ $(be active) == on && $(be state | field hotspot) == on ]] || fail "activating counts as on"

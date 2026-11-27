@@ -32,6 +32,21 @@
 # to the hotspot's 2.4 GHz channel); the helper only brings it back if it has no route after the stop.
 # Seen on brcmfmac (9a): with no channel in the profile the access point comes up on channel 6, and each start spends
 # about 2.7 s on wpa_supplicant's P2P device for ap0, which the firmware refuses (p2p-dev-ap0, err=-5); harmless.
+# Client isolation (always, not a switch): the clients reach the internet through the uplink and the phone only for
+# DHCP and DNS, never the phone's other networks (the home LAN), the phone itself, or each other. Own nftables table
+# inet omamobile_hotspot_iso, in place before the profile goes up, refreshed each poll, taken away by down after ap0 is
+# gone; a hotspot whose isolation can't be applied (no nft, nft refuses) does not start, or stops.
+#   input from ap0: replies, DHCP (67/udp) and DNS (53) to an address of ap0 itself; everything else dropped (ssh, the
+#     phone's address on another link)
+#   forward from ap0: dropped to private, shared (CGNAT), loopback, link-local, multicast and reserved IPv4 ranges, so a
+#     home LAN is out of reach whether it is the uplink's own subnet or behind its router; ap0 to ap0 dropped
+#   forward to ap0: only replies (nothing on the uplink side can open a connection to a client)
+#   the phone's own on-link subnets (other than ap0's) are in the drop set as well, so a home LAN on public addresses
+#     directly on the uplink is covered too
+#   IPv6 from and to ap0: dropped (the profile is IPv4 only, ipv6.method ignore)
+# The profile also asks for AP isolation (802-11-wireless.ap-isolation), so clients don't talk to each other inside
+# the radio, where nftables never sees it; whether the firmware honours it is the driver's.
+# Limit: a public-address network behind the uplink's router (not on-link) can't be told from the internet.
 # Why it stopped is left in /run/omamobile-hotspot/last-stop (too-hot, ended, failed: ...), for a look after the fact.
 set -uo pipefail
 export LC_ALL=C
@@ -183,6 +198,51 @@ fwd_restore() {
 # (a route marked linkdown, like usb0 with no cable, carries nothing and is skipped)
 uplinks() { ip -4 route show default 2>/dev/null | awk -v ap="$AP" '/ linkdown/ { next } { for (i = 1; i < NF; i++) if ($i == "dev" && $(i+1) != ap) print $(i+1) }' | sort -u; }
 
+# ---- client isolation (see the header)
+ITABLE=omamobile_hotspot_iso
+# private, shared (100.64/10), loopback, link-local, "this network", multicast, reserved and broadcast (224/3)
+PRIV4='0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 224.0.0.0/3'
+# the whole table in one nft transaction (add+delete+define), so there is never a moment without it; $1 = the phone's
+# on-link subnets for the drop set ('' = none)
+iso_rules() {
+  local lan=${1:-}
+  printf 'add table inet %s\ndelete table inet %s\ntable inet %s {\n' "$ITABLE" "$ITABLE" "$ITABLE"
+  printf '  chain input_iso {\n    type filter hook input priority -5; policy accept;\n'
+  printf '    iifname "%s" meta nfproto ipv6 drop\n' "$AP"
+  printf '    iifname "%s" ct state established,related accept\n' "$AP"
+  printf '    iifname "%s" udp dport 67 accept\n' "$AP"
+  printf '    iifname "%s" meta l4proto { tcp, udp } th dport 53 fib daddr . iif type local accept\n' "$AP"
+  printf '    iifname "%s" drop\n  }\n' "$AP"
+  printf '  chain forward_iso {\n    type filter hook forward priority -5; policy accept;\n'
+  printf '    iifname "%s" meta nfproto ipv6 drop\n    oifname "%s" meta nfproto ipv6 drop\n' "$AP" "$AP"
+  printf '    iifname "%s" oifname "%s" drop\n' "$AP" "$AP"
+  printf '    oifname "%s" ct state != { established, related } drop\n' "$AP"
+  printf '    iifname "%s" ip daddr { %s%s } drop\n' "$AP" "$PRIV4" "${lan:+, $lan}"
+  printf '  }\n}\n'
+}
+# the phone's own on-link IPv4 subnets and host routes (printed without a prefix) on every link but ap0 (a home LAN on
+# public addresses is the uplink's subnet too), comma-separated for the drop set
+onlink() {
+  ip -4 -o route show scope link 2>/dev/null | awk -v ap="$AP" '
+    $1 ~ /^[0-9]{1,3}(\.[0-9]{1,3}){3}(\/[0-9]{1,2})?$/ { for (i = 2; i < NF; i++) if ($i == "dev" && $(i+1) != ap) { print $1; break } }' \
+    | sort -u | paste -sd, - | sed 's/,/, /g'
+}
+# 1 = not applied (the caller stops the hotspot: never a hotspot without it)
+iso_sync() {
+  command -v nft >/dev/null 2>&1 || { log "client isolation: nft is missing"; return 1; }
+  [[ -e $RUN/iso-state ]] || touch "$RUN/iso-state"     # marked first, so down clears even a half-applied set
+  iso_rules "$(onlink)" | nft -f - || { log "client isolation: nft refused the rules"; return 1; }
+  [[ $(cat "$RUN/iso-state" 2>/dev/null) == on ]] || log "client isolation: on"
+  printf 'on\n' > "$RUN/iso-state"
+}
+iso_clear() {
+  # by the table itself, not only the state file: a table left by a crash is removed too
+  if command -v nft >/dev/null 2>&1 && nft list table inet "$ITABLE" >/dev/null 2>&1; then
+    nft delete table inet "$ITABLE" >/dev/null 2>&1 || { log "client isolation: could not remove it; will retry"; return 0; }
+  fi
+  rm -f "$RUN/iso-state"
+}
+
 run() {
   mkdir -p "$RUN"; rm -f "$RUN/last-stop" "$RUN/clients"
   local t sta phy hs i hot=0
@@ -224,10 +284,11 @@ run() {
   fi
   nm connection modify uuid "$hs" connection.interface-name "$AP" connection.autoconnect no 802-11-wireless.mode ap \
     802-11-wireless.band bg 802-11-wireless-security.pmf 3 \
-    802-11-wireless-security.proto rsn 802-11-wireless-security.pairwise ccmp 802-11-wireless-security.group ccmp ipv4.method shared ipv6.method ignore >/dev/null 2>&1 \
+    802-11-wireless-security.proto rsn 802-11-wireless-security.pairwise ccmp 802-11-wireless-security.group ccmp ipv4.method shared ipv6.method ignore 802-11-wireless.ap-isolation yes >/dev/null 2>&1 \
     || { stopped "failed: could not bind the Hotspot settings"; exit 1; }
   # rules persist across a power loss while on: clear any left, then add the set once
   if ufw_on; then ufw_del; ufw_add; fi
+  iso_sync || { stopped "failed: client isolation could not be applied"; exit 1; }
   timeout 45 nmcli -w 40 connection up uuid "$hs" ifname "$AP" >/dev/null 2>&1 || :
   active_on_ap "$hs" || { stopped "failed: the access point did not start"; log "profile did not come up on $AP"; exit 1; }
   # shellcheck disable=SC2046
@@ -241,6 +302,7 @@ run() {
     # an uplink that came up meanwhile (mobile data after Wi-Fi) gets forwarding too
     # shellcheck disable=SC2046
     fwd_on "$AP" $(uplinks)
+    iso_sync || { stopped "failed: client isolation could not be applied"; log "client isolation failed: turning the hotspot off"; exit 0; }
     clients
     (( HOT > 0 )) || continue
     t=$(temp)
@@ -260,6 +322,16 @@ down() {
   if [[ $(cat "$RUN/created" 2>/dev/null) == "$AP" ]]; then
     for ((i = 0; i < 3; i++)); do iw dev "$AP" info >/dev/null 2>&1 || break; iw dev "$AP" del 2>/dev/null || sleep 2; done
     if iw dev "$AP" info >/dev/null 2>&1; then log "could not delete $AP"; else rm -f "$RUN/created"; fi
+  fi
+  # the isolation goes last, and only once nothing can forward from the access point any more (profile down, and a
+  # made interface deleted); otherwise it stays and the next down or a reboot takes it
+  # cleared only on a clear answer that the profile is down: a NetworkManager that doesn't answer (or no profile found)
+  # while ap0 still exists as an access point keeps the table
+  if active_on_ap "$hs" || [[ $(cat "$RUN/created" 2>/dev/null) == "$AP" ]] \
+     || { ! timeout 10 nmcli -t -f DEVICE connection show --active >/dev/null 2>&1 && iw dev "$AP" info 2>/dev/null | grep -q 'type AP'; }; then
+    [[ -e $RUN/iso-state ]] && log "client isolation: $AP may still be up; left in place"
+  else
+    iso_clear
   fi
   [[ -s $RUN/last-stop ]] || stopped "ended"
   sta=$(cat "$RUN/sta" 2>/dev/null) || sta=''

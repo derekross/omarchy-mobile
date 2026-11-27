@@ -57,5 +57,5 @@ itself.
 
 On the 8 Pro: the client Wi-Fi drops for a few seconds when the hotspot starts; with a 2.4 GHz home network it moved
 to the hotspot's channel; a 5 GHz-only home network is untested. Devices without 802.11w can't join. The 8 Pro has no
-mobile data yet, so the uplink is the home Wi-Fi. A hotspot client can reach the home LAN too (forwarding isn't limited
-to one uplink yet).
+mobile data yet, so the uplink is the home Wi-Fi. omamobile-hotspot keeps the clients off the home LAN (private
+address ranges, the uplink's own subnet included) and off the phone except DHCP and DNS; see its README.

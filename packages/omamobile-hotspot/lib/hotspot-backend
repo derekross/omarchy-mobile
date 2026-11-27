@@ -30,12 +30,13 @@ hsuuid() {
   return 1
 }
 unit_state() { timeout 4 systemctl show -p ActiveState --value "$UNIT" 2>/dev/null; }
-# a new profile: 2.4 GHz, shared, PMF required, bound to ap0; never autoconnects (the unit brings it up)
+# a new profile: 2.4 GHz, shared, PMF required, AP isolation (clients don't reach each other), bound to ap0; never autoconnects (the unit brings it up)
 make_profile() {
   nm connection add type wifi con-name "$CON" ifname ap0 ssid "$1" autoconnect no 802-11-wireless.mode ap \
     802-11-wireless.band bg ipv4.method shared ipv6.method ignore 802-11-wireless-security.key-mgmt wpa-psk \
     802-11-wireless-security.psk "$2" 802-11-wireless-security.pmf 3 802-11-wireless-security.proto rsn \
-    802-11-wireless-security.pairwise ccmp 802-11-wireless-security.group ccmp >/dev/null 2>&1
+    802-11-wireless-security.pairwise ccmp 802-11-wireless-security.group ccmp \
+    802-11-wireless.ap-isolation yes >/dev/null 2>&1
 }
 
 state() {

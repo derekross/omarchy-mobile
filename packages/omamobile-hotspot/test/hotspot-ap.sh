@@ -48,6 +48,7 @@ stub ufw 'case "$*" in
 esac'
 stub ip '[[ -e $ST/route ]] && echo "default via 10.0.0.1 dev wlp1s0"; [[ -e $ST/linkdown ]] && echo "default via 10.0.0.1 dev wlp1s0 linkdown"; [[ -e $ST/rmnet ]] && echo "default dev rmnet0 proto static metric 700"; [[ -e $ST/usbdown ]] && echo "default via 172.16.42.2 dev usb1 linkdown"; true'
 stub ping '[[ ! -e $ST/silentgw ]]'
+stub nft '[[ -e $ST/nftfail ]] && exit 1; if [[ $1 == -f ]]; then n=$(ls "$ST"/nft.[0-9]* 2>/dev/null | wc -l); cat > "$ST/nft.$n"; t=$(sed -n "s/^table inet \\([a-z_]*\\) {$/\\1/p" "$ST/nft.$n"); cp "$ST/nft.$n" "$ST/nft.last"; [[ -n $t ]] && cp "$ST/nft.$n" "$ST/nft.$t"; echo "nft-applied $t" >> "$ST/log"; elif [[ $1 == list ]]; then [[ -e $ST/nft.${4:-x} ]]; elif [[ $1 == delete ]]; then rm -f "$ST/nft.${4:-x}"; fi; true'
 stub systemd-notify 'true'
 # the reconnect unit: run at once (the tests read its result); a failing systemd-run is the fallback case
 stub systemd-run '[[ -e $ST/norun ]] && exit 1; while [[ $1 == --* ]]; do shift; done; "$@"'
@@ -124,7 +125,7 @@ echo 0 > "$st/up"; ap run >/dev/null; rm -f "$st/route"; touch "$st/linkdown"; :
 ap down >/dev/null; rm -f "$st/linkdown"
 grep -q "connection up uuid $W ifname wlp1s0" "$st/log" || { echo "FAIL: a linkdown route was taken as working" >&2; exit 1; }
 # a gateway that drops ping but is REACHABLE: the working Wi-Fi is left alone
-stub ip '[[ $1 == -4 && $2 == neigh ]] && { echo "10.0.0.1 lladdr aa:bb:cc:dd:ee:ff REACHABLE"; exit 0; }; [[ -e $ST/route ]] && echo "default via 10.0.0.1 dev wlp1s0"; [[ -e $ST/linkdown ]] && echo "default via 10.0.0.1 dev wlp1s0 linkdown"; [[ -e $ST/rmnet ]] && echo "default dev rmnet0 proto static metric 700"; [[ -e $ST/usbdown ]] && echo "default via 172.16.42.2 dev usb1 linkdown"; true'
+stub ip '[[ $* == "-4 -o route show scope link" && -e $ST/onlink ]] && { printf "%s\n" "198.51.100.0/24 dev wlp1s0 proto kernel scope link src 198.51.100.7" "203.0.113.9 dev wlp1s0 scope link" "10.42.0.0/24 dev ap0 proto kernel scope link src 10.42.0.1"; exit 0; }; [[ $1 == -4 && $2 == neigh ]] && { echo "10.0.0.1 lladdr aa:bb:cc:dd:ee:ff REACHABLE"; exit 0; }; [[ -e $ST/route ]] && echo "default via 10.0.0.1 dev wlp1s0"; [[ -e $ST/linkdown ]] && echo "default via 10.0.0.1 dev wlp1s0 linkdown"; [[ -e $ST/rmnet ]] && echo "default dev rmnet0 proto static metric 700"; [[ -e $ST/usbdown ]] && echo "default via 172.16.42.2 dev usb1 linkdown"; true'
 echo 0 > "$st/up"; ap run >/dev/null; touch "$st/route" "$st/silentgw"; : > "$st/log"
 ap down >/dev/null; rm -f "$st/silentgw"
 grep -q "connection up uuid $W" "$st/log" && { echo "FAIL: bounced a working Wi-Fi whose gateway drops ping" >&2; exit 1; }
@@ -253,4 +254,45 @@ eq "$(OMAMOBILE_HOTSPOT_RUN="$tmp/run2" OMAMOBILE_HOTSPOT_DEVCONF="$tmp/devconf"
 printf 'interface=wlan8\n' > "$tmp/hotspot.conf"
 eq "$(bash -c 'source <(sed -n "/^conf()/p" "$0"); CONF=$1 DEVCONF=$2; conf interface' "$tmp/hotspot-ap" "$tmp/hotspot.conf" "$tmp/devconf")" wlan8
 rm -f "$tmp/hotspot.conf" "$tmp/devconf"
+# ---- client isolation: always on, before the profile is up, out after ap0 is deleted; no nft or a refusal = no hotspot
+rm -f "$st/up" "$st/upstart" "$st/rmnet" "$st/linkdown"; touch "$st/route"
+I="$st/nft.omamobile_hotspot_iso"
+rm -f "$st"/nft.* "$tmp/run/iso-state"; echo 0 > "$st/upstart"; : > "$st/log"; ap run >/dev/null
+[[ -e $I ]] || { echo "FAIL: no isolation table" >&2; exit 1; }
+a=$(grep -n 'nft-applied omamobile_hotspot_iso' "$st/log" | sed -n 1p | cut -d: -f1); b=$(grep -n "connection up uuid $U" "$st/log" | sed -n 1p | cut -d: -f1)
+(( a < b )) || { echo "FAIL: isolation after the profile went up" >&2; exit 1; }
+(( $(grep -c 'nft-applied omamobile_hotspot_iso' "$st/log") >= 2 )) || { echo "FAIL: isolation not reapplied each poll" >&2; exit 1; }
+for r in 'iifname "ap0" ip daddr { 0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 224.0.0.0/3 } drop' \
+  'iifname "ap0" oifname "ap0" drop' 'oifname "ap0" ct state != { established, related } drop' 'iifname "ap0" meta nfproto ipv6 drop' \
+  'iifname "ap0" udp dport 67 accept' 'th dport 53 fib daddr . iif type local accept' '^    iifname "ap0" drop$' \
+  '^add table inet omamobile_hotspot_iso$' '^delete table inet omamobile_hotspot_iso$'; do
+  grep -c -- "$r" "$I" >/dev/null || { echo "FAIL: isolation rule missing: $r" >&2; exit 1; }
+done
+grep -q "connection modify uuid $U .*802-11-wireless.ap-isolation yes" "$st/log" || { echo "FAIL: AP isolation not asked for" >&2; exit 1; }
+: > "$st/log"; ap down >/dev/null
+[[ -e $I || -e $tmp/run/iso-state ]] && { echo "FAIL: isolation left after down" >&2; exit 1; }
+a=$(grep -n 'iw dev ap0 del' "$st/log" | sed -n 1p | cut -d: -f1); b=$(grep -n '^nft delete table inet omamobile_hotspot_iso' "$st/log" | sed -n 1p | cut -d: -f1)
+[[ -n $a && -n $b ]] && (( a < b )) || { echo "FAIL: isolation removed before ap0 was deleted" >&2; exit 1; }
+# the phone's on-link routes (the ip stub with $st/onlink): the uplink's subnet and a host route, which ip prints
+# without a prefix, are dropped too; ap0's own subnet is not
+touch "$st/onlink"; rm -f "$st"/nft.*; echo 0 > "$st/upstart"; ap run >/dev/null
+grep -c -- ', 198\.51\.100\.0/24[,} ]' "$I" >/dev/null || { echo "FAIL: the uplink's on-link subnet not in the drop set" >&2; exit 1; }
+grep -c -- ', 203\.0\.113\.9[,} ]' "$I" >/dev/null || { echo "FAIL: an on-link host route not in the drop set" >&2; exit 1; }
+(( $(grep -c -- '10\.42\.0\.0/24' "$I" || true) == 0 )) || { echo "FAIL: ap0's own subnet in the drop set" >&2; exit 1; }
+grep -c -- 'iifname "ap0" ip daddr { 0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 224.0.0.0/3, 198.51.100.0/24, 203.0.113.9 } drop' "$I" >/dev/null || { echo "FAIL: on-link drop set malformed" >&2; exit 1; }
+ap down >/dev/null; rm -f "$st/onlink"
+# nft refuses: no hotspot
+touch "$st/nftfail"; : > "$st/log"
+ap run >/dev/null && { echo "FAIL: started without client isolation" >&2; exit 1; }
+eq "$(cat "$tmp/run/last-stop")" "failed: client isolation could not be applied"
+(( $(grep -c "connection up uuid $U" "$st/log" || true) == 0 )) || { echo "FAIL: profile up without isolation" >&2; exit 1; }
+rm -f "$st/nftfail"; ap down >/dev/null
+# no nft at all: no hotspot
+# (a real /usr/bin/nft, if the test box has one, refuses as a user: the same end)
+mv "$tmp/bin/nft" "$tmp/nft.k"; : > "$st/log"
+ap run >/dev/null 2>&1 && { echo "FAIL: started without nft" >&2; exit 1; }
+eq "$(cat "$tmp/run/last-stop")" "failed: client isolation could not be applied"
+(( $(grep -c "connection up uuid $U" "$st/log" || true) == 0 )) || { echo "FAIL: profile up without nft" >&2; exit 1; }
+mv "$tmp/nft.k" "$tmp/bin/nft"; ap down >/dev/null
+
 echo "hotspot-ap: ok"
