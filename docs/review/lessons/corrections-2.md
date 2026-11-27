@@ -130,9 +130,9 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
 - **C-19 (2026-10-29). Our round 27 comments on #131 and kernel #124 asked for
   the RT9470 bring-up module and TCPC DT "on a branch or as a draft PR"
   without naming the repository,** and #136 put a kernel module and a DT
-  fragment in omarchy-mobile, against CONTRIBUTING §6.1; the fragment also
+  fragment in omamobile, against CONTRIBUTING §6.1; the fragment also
   references `&hsi2c10`, which no published tree defines. The round 28 draft
-  on #136 owned the mistake and asked for a branch on linux-omarchy-mobile.
+  on #136 owned the mistake and asked for a branch on linux-omamobile.
   *Lesson:* L-71 (and L-240 for the labels). *From:* #131, #136 and kernel
   #124, rounds 27-28.
 - **C-20 (2026-10-29). Our kernel #109 comment told the FT3658 author that the

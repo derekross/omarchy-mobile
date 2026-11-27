@@ -957,7 +957,7 @@ first raw frame from the ultrawide in **6-9 weeks**, a photo in `cam` and a
 PipeWire app in **8-12 weeks**, video **2-3 weeks** later, all four cameras
 with focus in **4-6 months**. The biggest unknowns are RE2/RE3 (if the WDMA
 needs more than its register table shows, CAM4 doubles) and RE5 (if the
-C-PHY settings can't be recovered, main and tele wait, and Omarchy Mobile ships
+C-PHY settings can't be recovered, main and tele wait, and Omamobile ships
 with the ultrawide and front cameras).
 
 ### 6.1 Risks

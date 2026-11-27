@@ -3,6 +3,14 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-703. A once-only step keyed on a default value reaches every device that
+  still has the default, and "unchanged on the 7 Pro" covers the result, not
+  the mechanism.** #635's step matches scale `= 3` or `"auto"`, so the 8 Pro
+  would rescale at its next login; on the 7 Pro the scale stays 3 (71x155 mm,
+  also at ±2 mm) but the session gains a rewritten user file and a module run
+  at every reload. *Check:* a table of DEVICES.md's devices with each one's
+  input and result, and a list of the side effects that don't depend on the
+  result. Extends L-608 and L-299. *From:* #635, round 50.
 - **L-702. A status key rewritten for one phone's new capability is evaluated
   with the other phones' object.** #626 changed `speaker` from "is the tegu
   route" to `output == 'speaker'`, and `output` defaults to `speaker`
@@ -232,7 +240,7 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
 - **L-37. A kernel change that needs a userspace companion merges after
   it.** A new `SW_LID`, wakeup source, or any node whose default userspace
   policy is harmful (logind suspending a folded phone) waits for the
-  omarchy-mobile change that handles it, so no build ever has one without
+  omamobile change that handles it, so no build ever has one without
   the other. *From:* kernel #12 with #29.
 - **L-49. "Disabled" means disabled in the DTB the phone runs: the DTS plus
   its `DTB_OVERLAYS`.** Cheetah's DTS has `pmic-1` disabled, but its

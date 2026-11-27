@@ -10,7 +10,7 @@
 #
 # Two bring-up limits, both in the plan: the modem starts once per boot (a
 # second start needs a reboot), and the CP's PCIe link cycles about twice a
-# second under GNSS traffic. With linux-omarchy-mobile#172 (the PERIC0 GPIO
+# second under GNSS traffic. With linux-omamobile#172 (the PERIC0 GPIO
 # bus clock kept on) the cycling link is the working setting: 10- and
 # 30-minute sessions ran clean with it (MODEM-PLAN G3-L1 found). Without
 # #172 the SoC hangs 170 s to about 26 minutes after ONLINE, so don't run

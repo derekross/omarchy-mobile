@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
-"""Omarchy Mobile's permission sheet: org.freedesktop.impl.portal.Access.
+"""Omamobile's permission sheet: org.freedesktop.impl.portal.Access.
 
 xdg-desktop-portal asks its Access backend before an app first uses the
 camera, the location, screenshots, the wallpaper or the background ("Allow

@@ -3,7 +3,7 @@
 """Report the mobile network for the status bar (omamobile.bar).
 
 Reads ModemManager's D-Bus API on the system bus (org.freedesktop.
-ModemManager1: on Omarchy Mobile phones omamobile-mmd serves it; any phone
+ModemManager1: on Omamobile phones omamobile-mmd serves it; any phone
 with ModemManager works the same) and prints one JSON line per change:
 
     {"modem": true, "state": "registered", "strength": 75, "tech": "LTE",
@@ -11,6 +11,10 @@ with ModemManager works the same) and prints one JSON line per change:
 
 state: "none" (no modem), "off", "no-sim", "locked" (SIM PIN), "searching",
 "registered", "connected" (mobile data up), "failed".
+data: whether mobile data is on. Where the phone switches mobile data with
+omamobile-sit (omamobile-sit-data.service is installed), it is that unit
+running: the modem's own "connected" also counts the IMS bearer calls and
+texts keep up with mobile data off. Elsewhere it is state "connected".
 strength: 0-100 when the modem reports a recent signal quality, else -1.
 tech: "5G", "LTE", "H+", "H", "3G", "E", "G", "2G" or "".
 
@@ -27,6 +31,8 @@ MODEM = MM + ".Modem"
 MODEM3GPP = MODEM + ".Modem3gpp"
 OM = "org.freedesktop.DBus.ObjectManager"
 PROPS = "org.freedesktop.DBus.Properties"
+SYSTEMD = "org.freedesktop.systemd1"
+DATA_UNIT = "omamobile-sit-data.service"
 
 # MMModemState
 STATES = {-1: "failed", 0: "searching", 1: "searching", 2: "locked", 3: "off", 4: "off",
@@ -107,13 +113,35 @@ def main(argv):
                 return dict(ifaces[MODEM]), dict(ifaces.get(MODEM3GPP, {}))
         return None, None
 
+    unit_path = [None]
+
+    def data_unit_active():
+        """True or False while omamobile-sit-data.service is installed, None
+        where it isn't (the modem's state decides there)."""
+        try:
+            if unit_path[0] is None:
+                manager = bus.get_object(SYSTEMD, "/org/freedesktop/systemd1", introspect=False)
+                unit_path[0] = manager.LoadUnit(DATA_UNIT, dbus_interface=SYSTEMD + ".Manager", timeout=5)
+                bus.add_signal_receiver(reread, signal_name="PropertiesChanged", dbus_interface=PROPS,
+                                        bus_name=SYSTEMD, path=unit_path[0])
+            unit = bus.get_object(SYSTEMD, unit_path[0], introspect=False)
+            if str(unit.Get(SYSTEMD + ".Unit", "LoadState", dbus_interface=PROPS, timeout=5)) != "loaded":
+                return None
+            return str(unit.Get(SYSTEMD + ".Unit", "ActiveState", dbus_interface=PROPS, timeout=5)) in ("active", "activating", "reloading")
+        except dbus.DBusException:
+            return None
+
     def emit():
         # Every trigger re-reads every property from GetManagedObjects, so
         # no signal's payload can leave a stale state behind. Nothing here
         # may raise: an exception in a GLib callback drops its source, and
         # a dropped periodic read is how a stale "off" stayed on the bar.
         try:
-            line = json.dumps(describe(*first_modem()), separators=(",", ":"))
+            report = describe(*first_modem())
+            if report["modem"]:
+                on = data_unit_active() if "--session" not in argv else None
+                report["data"] = report["state"] == "connected" if on is None else on
+            line = json.dumps(report, separators=(",", ":"))
         except Exception as e:  # noqa: BLE001 - keep watching whatever the service sent
             print("omamobile-cell-watch: read failed: %s" % e, file=sys.stderr, flush=True)
             return

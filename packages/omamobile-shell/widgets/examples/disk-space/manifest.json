@@ -3,7 +3,7 @@
   "id": "disk-space",
   "name": "Disk space",
   "version": "1.0.0",
-  "author": "Omarchy Mobile",
+  "author": "Omamobile",
   "description": "How full your home folder's disk is, from df.",
   "kinds": ["home-widget"],
   "entryPoints": { "homeWidget": "Widget.qml" },

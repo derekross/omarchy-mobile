@@ -3,7 +3,7 @@
 
 Status (2026-11-15): **guarded association and traffic passed on two boots of
 the old local experimental kernel**. This records our reproduction of alfikpl's AoC-first
-ordering and four mainline fixes reported in [issue 36](https://github.com/derekross/omarchy-mobile/issues/36#issuecomment-6819528828)
+ordering and four mainline fixes reported in [issue 36](https://github.com/derekross/omamobile/issues/36#issuecomment-6819528828)
 and the subsequent tests on the original lynx test phone. The kernel changes
 and test overlays for those historical runs are not included here. The revised signed integration later
 booted with AoC and WLAN held off (section 3).
@@ -153,8 +153,8 @@ identity-pinned probe. Any boot-image write or reboot needs the owner's
 approval for that operation.
 
 As of 2026-11-15 the human-certified topics were open as drafts from
-[linux-omarchy-mobile#251](https://github.com/derekross/linux-omarchy-mobile/pull/251) through
-[linux-omarchy-mobile#255](https://github.com/derekross/linux-omarchy-mobile/pull/255).
+[linux-omamobile#251](https://github.com/derekross/linux-omamobile/pull/251) through
+[linux-omamobile#255](https://github.com/derekross/linux-omamobile/pull/255).
 That integration had a complete offline kernel/module
 build and matched AoC-only/AoC+WLAN images, with image, AVB, module and overlay
 verification. Testing AoC and Wi-Fi on that build still requires a revised

@@ -73,8 +73,8 @@ intersects SWIOTLB. This identifies layout conflicts to investigate; it
 does not establish that firmware currently accesses those addresses.
 
 The distinction follows the running kernel's
-[CMA implementation](https://github.com/derekross/linux-omarchy-mobile/blob/29a7a9326bf064c7079396090c262271196b4a7b/mm/cma.c)
-and [SWIOTLB implementation](https://github.com/derekross/linux-omarchy-mobile/blob/29a7a9326bf064c7079396090c262271196b4a7b/kernel/dma/swiotlb.c).
+[CMA implementation](https://github.com/derekross/linux-omamobile/blob/29a7a9326bf064c7079396090c262271196b4a7b/mm/cma.c)
+and [SWIOTLB implementation](https://github.com/derekross/linux-omamobile/blob/29a7a9326bf064c7079396090c262271196b4a7b/kernel/dma/swiotlb.c).
 The stock debug consumer is Google's
 [debug-snapshot driver](https://android.googlesource.com/kernel/google-modules/soc/gs/+/204078758737776959ecc85c527a00fd2cabb62f/drivers/soc/google/debug/debug-snapshot.c),
 which acquires the described memory regions and initializes its enabled
@@ -107,7 +107,7 @@ Consumer references:
 
 - [ECT probe](https://android.googlesource.com/kernel/google-modules/soc/gs/+/204078758737776959ecc85c527a00fd2cabb62f/drivers/soc/google/ect_parser.c)
 - [Suspend diagnostic driver](https://android.googlesource.com/kernel/google-modules/soc/gs/+/204078758737776959ecc85c527a00fd2cabb62f/drivers/soc/google/debug/pixel-suspend-diag.c)
-- [Native ramoops implementation](https://github.com/derekross/linux-omarchy-mobile/blob/29a7a9326bf064c7079396090c262271196b4a7b/fs/pstore/ram.c)
+- [Native ramoops implementation](https://github.com/derekross/linux-omamobile/blob/29a7a9326bf064c7079396090c262271196b4a7b/fs/pstore/ram.c)
 - [Stock CP memory-region wiring](https://android.googlesource.com/kernel/devices/google/gs101/+/refs/tags/android-16.0.0_r0.9/dts/gs101-cp-s5200-sit.dtsi),
   [CP shared-memory parser](https://android.googlesource.com/kernel/google-modules/radio/samsung/s5300/+/a8976934fe7f396627f9900958eb1457a74ebcca/shm_ipc.c),
   [CP power control](https://android.googlesource.com/kernel/google-modules/radio/samsung/s5300/+/a8976934fe7f396627f9900958eb1457a74ebcca/modem_ctrl_s5100.c)

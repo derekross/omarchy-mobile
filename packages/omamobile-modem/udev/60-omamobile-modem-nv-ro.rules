@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-# Omarchy Mobile: the modem's NV and firmware partitions are never written from
+# Omamobile: the modem's NV and firmware partitions are never written from
 # Linux (device/cheetah/MODEM-PLAN.md M0.5). persist stays writable for the
 # fingerprint plan; the modem profile only ever reads it.
 SUBSYSTEM=="block", ENV{ID_PART_ENTRY_NAME}=="efs|efs_backup|modem_userdata|modem_a|modem_b", RUN+="/usr/bin/blockdev --setro $devnode"

@@ -4,7 +4,7 @@
 Status (2026-10-20): **the Mali-G78 renders Omarchy through Panfrost**
 (GLES 3.1, Hyprland on top), panfrost loads at boot, and GPU DVFS runs
 through ACPM. Upstream PR: `omamobile-gs101-gpu-pr` (derekross/
-linux-omarchy-mobile#3); DVFS and GPU cooling on `omamobile-gs101-gpu-dvfs`.
+linux-omamobile#3); DVFS and GPU cooling on `omamobile-gs101-gpu-dvfs`.
 Mesa from `packages/mesa` with the G78 patch (merged). PanVK refuses the
 G78. G5 passed (2026-10-20): panfrost works without the
 `GPU_COHERENCY_ENABLE` write.

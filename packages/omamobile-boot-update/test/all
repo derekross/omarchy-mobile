@@ -381,7 +381,9 @@ R=$t/root
 export OMAMOBILE_BOOT_ROOT=$R OMAMOBILE_BOOT_UNAME_R=7.3.0-rc6-omamobile-00400-gbbbbbbbbbbbb
 export DEPMOD=$fake/depmod
 printf '#!/bin/sh\necho "depmod $*" >> "%s/depmod.calls"\n' "$t" > "$fake/depmod"; chmod +x "$fake/depmod"
-run() { "$U" "$@" > "$t/out" 2>&1; }
+# never a terminal on stdin: write asks for the codename on one, and a test
+# run from an ssh -t session would wait for it forever
+run() { "$U" "$@" < /dev/null > "$t/out" 2>&1; }
 refused() { # what expected-message command...
   local what=$1 msg=$2; shift 2
   before=$(sums "$R")

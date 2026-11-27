@@ -1,6 +1,6 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# omamobile: set up, sync and build Omarchy Mobile (LineageOS + Omarchy) in a container.
+# omamobile: set up, sync and build Omamobile (LineageOS + Omarchy) in a container.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
@@ -14,7 +14,7 @@ Usage: lineage-ref <command>
   doctor   Check the host has what the build needs
   image    Build the Ubuntu build-environment image
   sync     Download or update the LineageOS source ($BRANCH) into $SRC_DIR
-  build    Build Omarchy Mobile for $DEVICE ($VARIANT)
+  build    Build Omamobile for $DEVICE ($VARIANT)
   shell    Open a shell in the build environment, in the source tree
 EOF
 }

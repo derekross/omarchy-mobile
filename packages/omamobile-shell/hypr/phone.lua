@@ -1,5 +1,5 @@
 -- SPDX-License-Identifier: MIT
--- Omarchy Mobile's Hyprland rules for a phone, loaded after Omarchy's defaults
+-- Omamobile's Hyprland rules for a phone, loaded after Omarchy's defaults
 -- (from the user's looknfeel.lua). Package updates reach them.
 
 -- Apps fill the screen between the bar and the dock, like Android. Omarchy's
@@ -75,6 +75,20 @@ hl.window_rule({
   move = { "(monitor_w-window_w-8)", "(monitor_h*0.08)" },
 })
 
+-- Going home and switching apps are workspace switches here (every app has a
+-- screen of its own, omamobile-launch), and Omarchy turns the workspace
+-- animation off, as a desktop wants: on the phone the app was gone in one
+-- frame, a cut where Android fades. A 200 ms fade instead; windows opening and
+-- closing keep Omarchy's own animations. The curve is defined here (Omarchy's
+-- easeOutQuint, by value) so the line doesn't rest on a name from another
+-- package: Hyprland rejects an animation whose curve it doesn't know. To get
+-- the cut back, add after the line that loads this file (looknfeel.lua):
+--   hl.animation({ leaf = "workspaces", enabled = false })
+-- Under pcall: a Hyprland that refuses either call keeps its cut, and the rest
+-- of this file (the lock after boot, the binds, the device's own rules) loads.
+pcall(hl.curve, "omamobileWorkspaceFade", { type = "bezier", points = { { 0.23, 1 }, { 0.32, 1 } } })
+pcall(hl.animation, { leaf = "workspaces", enabled = true, speed = 2, bezier = "omamobileWorkspaceFade", style = "fade" })
+
 -- Lock after boot, like a phone: the session logs in automatically, then
 -- Omarchy's lock comes up with its PIN pad. Only once a PIN is set (the
 -- lock-on-start toggle), since a lock with no password can't be opened.
@@ -94,8 +108,11 @@ o.launch_on_start(
 -- layout one of them lands on 124, which Hyprland's keymap reads as
 -- XF86PowerOff. Its keys share Hyprland's held-key state with the buttons,
 -- so an OSK key could act as the power key or leave it looking held (SUSPEND-
--- PLAN P5 h: the power key's bind stopped firing until a reload).
-local hw_keys = { inclusive = false, list = { "hl-virtual-keyboard-squeekboard" } }
+-- PLAN P5 h: the power key's bind stopped firing until a reload). Tactus, the
+-- keyboard an owner may pick instead (omamobile-osk), is a virtual keyboard
+-- too, named after its binary as squeekboard's is.
+local osk_devices = { "hl-virtual-keyboard-squeekboard", "hl-virtual-keyboard-tactus" }
+local hw_keys = { inclusive = false, list = osk_devices }
 hl.unbind("XF86PowerOff")
 o.bind("XF86PowerOff", "Power key", "omamobile-keys power-down", { locked = true, device = hw_keys })
 o.bind("XF86PowerOff", "System menu", "omamobile-keys power-up", { locked = true, release = true, device = hw_keys })
@@ -166,7 +183,10 @@ hl.layer_rule({ match = { namespace = "^omamobile-call(-top)?$" }, above_lock = 
 -- still pastes.
 local osk_device = "hl-virtual-keyboard-squeekboard"
 local osk_only = { inclusive = true, list = { osk_device } }
-local not_osk = { inclusive = false, list = { osk_device } }
+-- No on-screen keyboard, Tactus included: its terminal keys have Ctrl, Alt
+-- and Tab as squeekboard's do. (Tactus needs none of the binds above: its
+-- own keys do what squeekboard's action row does.)
+local not_osk = { inclusive = false, list = osk_devices }
 hl.device({ name = osk_device, resolve_binds_by_sym = true })
 local function voice(method)
   return "omarchy-shell shell call omamobile.voice " .. method .. " ''"

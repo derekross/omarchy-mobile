@@ -26,12 +26,26 @@ Item {
       property bool honoursClose: true
       property int closes: 0
       property int activations: 0
+      // How many cards still showed a live copy of this window when it was
+      // asked to close (the shell died of one).
+      property int copiesAtClose: -1
       function activate() { activations++ }
       function close() {
         closes++
+        copiesAtClose = top.copiesOf(fake)
         if (honoursClose) top.drop(fake)
       }
     }
+  }
+
+  // The cards' ScreencopyViews (a stub here) that have w as their source.
+  function copiesOf(w) {
+    function walk(item) {
+      var n = item.captureSource !== undefined && item.captureSource === w ? 1 : 0
+      for (var i = 0; i < item.children.length; i++) n += walk(item.children[i])
+      return n
+    }
+    return test.overlay ? walk(test.overlay.contentItem) : 0
   }
 
   function drop(w) {
@@ -106,7 +120,7 @@ Item {
       compare(foot.closes, 0)
       p = buttonAt("Close 1 app?")
       tap(p.x, p.y)
-      compare(foot.closes, 1, "the second tap closes the window")
+      tryCompare(foot, "closes", 1, 1000, "the second tap closes the window")
       compare(foot.activations, 0, "and doesn't switch to it")
       verify(!sw.opened, "then recent apps close")
     }
@@ -118,7 +132,7 @@ Item {
       tap(p.x, p.y)
       p = buttonAt("Close 2 apps?")
       tap(p.x, p.y)
-      compare(a.closes + b.closes, 2)
+      tryVerify(function() { return a.closes + b.closes === 2 }, 1000, "both are asked to close")
       compare(ToplevelManager.toplevels.values.length, 0)
     }
 
@@ -157,7 +171,7 @@ Item {
       tap(p.x, p.y)
       p = buttonAt("Close 1 app?")
       tap(p.x, p.y)
-      compare(stubborn.closes, 1)
+      tryCompare(stubborn, "closes", 1, 1000)
       verify(!dispatched("hl.dsp.window.close"), "not straight away")
       tryVerify(function() { return test.dispatched('hl.dsp.window.close({ window = "address:0xa2" })') }, 4000,
                 "Hyprland closes what is still open")
@@ -173,6 +187,51 @@ Item {
       tap(p.x, p.y)
       wait(2500)
       verify(!dispatched("hl.dsp.window.close"))
+    }
+
+    // A window is asked to close only once no card shows a live copy of it:
+    // with the copy still running the shell lost its Wayland connection
+    // ("fatal error: Invalid argument") and restarted. Clear all first.
+    function test_clear_all_stops_the_copies_before_it_closes() {
+      var a = fakeWindow.createObject(top), b = fakeWindow.createObject(top, { appId: "chromium" })
+      openWith([a, b])
+      tryVerify(function() { return top.copiesOf(a) === 1 && top.copiesOf(b) === 1 }, 2000, "open recents show a live copy of each window")
+      var p = buttonAt("Clear all")
+      tap(p.x, p.y)
+      p = buttonAt("Close 2 apps?")
+      tap(p.x, p.y)
+      tryVerify(function() { return a.closes === 1 && b.closes === 1 }, 1000)
+      compare(a.copiesAtClose, 0, "no copy of the first window when it is asked to close")
+      compare(b.copiesAtClose, 0, "nor of the second")
+    }
+
+    // A card flicked up. A finger on the card's middle, moved up by more
+    // than a quarter of the card.
+    function flickUp() {
+      var x = overlay.width / 2, y = overlay.height / 2
+      var t = touchEvent(overlay.contentItem)
+      t.press(0, overlay.contentItem, x, y).commit()
+      for (var i = 1; i <= 10; i++) { wait(16); t.move(0, overlay.contentItem, x, y - i * overlay.height / 20).commit() }
+      t.release(0, overlay.contentItem, x, y - overlay.height / 2).commit()
+    }
+
+    function test_a_flicked_card_stops_its_copy_before_it_closes() {
+      var foot = fakeWindow.createObject(top)
+      openWith([foot])
+      tryVerify(function() { return top.copiesOf(foot) === 1 }, 2000)
+      flickUp()
+      tryCompare(foot, "closes", 1, 2000, "a flick up closes the window")
+      compare(foot.copiesAtClose, 0, "its card had stopped copying by then")
+    }
+
+    function test_a_window_that_stays_after_a_flick_gets_its_copy_back() {
+      var stubborn = fakeWindow.createObject(top, { honoursClose: false })
+      openWith([stubborn])
+      tryVerify(function() { return top.copiesOf(stubborn) === 1 }, 2000)
+      flickUp()
+      tryCompare(stubborn, "closes", 1, 2000)
+      compare(stubborn.copiesAtClose, 0)
+      tryVerify(function() { return top.copiesOf(stubborn) === 1 }, 4000, "the card of a window that stayed shows it again")
     }
 
     function test_card_tap_switches() {

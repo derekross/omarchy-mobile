@@ -325,7 +325,7 @@ stock value).
 
 ---
 
-## 5. What the Omarchy Mobile shell needs
+## 5. What the Omamobile shell needs
 
 `packages/omamobile-shell/plugins/omamobile.quicksettings/QuickSettings.qml`,
 the `torch` stub (around line 221), should become:

@@ -1,6 +1,6 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# Publish the release kernel: move linux-omarchy-mobile's `omamobile` branch
+# Publish the release kernel: move linux-omamobile's `omamobile` branch
 # on GitHub forward to a local release branch, and tag a release on it
 # (docs/RELEASES.md section 8).
 #
@@ -52,7 +52,7 @@ if [[ -z ${KERNEL_BASE:-} ]]; then
   [[ -d $KERNEL_BASE || ! -d $HOME/android/mainline ]] || KERNEL_BASE=$HOME/android/mainline
 fi
 linux=${KERNEL_DIR:-$KERNEL_BASE/linux}
-remote=${PUBLISH_KERNEL_REMOTE:-git@github.com:derekross/linux-omarchy-mobile.git}
+remote=${PUBLISH_KERNEL_REMOTE:-git@github.com:derekross/linux-omamobile.git}
 target=omamobile
 
 die() { echo "publish-kernel: $*" >&2; exit 1; }
@@ -132,9 +132,9 @@ fi
 # even if the remote moved since the fetch; --atomic keeps the tag off a
 # branch push that failed; --no-follow-tags pushes no other local tag.
 push=(git push --atomic --no-follow-tags "$remote" "${refspecs[@]}")
-msg="Omarchy Mobile kernel ${tag#kernel-}
+msg="Omamobile kernel ${tag#kernel-}
 
-The release kernel: linux-omarchy-mobile's $target at ${head:0:12}.
+The release kernel: linux-omamobile's $target at ${head:0:12}.
 A release build reports uname -r $uname
 and packs as linux-omamobile $pkgver."
 
