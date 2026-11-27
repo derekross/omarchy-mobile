@@ -7539,6 +7539,50 @@ gating, scoped event setup, timeout export and trace
 loss handling. Probe registration and the revised
 panel binding remain unverified on hardware.
 
+###### Attended CGYDA GPIO and VDDD trace
+
+On 2026-11-27 the read-only rescue copied all nine NV
+partitions (3,392,151,552 bytes) to a private Mac
+directory and verified their SHA-256 hashes. The five
+revised images were staged to B, and the full
+`vendor_boot_b` readback matched. The fixture booted
+once with no display commit.
+
+| Kernel uptime | Discovery result |
+| ---: | --- |
+| 5.663773 s | The NV guard passed for five parent disks and nine target partitions. |
+| 7.209446–7.418019 s | The three I²C exclusions passed, sysfs was read-only and DesignWare bound only to `3a1ce000.i2c`. |
+| 7.909931 s | DA9188 GPIO was bound and its gpiochip was registered before loading the panel. |
+| 7.957904 s | The stock panel driver finished probing `google-cgyda` on DSI0. |
+| 10.971923 s | The fixture found S2DOS07x02 at `9-0060` and the panel at `f7d8000.dsi2host.0`. |
+| 45.984813 s | The VDDD trace retained all 31 events. Both disable probes were registered with zero misses. |
+| 90.873224 s | The warm return timer requested restart. |
+
+The native trace captured five successful SMBus reads
+and one successful write of `0x9e` to command
+`0x03`. The initial read of command `0x04` returned
+`0x21`. Each transfer recorded DesignWare ISR status
+with STOP detected. Neither disable probe fired, and
+the trace contains no write to command `0x04`. The
+previous late-disable timeout did not recur in this
+capture. The successful transfers establish bus
+completion during discovery. They do not establish the
+physical VDDD state after disable.
+
+The Google DSI0 platform driver reported failed
+device-link creation for `9-0060` and `da9188-gpio`.
+The fixture reported incomplete discovery without a
+cached DRM connector row. It does not distinguish a
+missing connector from an attribute or state check
+failure. The next offline check is to trace DRM
+component assembly and log which connector check
+failed before considering a modeset.
+
+Ramoops and `SYSTEM_LAST_KMSG` matched on all 72
+selected lines. Fastboot returned 134 seconds after
+the B boot request. Stock A completed boot with
+enforcing verity and matching VBMeta.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
