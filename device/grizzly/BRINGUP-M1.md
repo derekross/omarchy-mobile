@@ -8374,6 +8374,49 @@ enforcing verity and the original VBMeta digest. The DSI0 host
 stayed disabled, so the vote cycle did not qualify the host APB
 gate or external reset.
 
+###### Offline APB and external-reset qualification after the PHY trial
+
+The retained console puts DSI0's ON vote readback at 6.470088 s
+and its OFF acknowledgement at 6.472960 s. The 2.872 ms gap
+bounds the opportunity to sample the powered child in this
+fixture. The stock clock/reset trace read host ID and version
+8.888 ms after its final ON reply. That stock interval supplies
+no minimum settle time. For a future qualified status source,
+take the powered sample synchronously after the ON reply with
+wrapper, BE and DSI0 held. Sample the released state after DSI0
+OFF while BE and wrapper are still held, so their later releases
+cannot explain the result. A periodic dashboard read cannot
+reliably capture these phases.
+
+The mainline readback issues an MBFS value read for the resource
+handle and accepts a Boolean reply. D1's physical transition,
+when needed, polls LPCM PSM3. The new ordered replies confirm
+genpd ownership and release. The trace supplies neither the APB
+gate bit nor the external reset state.
+
+The exact D1 GC FDT gives the APB, system, pixel and PHY clock
+cell words the same `0x30300` rule on
+`0x0f419000`–`0x0f419fff` in the LPCM firewall. The stock
+host and PHY APB accesses at `0x0f7d8000` and `0x0f7d8800`
+are covered by a separate DPU bridge rule, `0x30303`.
+The saved stock bugreport has host and PHY witnesses but no
+LPCM acknowledgement address or `dpu_dsi0_apb_clk` status.
+The additional `CLK_STATUS_MASK` check in exact CPM text
+`0x3ce00`–`0x3cebc` belongs to the MNA platform path.
+It polls gate words relative to `0x6b830660`, outside the DPU
+LPCM, and cannot supply the DSI0 status.
+
+The status gate remains closed. Bit 8 of `0x0f4196fc` is a
+candidate APB acknowledgement once the exact access has a
+qualified read path. Bit 12 acknowledges that clock cell.
+Before using any reset observation to permit host access,
+identify the reset signal at the host boundary or document
+how the clock-cell acknowledgement covers every external
+reset needed for the first host read. The D1 PMU and CPM
+status services audited above offer neither a path to the
+APB cell nor that reset evidence. Leave direct status and
+host reads disabled until these checks pass.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
