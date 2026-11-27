@@ -1,15 +1,18 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Audio plan (panther / gs201): the Pixel 7 Pro's sound stack on the Pixel 7
 
-Status (2026-11-22): **P1-P5 passed on a Pixel 7; on by default.** The
+Status (2026-11-27): **P1-P5 passed on a Pixel 7; on by default.** The
 amplifier nodes are in gs201-panther, disabled (linux-omarchy-mobile, "add the
 speaker amplifiers"); the overlays `audio-amps-test`, `aoc-core-test` and
 `aoc-sound-test` in [`overlays/`](overlays) turn them and the AoC on, and
-`device.conf` lists them. `audio-amps-test` and `aoc-sound-test` need a
-kernel with
+`device.conf` lists them. `audio-amps-test` and `aoc-sound-test` need
+kernel-2026.11.24 or later, the first release with
 [linux-omarchy-mobile#287](https://github.com/derekross/linux-omarchy-mobile/pull/287)
-(the amplifier nodes): on a kernel without it, `fdtoverlay` stops at
+(the amplifier nodes): on an older kernel, `fdtoverlay` stops at
 `audio-amps-test` with `FDT_ERR_NOTFOUND`, and the images can't be built.
+Images from kernel-2026.11.24 with the default `DTB_OVERLAYS` booted on a
+Pixel 7 (2026-11-27), and `tools/phone-smoke` passed every required check,
+with the `googleaocsndcar` sound card and the AoC sensors up.
 `omamobile-device-panther` 0.1.19 starts the AoC
 with the Pixel 7 Pro's `omamobile-aoc-start`. The speakers run on the
 protection firmware's default calibration (`OMAMOBILE_SPK_DEFAULT_CAL=1`,
