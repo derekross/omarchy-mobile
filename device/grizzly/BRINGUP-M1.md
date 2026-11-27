@@ -7321,6 +7321,45 @@ at the initial `pwr_up` read and the separate APB
 and external host reset state unresolved. No modeset
 fixture was built from the probe-only bundle.
 
+###### Passive stock D1 modeset capture
+
+`stock-dsi0-rmw-trace.sh TRACEFS BUSYBOX arm` attaches
+to a loaded D1 `mipi-cdphy` driver in a privileged
+stock display session. Run `dump` after a normal
+display enable and power-off, then `cleanup`.
+`check-stock-dsi0-trace.py --phy-rmw TRACE` decodes
+the result. Access to a privileged stock display
+session with tracefs remains unverified.
+
+The collector scopes ten before/after call pairs to
+the RAM-backed second resource start `0x0f7d8800`.
+It records the driver request and return code, and
+uses the existing regmap trace events for its
+`0x28` reads and writes. The checker pairs those
+events with the bracketed driver call on the same
+task and decodes both active-low bits. It reports an
+existing read separately from a write. The collector
+adds no MMIO access and requests no display activity.
+
+`pack-stock-inventory.py --dsi0-rmw-trace` puts the
+same collector in the D1 RAM fixture. PID 1 verifies
+the NV guard, then arms after CD-PHY loads and before
+the DSI host loads. It dumps to ramoops 20 seconds
+after the display module load and leaves the
+independent 90-second warm return in place. This
+guarded bundle has no panel or display userspace to
+initiate a modeset. A capture with zero paired calls
+leaves the PHY bits unobserved.
+
+The packed `init_boot` SHA-256 is
+`31656fea544a7de52eafe659edd7adff5a86a9406af8e4873a54df161e18c7d5`.
+The other four images match the attended D1 display
+fixture. Offline checks covered the five hashes,
+AVB, handoff bounds, saved slot fit, legacy trace
+replay, and mocked registration, capture and cleanup.
+Hardware registration and a modeset capture remain
+pending.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler

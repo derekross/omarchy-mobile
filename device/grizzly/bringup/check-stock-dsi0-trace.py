@@ -54,6 +54,11 @@ PHY_RESET_END = re.compile(
     r"(unavailable|missing|unreadable|read_failed|invalid|(?:0x)?0*[01])"
 )
 PHY_RESET_VALUES = re.compile(r"(?:0x)?0*[01]")
+RMW_ARM = "DSI0 PHY register 0x28 trace armed"
+RMW_PROFILE = "PHY RMW probe profile count=20 missed=0"
+RMW_SITE = re.compile(r"((?:cfg|off)_[a-z0-9_]+)_(begin|end)$")
+RMW_FIELDS = re.compile(r" bank=0x0*f7d8800 (value|result)=(-?\d+)$")
+RMW_WORD = re.compile(r"f7c0000\.dw_mipi_cdphy\S* reg=0*28 val=(?:0x)?([0-9a-fA-F]+)$")
 
 
 def display_resource(kind, lpcm, resource):
@@ -228,11 +233,72 @@ def summarize_phy_reset(timeline, host_status, required):
     print(f"dsi0_phy_reset_confirmed={confirmed}/4")
 
 
-def summarize(trace, require_genpd=False, require_phy_reset=False):
+def check_buffer(trace):
     counts = re.search(r"entries-in-buffer/entries-written:\s*(\d+)/(\d+)", trace)
     if not counts or counts[1] != counts[2] or "LOST EVENTS" in trace:
         raise ValueError("trace buffer loss or missing tracefs header")
+    return int(counts[1])
 
+
+def summarize_rmw(trace):
+    count = check_buffer(trace)
+    if trace.count(RMW_PROFILE) != 1:
+        raise ValueError("missing or invalid PHY register probe profile")
+    rows = [match.group("pid", "time", "event", "body")
+            for line in trace.splitlines() if (match := ROW.search(line))]
+    if len(rows) != count:
+        raise ValueError("incomplete PHY register trace export")
+    rows.sort(key=lambda row: Decimal(row[1]))
+    active = {}
+    armed = False
+    calls = reads = writes = unmatched = 0
+    for pid, timestamp, event, body in rows:
+        if event == "tracing_mark_write" and body == RMW_ARM:
+            if armed:
+                raise ValueError("duplicate PHY register trace arm marker")
+            armed = True
+        elif site := RMW_SITE.fullmatch(event):
+            field = RMW_FIELDS.search(body)
+            if not armed or not field:
+                raise ValueError("invalid PHY register call marker or aperture")
+            if site[2] == "begin":
+                if pid in active or field[1] != "value":
+                    raise ValueError("nested or malformed PHY register call")
+                active[pid] = (site[1], int(field[2]), {})
+            else:
+                if pid not in active or active[pid][0] != site[1] or field[1] != "result":
+                    raise ValueError("unpaired PHY register return")
+                name, requested, words = active.pop(pid)
+                decoded = []
+                for kind in ("read", "write"):
+                    if kind in words:
+                        word = words[kind]
+                        decoded.append(f"{kind}={word:#010x} {kind}_phy_rst_n={word & 1} "
+                                       f"{kind}_shutdown_n={(word >> 1) & 1}")
+                print(f"{timestamp} {name} requested={requested} result={field[2]} "
+                      + (" ".join(decoded) if decoded else "word=unobserved"))
+                calls += 1
+                reads += "read" in words
+                writes += "write" in words
+        elif event in ("regmap_reg_read", "regmap_reg_write"):
+            word = RMW_WORD.fullmatch(body)
+            if not word:
+                raise ValueError("unexpected PHY register access")
+            if pid not in active:
+                unmatched += 1
+                continue
+            kind = event.removeprefix("regmap_reg_")
+            words = active[pid][2]
+            if kind in words or (kind == "read" and "write" in words):
+                raise ValueError("ambiguous PHY register accesses within one call")
+            words[kind] = int(word[1], 16)
+    if not armed or active:
+        raise ValueError("missing arm or incomplete PHY register call")
+    print(f"phy_rmw_calls={calls} reads={reads} writes={writes} unmatched={unmatched}")
+
+
+def summarize(trace, require_genpd=False, require_phy_reset=False):
+    check_buffer(trace)
     timeline = []
     reads = []
     for index, line in enumerate(trace.splitlines()):
@@ -368,11 +434,17 @@ def summarize(trace, require_genpd=False, require_phy_reset=False):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("trace", type=Path, help="saved tracefs instance trace")
-    parser.add_argument("--require-genpd", action="store_true", help="require the early DSI0 OFF correlation")
-    parser.add_argument("--require-phy-reset", action="store_true", help="require the four PHY reset attempts")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--require-genpd", action="store_true", help="require the early DSI0 OFF correlation")
+    mode.add_argument("--require-phy-reset", action="store_true", help="require the four PHY reset attempts")
+    mode.add_argument("--phy-rmw", action="store_true", help="decode the stock PHY register 0x28 trace")
     args = parser.parse_args()
     try:
-        return 0 if summarize(args.trace.read_text(), args.require_genpd, args.require_phy_reset) else 1
+        trace = args.trace.read_text()
+        if args.phy_rmw:
+            summarize_rmw(trace)
+            return 0
+        return 0 if summarize(trace, args.require_genpd, args.require_phy_reset) else 1
     except (OSError, ValueError) as error:
         parser.exit(1, f"{parser.prog}: {error}\n")
 

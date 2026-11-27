@@ -435,6 +435,9 @@ stock_inventory_modules() (
             if [ "$module" = mipi-cdphy.ko ] && [ "${dsi0_pll_arming:-no}" = yes ]; then
                 "$bb" sh "$helper" "$tracefs" "$bb" --pll-probes || return 1
             fi
+            if [ "$module" = mipi-cdphy.ko ] && [ "${dsi0_rmw_arming:-no}" = yes ]; then
+                "$bb" sh "$dsi0_helper" "$tracefs" "$bb" arm || return 1
+            fi
             if [ "$module" = mipi-cdphy.ko ] && [ "${dsi0_phy_reset_requested:-no}" = yes ] &&
                [ "$manifest" = "$dsi0_manifest" ]; then
                 "$bb" sh "$helper" "$tracefs" "$bb" --phy-reset-probe || return 1
@@ -497,6 +500,31 @@ sample_dsi0_phy_resets() {
             return 1
     done
 }
+
+run_stock_dsi0_rmw_trace() (
+    tracefs=/grizzly-inventory/dsi0-tracefs
+    "$bb" mkdir -m 0700 "$tracefs" || return 1
+    if ! "$bb" mount -t tracefs -o nosuid,nodev,noexec,mode=0700 tracefs "$tracefs"; then
+        "$bb" rmdir "$tracefs"
+        return 1
+    fi
+    trap 'if [ -d "$tracefs/instances/grizzly_phy_rmw" ]; then
+              "$bb" sh "$dsi0_helper" "$tracefs" "$bb" cleanup ||
+                  stock_inventory_log "DSI0 PHY register trace cleanup failed"
+          fi
+          "$bb" umount "$tracefs" && "$bb" rmdir "$tracefs"' 0
+    dsi0_rmw_arming=yes
+    stock_inventory_modules load "$dsi0_manifest" || return 1
+    "$bb" sleep 20 || return 1
+    result=0
+    capture=$("$bb" sh "$dsi0_helper" "$tracefs" "$bb" dump) || result=1
+    while IFS= read -r line; do
+        stock_inventory_log "DSI0 PHY register trace $line" || return 1
+    done <<EOF
+$capture
+EOF
+    return "$result"
+)
 
 run_stock_dsi0_trace() (
     tracefs=/grizzly-inventory/dsi0-tracefs
@@ -785,6 +813,8 @@ dsi0_manifest=/grizzly-inventory/dsi0.modules
 dsi0_pll_requested=no
 dsi0_genpd_requested=no
 dsi0_phy_reset_requested=no
+dsi0_rmw_requested=no
+dsi0_helper=/grizzly-inventory/stock-dsi0-trace.sh
 dsi0_genpd_marker=/grizzly-inventory/dsi0-genpd-trace
 if [ -e "$dsi0_genpd_marker" ] || [ -L "$dsi0_genpd_marker" ]; then
     if [ ! -f "$dsi0_genpd_marker" ] || [ -L "$dsi0_genpd_marker" ] || [ ! -f "$dsi0_manifest" ]; then
@@ -808,13 +838,23 @@ if [ -e "$dsi0_phy_reset_marker" ] || [ -L "$dsi0_phy_reset_marker" ]; then
     fi
     dsi0_phy_reset_requested=yes
 fi
+dsi0_rmw_marker=/grizzly-inventory/dsi0-rmw-trace
+if [ -e "$dsi0_rmw_marker" ] || [ -L "$dsi0_rmw_marker" ]; then
+    if [ "$dsi0_genpd_requested" = yes ] || [ "$dsi0_pll_requested" = yes ] ||
+       [ "$dsi0_phy_reset_requested" = yes ] || [ ! -f "$dsi0_rmw_marker" ] ||
+       [ -L "$dsi0_rmw_marker" ] || [ ! -f "$dsi0_manifest" ]; then
+        end_inventory "DSI0 PHY register trace fixture is ambiguous or incomplete"
+    fi
+    dsi0_rmw_requested=yes
+    dsi0_helper=/grizzly-inventory/stock-dsi0-rmw-trace.sh
+fi
 if [ -e "$dsi0_manifest" ] || [ -L "$dsi0_manifest" ]; then
     if [ "$fixture" != inventory ] || [ "$nv_guard_requested" != yes ] ||
        [ "$usb2_requested" = yes ] || [ "$refclk_requested" = yes ] ||
        { [ "$ufs_trace_requested" = yes ] &&
          { [ "$ufs_uic_requested" != yes ] || [ "$dsi0_phy_reset_requested" != yes ]; }; } ||
        [ ! -f "$dsi0_manifest" ] || [ -L "$dsi0_manifest" ] ||
-       [ ! -f /grizzly-inventory/stock-dsi0-trace.sh ] || [ -L /grizzly-inventory/stock-dsi0-trace.sh ]; then
+       [ ! -f "$dsi0_helper" ] || [ -L "$dsi0_helper" ]; then
         end_inventory "DSI0 trace fixture is ambiguous or incomplete"
     fi
     stock_inventory_modules check "$dsi0_manifest" || end_inventory "DSI0 module manifest rejected"
@@ -885,6 +925,10 @@ if stock_inventory_scan /sys/class/block yes; then
     if [ "$nv_guard_requested" = yes ]; then
         stock_nv_guard "$bb" /sys/class/block /proc/self/mountinfo /grizzly-inventory/nv-ro "$nv_snapshot_output" ||
             end_inventory "NV guard failed"
+        if [ "$dsi0_rmw_requested" = yes ]; then
+            run_stock_dsi0_rmw_trace || end_inventory "DSI0 PHY register trace unavailable after NV guard"
+            end_inventory "DSI0 PHY register trace and NV guard complete"
+        fi
         if [ -f "$dsi0_manifest" ]; then
             if [ "$ufs_uic_requested" = yes ]; then
                 stock_inventory_log "UFS UIC trace and NV guard finished capture_ok=$ap_trace_ok"

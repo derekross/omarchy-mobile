@@ -225,9 +225,10 @@ def pack(args):
                         raise ValueError("DSI0 closure must load separately after the NV guard")
                     write_payload(root / "grizzly-inventory/dsi0.modules",
                                   display_manifest.encode(), 0o644)
-                    write_payload(root / "grizzly-inventory/stock-dsi0-trace.sh",
-                                  (HERE / "stock-dsi0-trace.sh").read_bytes(), 0o755)
-                    if args.dsi0_pll_trace or args.dsi0_genpd_trace or args.dsi0_phy_reset_trace:
+                    helper = "stock-dsi0-rmw-trace.sh" if args.dsi0_rmw_trace else "stock-dsi0-trace.sh"
+                    write_payload(root / "grizzly-inventory" / helper, (HERE / helper).read_bytes(), 0o755)
+                    if (args.dsi0_pll_trace or args.dsi0_genpd_trace
+                            or args.dsi0_phy_reset_trace or args.dsi0_rmw_trace):
                         cdphy = capture("bsdtar", "-xOf", vendor_kernel_cpio, "lib/modules/mipi-cdphy.ko")
                         if hashlib.sha256(cdphy).hexdigest() != DSI0_CDPHY_SHA256:
                             raise ValueError("factory mipi-cdphy.ko differs from the audited D1 module")
@@ -237,6 +238,8 @@ def pack(args):
                         write_payload(root / "grizzly-inventory/dsi0-genpd-trace", b"", 0o644)
                     if args.dsi0_phy_reset_trace:
                         write_payload(root / "grizzly-inventory/dsi0-phy-reset-trace", b"", 0o644)
+                    if args.dsi0_rmw_trace:
+                        write_payload(root / "grizzly-inventory/dsi0-rmw-trace", b"", 0o644)
                 if args.ufs_refclk_only:
                     write_payload(root / "grizzly-inventory/ufs-refclk-only", b"", 0o644)
                     write_payload(root / "grizzly-inventory/ufs-refclk.sh",
@@ -395,7 +398,9 @@ def pack(args):
               f"{count - len(preloads)} subsequent module requests.")
         if args.nv_guard_only:
             print("NV guard prototype verifies read-only state without exporting block data.")
-        if args.dsi0_trace:
+        if args.dsi0_rmw_trace:
+            print("Stock PHY register trace arms after CD-PHY loads and before the DSI host loads.")
+        elif args.dsi0_trace:
             print("Stock DSI0 trace arms before the separate guarded display module load.")
         if args.ufs_refclk_only:
             print("UFS reference-clock prototype reads the stock attribute after the NV guard.")
@@ -452,6 +457,8 @@ def main():
                       help="correlate active-only stock PHY reset readbacks with DSI0 ON and host status")
     mode.add_argument("--dsi0-phy-reset-uic-trace", action="store_true",
                       help="record UFS startup before the guarded stock DSI0 PHY reset trace")
+    mode.add_argument("--dsi0-rmw-trace", action="store_true",
+                      help="observe existing stock PHY 0x28 accesses if display activity occurs")
     mode.add_argument("--ufs-refclk-only", action="store_true",
                       help="read the stock UFS device's reference-clock attribute after the NV guard")
     mode.add_argument("--ufs-power-trace", action="store_true",
@@ -479,7 +486,8 @@ def main():
     if args.dsi0_phy_reset_uic_trace:
         args.dsi0_phy_reset_trace = True
         args.ufs_uic_trace = True
-    args.dsi0_trace |= args.dsi0_pll_trace or args.dsi0_genpd_trace or args.dsi0_phy_reset_trace
+    args.dsi0_trace |= (args.dsi0_pll_trace or args.dsi0_genpd_trace
+                        or args.dsi0_phy_reset_trace or args.dsi0_rmw_trace)
     if (args.usb2_ep0_trace or args.usb2_nv_reader) and not args.usb2_test:
         parser.error("USB2 isolation options require --usb2-test")
     try:
