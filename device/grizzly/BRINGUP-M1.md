@@ -8880,7 +8880,7 @@ to DSI0 TX and the external reset remain unverified.
 The fixture runs after the unchanged 42-partition
 read-only NV guard and UFS disk retirement. It keeps the
 90-second warm return and leaves PHY TX and host reads
-disabled. No on-device trial has run.
+disabled.
 
 The ARM64 kernel and module built with release
 `7.3.0-rc6-omamobile-grizzly-dsi0-selector3-gate`. The
@@ -8893,6 +8893,43 @@ mock checked the exact command and sibling guard, and
 the trace checker passed replay with the fixture's
 ARM64 BusyBox. The five-image archive SHA-256 is
 `05e289825c20d4c2d061a4b5ff05c9d0befc6fce57fb33783b368ab137a35c4a`.
+
+###### Attended DSI0 selector 3 gate result
+
+On 2026-11-27, the guarded rescue backed up all nine
+read-only, unmounted NV partitions before the single
+slot B diagnostic boot. The private copy contained
+3,392,151,552 bytes, and independent on-device
+SHA-256 hashes matched the saved images. The USB
+bridge recovered four framing interruptions.
+Stock Android stayed off between rescue and diagnostic.
+
+Ramoops and `SYSTEM_LAST_KMSG` matched on all 38
+selected lines. Both passed the ordered trace checker.
+
+| Checkpoint | Gate sample time (s) | Selector 3 gate | DSI1 | FE0 | FE1 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `before-on` | 6.427970 | 0 | 0 | 0 | 0 |
+| `after-on` | 6.428955 | 0 | 0 | 0 | 0 |
+| `before-off` | 6.432239 | 0 | 0 | 0 | 0 |
+| `after-off` | 6.432948 | 0 | 0 | 0 | 0 |
+
+The fixture acquired wrapper → BE → DSI0 and released
+DSI0 → BE → wrapper. DSI0 ON and OFF readbacks were
+1 and 0 respectively. Selector 3's gate acknowledgment
+stayed clear at every sampled checkpoint, including
+both samples taken while the DSI0 vote was ON. This
+confirms the observed vote did not change the selector 3
+acknowledgment at those checkpoints. The trace provides
+no physical clock or external reset qualification for TX.
+
+The read-only LUN 0 scan verified 42 partitions using
+seven GPT metadata reads. The v73 block comparison
+passed and the disk retired. The fixture reported
+completion at 6.466 s and requested its timed warm
+restart at 90.199 s. PHY TX and host reads stayed
+disabled. Stock D1 resumed on slot A with enforcing
+verity and the original VBMeta digest.
 
 ### Offline stock D1 device reference-clock diagnostic
 
