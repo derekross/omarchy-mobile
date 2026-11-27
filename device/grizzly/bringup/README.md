@@ -6,7 +6,8 @@ boot gates. The current experiment uses D1 B0 and a link-only UFS diagnostic.
 The prebuilt v29 package has SHA-256
 `c30bee4abf52c796eb833841ad215b365a3525789b125589f812862e5e555ed2`.
 
-- `v29.config` is the effective kernel configuration from the v29 build.
+- The [v29 kernel source commit](https://github.com/adrienlacombe/linux-omarchy-mobile/commit/401ec7a0581a508ec414b5cdb5328b2d93f5a2ac)
+  records the source used for the v29 fixture.
 - `v29-rescue-init` is the first-stage wrapper used for the live DT and
   90-second warm restart markers. It hands off to the shared initramfs.
   The v29 archive uses RAM rescue with the write allowlist omitted.

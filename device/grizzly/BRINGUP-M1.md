@@ -103,7 +103,7 @@ whether it predated a stock boot.
 | [v68](#attended-v68-slot-b-trial) | After v67. Stock D1 A preflight matched the prior return. The v68 boot was requested at 17:57:17 UTC on 2026-11-25. | Same copy, nine hashes rechecked. The owner approved this trial using the copy that predates the stock boot. |
 | [v69](#attended-v69-slot-b-trial) | After v68. Stock D1 A preflight matched the prior return. The v69 boot was requested at 18:15:08 UTC on 2026-11-25. | Same copy, nine hashes rechecked. The owner approved this trial using the copy that predates the stock boot. |
 | [v70](#attended-v70-slot-b-trial) | After v69. Stock D1 A preflight matched the prior return. The v70 boot was requested at 18:34:28 UTC on 2026-11-25. | Same copy, nine hashes rechecked. The owner approved this trial using the copy that predates the stock boot. |
-| [v71](#attended-v71-slot-b-trial) | After v70. Stock D1 A preflight matched the prior return. The v71 boot was requested at 20:45:44 UTC on 2026-11-25. | Same copy, nine hashes rechecked. The owner approved this trial using the copy that predates the stock boot. |
+| [v71](#attended-v71-slot-b-trial) | After v70. Stock D1 A preflight matched the prior return. The v71 boot was requested at 20:45:44 UTC on 2026-11-25, after the [19:06 UTC maintainer decision requiring a fresh backup](https://github.com/derekross/omamobile/pull/1002#issuecomment-7171826035). | Ran without a fresh copy. Nine hashes passed on the copy that predated the stock boot. The owner approved reuse, but the maintainer had not approved an exception. |
 | [v72](#attended-v72-slot-b-trial) | The Mac left verified stock D1 A at 21:02:34 UTC on 2026-11-25. A guarded B rescue returned to Fastboot with A selected before the v72 boot request at 21:24:55 UTC. | Fresh read-only rescue copy verified at 21:13:45 UTC. All nine hashes were rechecked before staging. The stock A return after v72 requires a new copy before the next power or CPM trial. |
 | [v73](#attended-v73-slot-b-trial) | The Mac left verified stock D1 A at 21:35:59 UTC on 2026-11-25. A guarded B rescue returned to Fastboot with A selected before the v73 boot request at 21:42:45 UTC. | Fresh read-only rescue copy verified at 21:41:18 UTC. All nine hashes passed. The stock A return after v73 requires a new copy before the next power or CPM trial. |
 | [Read-only test root](#attended-read-only-test-root-slot-b-trial) | The Mac left verified stock D1 A at 06:13:51 UTC on 2026-11-26 and ran the guarded B rescue. Fastboot stayed active between the rescue and the test-root boot request at 06:20:35 UTC. | Fresh read-only rescue copy verified at 06:19:08 UTC. All nine hashes passed. The stock A return requires a new copy before the next power or CPM trial. |
@@ -125,6 +125,7 @@ whether it predated a stock boot.
 | [Passive stock D1 DSI0 trace](#attended-passive-stock-d1-dsi0-trace) | The Mac left stock D1 A at 16:29:20 UTC on 2026-11-26. Android stayed off between the rescue and the trace boot request at 16:37:33 UTC. | All nine hashes passed at 16:35:44 UTC. The stock A return requires a fresh copy before the next power or CPM trial. |
 | [Stock D1 DSI0 genpd and MBFS trace](#attended-stock-d1-dsi0-genpd-and-mbfs-trace) | The Mac left stock D1 A at 16:46:20 UTC on 2026-11-26. Android stayed off between the rescue and the trace boot at 16:53:23 UTC. | All nine hashes passed at 16:52:00 UTC. The stock A return requires a fresh copy before the next power or CPM trial. |
 | [Stock D1 DSI0 clock and reset trace](#attended-stock-d1-dsi0-clock-and-reset-trace) | The Mac left stock D1 A at 17:08:28 UTC on 2026-11-26. Android stayed off between the rescue and the trace boot at 17:15:58 UTC. | All nine hashes passed at 17:14:41 UTC. The stock A return requires a fresh copy before the next power or CPM trial. |
+| [Stock D1 DSI0 PHY init trace](#attended-stock-d1-dsi0-phy-init-trace) | The Mac left stock D1 A at 20:30:01 UTC on 2026-11-26. Android stayed off between the rescue and the trace boot at 20:38:41 UTC. | All nine hashes passed at 20:37:24 UTC. The stock A return requires a fresh copy before the next power or CPM trial. |
 
 [Maintainer decision on backup freshness](https://github.com/derekross/omamobile/pull/1002#issuecomment-7171826035).
 Take a fresh read-only backup of all nine partitions after the latest
@@ -132,7 +133,9 @@ stock Android boot, including a fallback to A, and before each further
 power or CPM trial. Use the guarded stock D1 RAM reader and a new
 private directory. Verify every local copy against the separate
 phone-side digest and record which stock boot preceded the backup.
-The earlier one-trial approvals above are historical.
+The earlier one-trial approvals above are historical. Any future
+exception to a rule set by the maintainer requires the maintainer's
+approval in the PR thread before the trial. [Maintainer review](https://github.com/derekross/omamobile/pull/1002#pullrequestreview-6082210711).
 
 If a power or CPM trial will follow the backup, catch the reader's warm
 return in Fastboot and keep it there until the separately approved trial
@@ -4192,10 +4195,12 @@ Archive SHA-256 `95ece9ccca05c1b3eff72bcc7dbfc1fe51366602deaf9e5c4621d0064a0bfdb
 
 #### Attended v71 slot B trial
 
-On 2026-11-25 at 20:45:44 UTC, one v71 boot used the nine-partition
-private NV backup with the owner's approval. All nine local hashes
-passed. The copy predates the last stock A boot. All five slot B
-writes passed, and the readback matched all 8,192 supplied
+On 2026-11-25 at 20:45:44 UTC, one v71 boot powered the UFS
+host and its PSMs after the maintainer's fresh-backup decision.
+It ran without a fresh copy. The owner approved reuse, but the
+maintainer had not approved an exception. All nine local hashes
+passed on the copy taken before the last stock A boot. All five
+slot B writes passed, and the readback matched all 8,192 supplied
 `vendor_boot_b` bytes.
 
 | Monotonic time (s) | Event | Result |
