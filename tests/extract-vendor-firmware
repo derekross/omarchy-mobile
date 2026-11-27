@@ -8,8 +8,9 @@
 # reused output directory keeps no firmware or sensor registry file from
 # an earlier run (another device's, or one the new image doesn't have),
 # and leaves the rest of the directory alone; a husky run drops an earlier
-# registry; a panther run adds the video codec's firmware and reports its
-# version, and refuses one that doesn't start with an ARM vector table; a successful run's checksum list names exactly the mapped
+# registry; panther and husky runs add the video codec's firmware (v15 and
+# v16) and report its version, and refuse one that doesn't start with an
+# ARM vector table; a successful run's checksum list names exactly the mapped
 # files; a failed run (a missing file or registry, debugfs reporting a
 # short write, also under a file size limit, a failed sanity check, a
 # missing camera APEX) leaves the previous outputs and the -c file byte
@@ -105,6 +106,7 @@ make_vendor() {
     halo "FIRMWARE_CS40L26 BUZZ_EFFECTS2_BUZZ_LEVEL $g" > "$v/firmware/cs40l26.wmfw"
     halo "calib $g" > "$v/firmware/cs40l26-calib.wmfw"
     for f in cs40l26.bin cs40l26-svc.bin cs40l26-dvl.bin; do echo "WMDR $f $g" > "$v/firmware/$f"; done
+    mfc_fw "$g" > "$v/firmware/mfc_fw.bin"
     return
   fi
   printf 'fictional 4389c1-roml Version=1.0.1 (%s)\n' "$g" > "$v/firmware/fw_bcmdhd.bin"
@@ -295,9 +297,12 @@ o=$t/husky-reuse n=$failed
 seed "$o"
 if run "$t/husky" "$t/ext4.img" -d husky -o "$o"; then
   [[ ! -e $o/usr/share/omamobile/sensors ]] || fail "husky: an earlier device's sensor registry is dropped"
-  [[ $(listed "$o" | tr '\n' ' ') == "brcm/BCM.google,zuma-husky.hcd brcm/brcmfmac4398d0-pcie.google,zuma-husky.bin brcm/brcmfmac4398d0-pcie.google,zuma-husky.clm_blob brcm/brcmfmac4398d0-pcie.google,zuma-husky.txcap_blob brcm/brcmfmac4398d0-pcie.google,zuma-husky.txt cs40l26-calib.wmfw cs40l26-dvl.bin cs40l26-svc.bin cs40l26.bin cs40l26.wmfw " ]] ||
-    fail "husky: the checksum list names husky's ten files only"
-  [[ $(find "$o/$FW" -type f | wc -l) == 10 ]] || fail "husky: no cheetah firmware stays"
+  [[ $(listed "$o" | tr '\n' ' ') == "brcm/BCM.google,zuma-husky.hcd brcm/brcmfmac4398d0-pcie.google,zuma-husky.bin brcm/brcmfmac4398d0-pcie.google,zuma-husky.clm_blob brcm/brcmfmac4398d0-pcie.google,zuma-husky.txcap_blob brcm/brcmfmac4398d0-pcie.google,zuma-husky.txt cs40l26-calib.wmfw cs40l26-dvl.bin cs40l26-svc.bin cs40l26.bin cs40l26.wmfw s5p-mfc-v16.fw " ]] ||
+    fail "husky: the checksum list names husky's eleven files only"
+  [[ $(find "$o/$FW" -type f | wc -l) == 11 ]] || fail "husky: no cheetah firmware stays"
+  cmp -s "$t/husky/firmware/mfc_fw.bin" "$o/$FW/s5p-mfc-v16.fw" || fail "husky: s5p-mfc-v16.fw is mfc_fw.bin"
+  grep -qF 'Video codec firmware: s5p-mfc-v16.fw (version 0x44250901)' "$t/log" ||
+    fail "husky: the MFC firmware's version is reported"
   grep -qF 'Bluetooth patch: G5SN_V17_HK3 REL gen3' "$t/log" || fail "husky: the Bluetooth patch's release is reported"
   pass_since "$n" "husky: a run over a cheetah generation leaves only husky's files"
 else
@@ -331,6 +336,12 @@ refuses "husky: another chip's Bluetooth patch" "BCM.hcd is not a Pixel 8 Pro (G
 # husky runs the haptics checks too: a Halo WMFW that isn't the CS40L26's is refused
 rm -rf "$t/husky-otherhap"; cp -r "$t/husky" "$t/husky-otherhap"; halo "calib fictional" > "$t/husky-otherhap/firmware/cs40l26.wmfw"
 refuses "husky: another part's haptics firmware" "cs40l26.wmfw is not a CS40L26 firmware" "$t/husky-otherhap" "$t/ext4.img" -d husky
+rm -rf "$t/husky-badmfc"; cp -r "$t/husky" "$t/husky-badmfc"
+printf 'not a firmware %4096s' x > "$t/husky-badmfc/firmware/mfc_fw.bin"
+refuses "husky: an MFC firmware without an ARM vector table" "mfc_fw.bin does not start with an ARM vector table" \
+  "$t/husky-badmfc" "$t/ext4.img" -d husky
+rm -rf "$t/husky-nomfc"; cp -r "$t/husky" "$t/husky-nomfc"; rm "$t/husky-nomfc/firmware/mfc_fw.bin"
+refuses "husky: a missing MFC firmware" "/vendor/firmware/mfc_fw.bin is missing" "$t/husky-nomfc" "$t/ext4.img" -d husky
 rm -rf "$t/v2-missing"; cp -r "$t/v2" "$t/v2-missing"; rm "$t/v2-missing/firmware/aoc.bin"
 refuses "a missing ext4 file with an older copy in OUT" "/vendor/firmware/aoc.bin is missing" "$t/v2-missing" "$t/ext4.img"
 refuses "a missing EROFS file with an older copy in OUT" "/vendor/firmware/aoc.bin is missing" "$t/v2-missing" "$t/erofs.img"
