@@ -570,6 +570,9 @@ initramfs_config() {
     [[ $DEV_INITRAMFS_USB_RECOVERY == yes || $DEV_INITRAMFS_USB_RECOVERY == no ]] ||
       die "INITRAMFS_USB_RECOVERY must be yes, no or absent"
   fi
+  if [[ -n ${DEV_INITRAMFS_CRYPT+x} ]]; then
+    [[ $DEV_INITRAMFS_CRYPT == yes ]] || die "INITRAMFS_CRYPT must be yes or absent"
+  fi
   # load_device has checked UFS_RW (names, slot B boot images, userdata);
   # pack it as one line with single spaces, the form the init accepts
   read -ra rw <<<"$DEV_UFS_RW"
@@ -618,6 +621,12 @@ initramfs_config() {
   # still refuses them when the board does not match COMPATIBLE.
   if [[ -n ${DEV_BRINGUP_PROBE:-} ]]; then
     : > "$etc/omamobile-bringup-probe"
+  fi
+  # An encrypted root (docs/SECURITY-PLAN.md §11): the init opens a LUKS2
+  # userdata with the PIN pad, and tools/phone-encrypt checks for this
+  # marker. Absent: the init never looks for LUKS, as before.
+  if [[ ${DEV_INITRAMFS_CRYPT:-} == yes ]]; then
+    : > "$etc/omamobile-crypt"
   fi
   # The storage guard's allowlist. Without this file the init leaves every
   # partition read-only.
@@ -734,8 +743,14 @@ cmd_initramfs() {
   # loses alpine-fetch.py's exit status and unpacks what it printed
   local apk apks
   # e2fsprogs-extra: resize2fs and dumpe2fs, to grow a freshly flashed root
-  # to the whole userdata partition on its first boot (init, boot_arch)
-  apks=$(python3 -I "$ROOT/tools/alpine-fetch.py" "$ver" "$dl/apks" dropbear kexec-tools e2fsprogs e2fsprogs-extra) ||
+  # to the whole userdata partition on its first boot (init, boot_arch).
+  # INITRAMFS_CRYPT=yes: cryptsetup opens an encrypted root; GNU tar keeps
+  # xattrs, ACLs and file capabilities when tools/phone-encrypt restores one
+  # (busybox tar keeps none). docs/SECURITY-PLAN.md §11.8
+  local crypt_apks=()
+  [[ ${DEV_INITRAMFS_CRYPT:-} == yes ]] && crypt_apks=(cryptsetup tar)
+  apks=$(python3 -I "$ROOT/tools/alpine-fetch.py" "$ver" "$dl/apks" dropbear kexec-tools e2fsprogs e2fsprogs-extra \
+           "${crypt_apks[@]}") ||
     die "tools/alpine-fetch.py failed for the initramfs's packages"
   for apk in $apks; do
     unpack_apk "$apk" "$stage" --exclude='.PKGINFO' --exclude='.SIGN.*' --exclude='.*.sh' ||
@@ -766,6 +781,14 @@ cmd_initramfs() {
     [[ -x $stage/$f ]] || die "the initramfs has no /$f"
   done
   install -m 755 "$init" "$stage/init"
+  if [[ ${DEV_INITRAMFS_CRYPT:-} == yes ]]; then
+    [[ -x $stage/sbin/cryptsetup || -x $stage/usr/sbin/cryptsetup ]] || die "the initramfs has no cryptsetup"
+    # GNU tar replaces busybox's /bin/tar link
+    [[ -f $stage/bin/tar && ! -L $stage/bin/tar ]] || die "the initramfs has no GNU tar (/bin/tar)"
+    # The SSH unlock (docs/SECURITY-PLAN.md §11.4); initramfs_config packs
+    # the marker, and the PIN pad is built below
+    install -Dm755 "$ROOT/initramfs/omamobile-unlock" "$stage/usr/local/bin/omamobile-unlock"
+  fi
 
   initramfs_config "$stage/etc"
   if [[ -n ${OMAMOBILE_NFSROOT:-} ]]; then
@@ -810,6 +833,22 @@ cmd_initramfs() {
   else
     say "No Omarchy Plymouth logo or ImageMagick here: building without the early splash"
   fi
+  # INITRAMFS_CRYPT: the PIN pad's glyphs, from the theme's font at this
+  # panel's width (PINPAD_FONT: a font file or name; default the host's
+  # sans). Without ImageMagick the pad draws its built-in capitals.
+  rm -rf "$stage/usr/share/omamobile-pinpad"
+  if [[ ${DEV_INITRAMFS_CRYPT:-} == yes ]]; then
+    if command -v magick >/dev/null && [[ ${DEV_PANEL_SIZE:-} =~ ^([0-9]+)x[0-9]+$ ]]; then
+      local pinpad_font=${PINPAD_FONT:-$(fc-match -f '%{file}' sans 2>/dev/null)}
+      if [[ -n $pinpad_font ]]; then
+        python3 -I "$ROOT/initramfs/pinpad/mkfont" "$pinpad_font" "${BASH_REMATCH[1]}" "$stage/usr/share/omamobile-pinpad" ||
+          die "initramfs/pinpad/mkfont failed for $pinpad_font"
+        say "PIN pad font: ${pinpad_font##*/} (sha256 $(cat "$stage"/usr/share/omamobile-pinpad/*.font | sha256sum | cut -d' ' -f1))"
+      fi
+    else
+      say "No ImageMagick or PANEL_SIZE: the PIN pad uses its built-in font"
+    fi
+  fi
 
   # devmem and bootctl are built against Alpine's musl with the Android
   # clang when the device package ships bootctl. reboot-to has one source,
@@ -829,9 +868,21 @@ cmd_initramfs() {
       done
     fi
     [[ -f $sysroot/usr/lib/libc.a ]] || die "alpine musl sysroot has no libc.a"
+    # The PIN pad (INITRAMFS_CRYPT) includes the kernel's fbdev and evdev headers
+    if [[ ${DEV_INITRAMFS_CRYPT:-} == yes && ! -f $sysroot/usr/include/linux/fb.h ]]; then
+      apks=$(python3 -I "$ROOT/tools/alpine-fetch.py" "$ver" "$dl/apks" linux-headers) ||
+        die "tools/alpine-fetch.py failed for the musl sysroot's linux-headers"
+      for apk in $apks; do
+        unpack_apk "$apk" "$sysroot" || die "could not unpack $apk for the musl sysroot"
+      done
+    fi
     printf '%s\n' "$sysroot"
   }
   local sysroot builtins reboot_src="$ROOT/packages/omamobile-device-cheetah/src/reboot-to.c"
+  # INITRAMFS_CRYPT: the encrypted root's PIN pad, and tools/phone-encrypt's
+  # tar digests, built as reboot-to is
+  local crypt_bins=()
+  [[ ${DEV_INITRAMFS_CRYPT:-} == yes ]] && crypt_bins=(pinpad/pinpad tarnorm/tarnorm)
   [[ -f $reboot_src ]] || die "missing $reboot_src"
   mkdir -p "$stage/usr/local/bin"
   if [[ -f $ROOT/packages/$DEV_PACKAGE/src/omamobile-bootctl.c ]]; then
@@ -844,6 +895,12 @@ cmd_initramfs() {
     "$CLANG_DIR/bin/clang" --target=aarch64-linux-musl --sysroot="$sysroot" -fuse-ld=lld -static -nostdlib -O2 \
       -o "$stage/usr/local/bin/reboot-to" "$sysroot/usr/lib/crt1.o" "$sysroot/usr/lib/crti.o" \
       "$reboot_src" -L"$sysroot/usr/lib" -lc "$builtins" "$sysroot/usr/lib/crtn.o"
+    # The encrypted root's PIN pad, and tools/phone-encrypt's tar digests
+    for f in "${crypt_bins[@]}"; do
+      "$CLANG_DIR/bin/clang" --target=aarch64-linux-musl --sysroot="$sysroot" -fuse-ld=lld -static -nostdlib -O2 \
+        -o "$stage/usr/local/bin/omamobile-${f#*/}" "$sysroot/usr/lib/crt1.o" "$sysroot/usr/lib/crti.o" \
+        "$ROOT/initramfs/$f.c" -L"$sysroot/usr/lib" -lc "$builtins" "$sysroot/usr/lib/crtn.o"
+    done
     if [[ -n ${DEV_INITRAMFS_MODULES:-} ]]; then
       "$CLANG_DIR/bin/clang" --target=aarch64-linux-musl --sysroot="$sysroot" -fuse-ld=lld -static -nostdlib -O2 \
         -o "$stage/usr/local/bin/module-load-once" "$sysroot/usr/lib/crt1.o" "$sysroot/usr/lib/crti.o" \
@@ -870,6 +927,15 @@ cmd_initramfs() {
       "$sysroot/usr/lib/crt1.o" "$sysroot/usr/lib/crti.o" \
       "$reboot_src" "$sysroot/usr/lib/libc.a" "$sysroot/usr/lib/crtn.o" \
       || die "reboot-to failed to link"
+    # The encrypted root's PIN pad, and tools/phone-encrypt's tar digests
+    for f in "${crypt_bins[@]}"; do
+      clang --target=aarch64-linux-musl --sysroot="$sysroot" -nostdinc -isystem "$sysroot/usr/include" \
+        -static -nostdlib -O2 -fno-stack-protector -fno-pie -fuse-ld=lld \
+        -o "$stage/usr/local/bin/omamobile-${f#*/}" \
+        "$sysroot/usr/lib/crt1.o" "$sysroot/usr/lib/crti.o" \
+        "$ROOT/initramfs/$f.c" "$sysroot/usr/lib/libc.a" "$sysroot/usr/lib/crtn.o" \
+        || die "omamobile-${f#*/} failed to link"
+    done
     if [[ -n ${DEV_INITRAMFS_MODULES:-} ]]; then
       clang --target=aarch64-linux-musl --sysroot="$sysroot" -nostdinc -isystem "$sysroot/usr/include" \
         -static -nostdlib -O2 -fno-stack-protector -fno-pie -fuse-ld=lld \

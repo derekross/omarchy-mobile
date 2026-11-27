@@ -17,6 +17,13 @@ mount -t devtmpfs devtmpfs /dev
 mkdir -p /dev/pts && mount -t devpts devpts /dev/pts
 mount -t configfs configfs /sys/kernel/config
 mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs /run
+# What this initramfs can do, for the root's tools (/run moves into the
+# root): an encrypted root and the hold for tools/phone-encrypt
+# (omamobile-encrypt-hold, docs/SECURITY-PLAN.md §11.6). Only an initramfs
+# built with INITRAMFS_CRYPT=yes has /etc/omamobile-crypt.
+if [ -e /etc/omamobile-crypt ]; then
+  mkdir -p /run/omamobile && echo "crypt hold" > /run/omamobile/initramfs-features
+fi
 
 # With "splash" on the command line, Plymouth shows the boot animation once
 # Arch starts, so keep status lines off the screen (they still go to kmsg).
@@ -452,6 +459,10 @@ if [ "$(cat /etc/omamobile-usb-recovery 2>/dev/null)" != no ]; then
 (
   for i in $(seq 1 45); do
     grep -qx configured /sys/class/udc/*/state 2>/dev/null && exit 0
+    # The PIN pad of an encrypted root is up (crypt_unlock): someone can
+    # unlock at the screen, with no cable (docs/SECURITY-PLAN.md §11.4). Only
+    # crypt_unlock makes this file, so without INITRAMFS_CRYPT it never exists.
+    [ -e /run/omamobile-pinpad ] && exit 0
     sleep 1
   done
   {
@@ -460,7 +471,14 @@ if [ "$(cat /etc/omamobile-usb-recovery 2>/dev/null)" != no ]; then
     dmesg | grep -iE 'dwc3|phy|usb|udc|clk|error|fail' | tail -30
     echo "omamobile: no USB host, crashing in 20 s so ABL falls back to slot A"
   } > $SCREEN
-  sleep 20
+  if [ -e /etc/omamobile-crypt ]; then
+    for i in $(seq 1 20); do
+      [ -e /run/omamobile-pinpad ] && { say "PIN pad up: not crashing"; exit 0; }
+      sleep 1
+    done
+  else
+    sleep 20
+  fi
   # Never in the middle of growing the root file system (boot_arch)
   while [ -e /run/omamobile-resizing ]; do sleep 1; done
   sync
@@ -548,18 +566,114 @@ boot_nfs() {
   exec switch_root /newroot /usr/lib/systemd/systemd
 }
 
+# --- The encrypted root (docs/SECURITY-PLAN.md §11.4) ---
+# bin/omamobile initramfs packs /etc/omamobile-crypt with cryptsetup and the
+# PIN pad when the descriptor says INITRAMFS_CRYPT=yes; without it none of
+# this runs. A LUKS userdata is opened as /dev/mapper/root by the first of: the
+# PIN pad on the screen (omamobile-pinpad), or omamobile-unlock over SSH
+# (tools/phone-unlock). A plain ext4 userdata never comes here.
+
+# A charging boot: the bootloader started the phone because a charger came
+# while it was off (androidboot.mode = "charger", bootconfig or command line)
+charger_boot() {
+  if [ -r /proc/bootconfig ] && grep -q '^androidboot\.mode *= *"charger"' /proc/bootconfig; then
+    return 0
+  fi
+  grep -qw 'androidboot.mode=charger' /proc/cmdline 2>/dev/null
+}
+
+# /dev/mapper/root exists once the volume is open. cryptsetup makes the node
+# itself with no udev running; if it didn't, make it from sysfs.
+crypt_open() {
+  local d dev
+  [ -b /dev/mapper/root ] && return 0
+  for d in /sys/block/dm-*; do
+    [ "$(cat "$d/dm/name" 2>/dev/null)" = root ] || continue
+    dev=$(cat "$d/dev") || return 1
+    mkdir -p /dev/mapper
+    mknod /dev/mapper/root b "${dev%:*}" "${dev#*:}" 2>/dev/null
+    [ -b /dev/mapper/root ]
+    return
+  done
+  return 1
+}
+
+# Open $1 as /dev/mapper/root, or power the phone off. Returns once it is open.
+crypt_unlock() {
+  local dev=$1 rc pad="" tries=0
+  mkdir -p /run/omamobile
+  printf '%s\n' "$dev" > /run/omamobile/crypt-device
+  # A charging boot waits dark, as the root's omamobile-charger-mode does:
+  # Power held restarts into a normal boot, the cable out powers off (PD8)
+  if charger_boot && [ ! -e /run/omamobile-continue ]; then
+    say "arch: charging boot: the screen stays dark; hold Power to start the phone"
+    # A wall charger is no USB host: the safety net must not crash this wait
+    : > /run/omamobile-pinpad
+    omamobile-pinpad --charger 2>/dev/kmsg
+    rc=$?
+    case $rc in
+      10) say "arch: Power held: restarting"; omamobile-pinpad --restart ;;
+      11) say "arch: the charger is out: powering off"; omamobile-pinpad --power-off ;;
+    esac
+    say "arch: the charging wait ended ($rc): asking for the PIN"
+  fi
+  say "arch: userdata is encrypted: enter the PIN on the phone (or tools/phone-unlock)"
+  rm -f /run/omamobile/pinpad-status
+  until crypt_open; do
+    # The pad, started again if it stops for another reason (at most five
+    # times). Its status goes to a file: a finished child is still there
+    # for kill -0 until the shell reaps it.
+    if [ -z "$pad" ] && [ $tries -lt 5 ] && [ -x /usr/local/bin/omamobile-pinpad ]; then
+      ( omamobile-pinpad --marker /run/omamobile-pinpad --done /dev/mapper/root -- \
+          cryptsetup open "$dev" root --key-file=- 2>/dev/kmsg
+        echo $? > /run/omamobile/pinpad-status ) &
+      pad=$!
+      tries=$((tries + 1))
+    fi
+    if [ -n "$pad" ] && [ -s /run/omamobile/pinpad-status ]; then
+      rc=$(cat /run/omamobile/pinpad-status)
+      rm -f /run/omamobile/pinpad-status
+      wait "$pad" 2>/dev/null
+      pad=""
+      case $rc in
+        0) ;;
+        3) say "arch: no PIN for 10 minutes: powering off"; omamobile-pinpad --power-off ;;
+        5) say "arch: no display for the PIN pad: unlock over SSH (tools/phone-unlock)"; tries=5 ;;
+        *) say "arch: the PIN pad stopped ($rc)" ;;
+      esac
+    fi
+    sleep 0.2
+  done
+  if [ -n "$pad" ]; then
+    kill "$pad" 2>/dev/null
+    wait "$pad" 2>/dev/null
+  fi
+  # For the session: the owner just typed the PIN, so the lock that follows
+  # the autologin is skipped once (/run moves into the root, PD3)
+  : > /run/omamobile/disk-unlocked
+  say "arch: the encrypted root is open"
+  [ -f /splash.bgra.gz ] && zcat /splash.bgra.gz > /dev/fb0 2>/dev/null
+  return 0
+}
+
 # Keep a shell on the screen too
 # Hand over to Arch on userdata, unless omamobile.initramfs is on the command
 # line. Everything is checked before the irreversible exec; if anything is
 # missing we stay here in the initramfs shell.
 boot_arch() {
-  grep -q omamobile.initramfs /proc/cmdline && return 1
+  # /run/omamobile-continue: a held boot asked to go on (tools/phone-encrypt)
+  grep -q omamobile.initramfs /proc/cmdline && [ ! -e /run/omamobile-continue ] && return 1
   local dev="" s info label check
   for s in /sys/block/sda/sda*; do
     grep -qx PARTNAME=userdata "$s/uevent" 2>/dev/null && dev=/dev/${s##*/}
   done
   [ -n "$dev" ] || { say "arch: no userdata partition"; return 1; }
   [ "$(cat /sys/block/sda/${dev#/dev/}/ro)" = 0 ] || { say "arch: userdata is read-only"; return 1; }
+  # An encrypted root: open it, then go on with the file system inside
+  if [ -e /etc/omamobile-crypt ] && cryptsetup isLuks "$dev" 2>/dev/null; then
+    crypt_unlock "$dev" || return 1
+    dev=/dev/mapper/root
+  fi
   # Strict identification is opt-in: old hand-installed roots may be unlabelled.
   # The descriptor packs this file only when it requests the root protection.
   if [ -e /etc/omamobile-root-label ]; then
@@ -587,6 +701,19 @@ boot_arch() {
   mount -t ext4 -o rw,relatime "$dev" /newroot || { say "arch: cannot mount $dev"; return 1; }
   if [ ! -x /newroot/usr/lib/systemd/systemd ]; then
     say "arch: no systemd on $dev"; umount /newroot; return 1
+  fi
+  # Held for encryption: omamobile-encrypt-hold left this marker in the
+  # running root, so this boot stays here with the root unmounted for
+  # tools/phone-encrypt. Once only: the marker goes now.
+  if [ -e /etc/omamobile-crypt ] && [ -e /newroot/.omamobile-hold ]; then
+    rm -f /newroot/.omamobile-hold
+    sync
+    umount /newroot
+    [ "$dev" = /dev/mapper/root ] && cryptsetup close root
+    : > /run/omamobile-held
+    say "arch: held for encryption: the root is not mounted (tools/phone-encrypt)"
+    echo "omamobile: held for encryption; the phone waits for tools/phone-encrypt" > /dev/tty0 2>/dev/null
+    return 1
   fi
   if [ "$(cat /etc/omamobile-root-mode 2>/dev/null)" = persistent-development ]; then
     # A failed development boot returns to the USB rescue environment after
@@ -653,7 +780,25 @@ fi
 # since ABL sets console=null). So keep a shell on the screen in a loop
 # instead of exec'ing one. setsid -c makes tty1 its controlling terminal
 # (Alpine's busybox has no cttyhack; exec'ing it is what killed PID 1).
-while true; do
+if [ ! -e /etc/omamobile-crypt ]; then
+  while true; do
+    setsid -c sh </dev/tty1 >/dev/tty1 2>&1
+    sleep 1
+  done
+fi
+# INITRAMFS_CRYPT: a boot held here can be asked to go on. tools/phone-encrypt
+# (or a human) creates /run/omamobile-continue, and PID 1 tries the root
+# again, so the shell on tty1 runs beside it.
+( while true; do
   setsid -c sh </dev/tty1 >/dev/tty1 2>&1
+  sleep 1
+done ) &
+while true; do
+  if [ -e /run/omamobile-continue ]; then
+    say "arch: asked to go on booting"
+    boot_root
+    rm -f /run/omamobile-continue
+    say "arch: still in the initramfs"
+  fi
   sleep 1
 done

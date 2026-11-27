@@ -1,0 +1,112 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# omamobile-pin: change an encrypted phone's PIN: the disk's, the lock
+# screen's and sudo's together, since they are one PIN (docs/SECURITY-PLAN.md
+# §11.7, PD2).
+#
+#   sudo omamobile-pin                 change the PIN
+#   sudo omamobile-pin --recovery-key  replace the recovery key (shown once)
+#   omamobile-pin --status             is the root encrypted
+#
+# The disk keyslot changes first (cryptsetup luksChangeKey on keyslot 0
+# writes the new keyslot before it drops the old one), and only then the
+# account password, so a failure leaves the old PIN working everywhere. A
+# plain passwd changes the lock screen and sudo but not the disk.
+#
+# OMAMOBILE_CRYPT_ROOT_DEVICE names the LUKS partition instead of asking
+# cryptsetup, and OMAMOBILE_CRYPT_TEST_PBKDF a cheaper key derivation with
+# it (tests).
+set -euo pipefail
+die() { printf 'omamobile-pin: %s\n' "$*" >&2; exit 1; }
+# The cost of tools/phone-encrypt's keyslots, fixed: --iter-time would let
+# cryptsetup cut the memory on a phone that runs slow at the moment
+PBKDF=(--pbkdf argon2id --pbkdf-memory 1048576 --pbkdf-parallel 4 --pbkdf-force-iterations 4)
+# Tests only, with a test volume: a cheaper key derivation
+if [[ -n ${OMAMOBILE_CRYPT_ROOT_DEVICE:-} && -n ${OMAMOBILE_CRYPT_TEST_PBKDF:-} ]]; then
+  read -ra PBKDF <<<"$OMAMOBILE_CRYPT_TEST_PBKDF"
+fi
+
+# The LUKS partition under the root, or nothing
+luks_device() {
+  if [[ -n ${OMAMOBILE_CRYPT_ROOT_DEVICE:-} ]]; then
+    printf '%s\n' "$OMAMOBILE_CRYPT_ROOT_DEVICE"
+    return
+  fi
+  [[ $(findmnt -no SOURCE / 2>/dev/null) == /dev/mapper/root ]] || return 0
+  cryptsetup status root 2>/dev/null | awk '$1 == "type:" { t = $2 } $1 == "device:" { d = $2 } END { if (t == "LUKS2") print d }'
+}
+
+ask_new() {
+  local again
+  while :; do
+    read -rsp "New PIN: " new; echo
+    read -rsp "The same PIN again: " again; echo
+    [[ $new == "$again" ]] || { echo "They differ."; continue; }
+    [[ $new =~ ^[0-9]{6,64}$ ]] || { echo "Digits only, 6 to 64 of them."; continue; }
+    if ((${#new} < 8)); then
+      read -rp "Under 8 digits is weak against a copy of the disk. Keep it anyway? [y/N] " again
+      [[ $again == [yY] ]] || continue
+    fi
+    return
+  done
+}
+
+case ${1:-} in
+  --status)
+    dev=$(luks_device 2>/dev/null || true)
+    if [[ $(findmnt -no SOURCE / 2>/dev/null) == /dev/mapper/root ]] || [[ -n ${OMAMOBILE_CRYPT_ROOT_DEVICE:-} ]]; then
+      echo "The root is encrypted${dev:+ ($dev)}: the PIN unlocks it at power-on."
+    else
+      echo "The root is not encrypted (tools/phone-encrypt on a laptop encrypts it)."
+    fi
+    exit 0 ;;
+  -h|--help) awk 'NR > 2 && !/^#/ { exit } NR > 2' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  ''|--recovery-key) ;;
+  *) die "usage: sudo omamobile-pin [--recovery-key] | omamobile-pin --status" ;;
+esac
+
+[[ -n ${OMAMOBILE_CRYPT_ROOT_DEVICE:-} ]] || ((EUID == 0)) || die "run it with sudo: sudo omamobile-pin${1:+ $1}"
+dev=$(luks_device)
+[[ -n $dev ]] || die "the root is not encrypted: change the PIN with omamobile-set-pin"
+user=${SUDO_USER:-}
+[[ -n $user && $user != root ]] || die "run it with sudo from your own account (it changes that account's password)"
+
+read -rsp "Current PIN: " old; echo
+cryptsetup open --test-passphrase --key-slot 0 --key-file <(printf '%s' "$old") "$dev" ||
+  die "that is not the disk's PIN"
+
+if [[ ${1:-} == --recovery-key ]]; then
+  key=$(python3 -I -c 'import secrets; print("".join(str(secrets.randbelow(10)) for _ in range(48)))')
+  echo
+  echo "New recovery key: it opens the disk if the PIN is forgotten. It is shown only now."
+  echo
+  echo "    $(sed -E 's/(.{6})/\1 /g' <<<"$key")"
+  echo
+  while :; do
+    read -rp "Type its last group (6 digits) to show you kept it: " typed
+    [[ $typed == "${key: -6}" ]] && break
+    echo "That isn't its last group."
+  done
+  # The old key goes, the new one takes its slot; the PIN opens the disk
+  # throughout
+  cryptsetup luksKillSlot --batch-mode --key-file <(printf '%s' "$old") "$dev" 1 2>/dev/null || true
+  cryptsetup luksAddKey --batch-mode "${PBKDF[@]}" --key-slot 1 --key-file <(printf '%s' "$old") "$dev" <(printf '%s' "$key") ||
+    die "adding the new recovery key failed; the PIN still opens the disk"
+  cryptsetup open --test-passphrase --key-slot 1 --key-file <(printf '%s' "$key") "$dev" ||
+    die "the new recovery key doesn't open the disk; the PIN still does: try again"
+  key=""
+  clear 2>/dev/null || true
+  echo "The new recovery key is set; the old one no longer opens the disk."
+  exit 0
+fi
+
+ask_new
+echo "Changing the disk's PIN (a few seconds)..."
+cryptsetup luksChangeKey --batch-mode "${PBKDF[@]}" --key-slot 0 --key-file <(printf '%s' "$old") "$dev" <(printf '%s' "$new") ||
+  die "the disk's PIN was not changed; nothing else was"
+cryptsetup open --test-passphrase --key-slot 0 --key-file <(printf '%s' "$new") "$dev" ||
+  die "the disk doesn't take the new PIN: the old one may still work; the lock screen PIN was not changed"
+printf '%s:%s\n' "$user" "$new" | chpasswd ||
+  die "the disk has the new PIN, but the lock screen and sudo don't: run passwd and set the same PIN"
+old="" new=""
+echo "PIN changed for the disk, the lock screen and sudo."

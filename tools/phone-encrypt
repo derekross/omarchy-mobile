@@ -1,0 +1,493 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# phone-encrypt: encrypt a phone's root (userdata) with LUKS2, unlocked at
+# boot by the PIN pad, or take it back to plain ext4 (docs/SECURITY-PLAN.md
+# §11.6). It works over USB SSH against the phone's initramfs, with the root
+# not mounted: run omamobile-encrypt-hold on the phone and reboot it first
+# (or RAM-boot it with omamobile.initramfs on the command line).
+#
+#   tools/phone-encrypt --keep BACKUP_DIR         encrypt, keeping everything
+#   tools/phone-encrypt --fresh USERDATA.img      encrypt with a new root image
+#   tools/phone-encrypt --decrypt BACKUP_DIR      back to plain ext4, keeping everything
+#   tools/phone-encrypt --restore-plain BACKUP_DIR
+#                                                 plain ext4 from a --keep backup
+#   tools/phone-encrypt --backup-only BACKUP_DIR  the backup and its checks alone
+#   tools/phone-encrypt --status                  what the phone's initramfs sees
+#
+# --keep and --decrypt first copy the whole root to BACKUP_DIR/root.tar.zst
+# with GNU tar (xattrs, ACLs, file capabilities, hard links, sparse files)
+# and check it three ways: a second read on the phone gives the same SHA-256,
+# the file on the laptop gives it too, and the entry counts match. Only then
+# is userdata erased, after the owner types the codename and "erase". The
+# restore is checked the same way: a read of the new root gives the backup's
+# SHA-256. On any difference the tool stops; the backup is the way back
+# (--restore-plain).
+#
+# --fresh takes a root image already prepared for this phone
+# (tools/install-phone's copy, or device/hotdog/prepare-userdata's OUT.img;
+# raw or .zst) and checks that the PIN is its firstboot.conf password.
+#
+# The PIN is asked here twice (digits, at least 6) and is the lock screen's
+# PIN too (PD2). A recovery key (48 digits, which the PIN pad also takes) is
+# shown once; the owner keeps it. Keyslots are made on the phone (Argon2id,
+# 1 GiB, 4 threads, 2 s). The PIN and the key go to the phone only on SSH's
+# standard input, never on a command line, and are stored nowhere.
+#
+# BACKUP_DIR then holds the unencrypted root (password hashes, Wi-Fi and SSH
+# keys, messages) and the LUKS header: keep it on an encrypted disk and
+# delete it once the phone has run well for a few days.
+#
+# Environment: OMAMOBILE_PHONE_RUN replaces "tools/phone-ssh --fresh" (tests).
+# This tool erases userdata: never run it without the owner's go.
+set -euo pipefail
+here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+if [[ ${1:-} == -h || ${1:-} == --help ]]; then
+  source "$here/lib/usage.sh"
+  usage_from_header "$0"
+  exit 0
+fi
+
+die() { printf 'phone-encrypt: %s\n' "$*" >&2; exit 1; }
+say() { printf '\033[1m==> %s\033[0m\n' "$*"; }
+note() { printf '    %s\n' "$*"; }
+
+read -ra PHONE_RUN <<<"${OMAMOBILE_PHONE_RUN:-$here/phone-ssh --fresh}"
+
+# The phone side runs in the initramfs's busybox sh. Every script starts with
+# these helpers; values are passed in as checked words, secrets only on stdin.
+PHONE_LIB='
+export PATH=/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+set -e
+userdata() {
+  for s in /sys/block/sda/sda*; do
+    grep -qx PARTNAME=userdata "$s/uevent" 2>/dev/null && { echo "/dev/${s##*/}"; return 0; }
+  done
+  echo "no userdata partition" >&2; return 1
+}
+# tar with what keeps a root intact, in a fixed order, with pax headers
+# named without a PID, so two reads give the same bytes once
+# omamobile-tarnorm has taken the PID out of the names of sparse files
+TAR_C="tar -c -f - --format=posix --sort=name --xattrs --xattrs-include=* --acls --numeric-owner --sparse --one-file-system --pax-option=exthdr.name=%d/PaxHeaders/%f,delete=atime,delete=ctime ."
+tarsum() { omamobile-tarnorm | sha256sum | cut -d" " -f1; }
+TAR_X="tar -x -p -f - --xattrs --xattrs-include=* --acls --numeric-owner --warning=no-timestamp"
+entries() { find . -xdev ! -type s | wc -l; }
+# Both keyslots (PIN, recovery key) at the cost of §11.6: Argon2id, 4
+# iterations, 1 GiB, 4 threads
+luks_strong() {
+  cryptsetup luksDump "$1" | awk "
+    /^Keyslots:/ { k = 1 } /^Tokens:/ { k = 0 }
+    k && /^  [0-9]+: luks2/ { n++ }
+    k && \$1 == \"PBKDF:\" && \$2 == \"argon2id\" { a++ }
+    k && \$1 == \"Time\" && \$3 == 4 { t++ }
+    k && \$1 == \"Memory:\" && \$2 == 1048576 { m++ }
+    k && \$1 == \"Threads:\" && \$2 == 4 { p++ }
+    END { exit !(n == 2 && a == 2 && t == 2 && m == 2 && p == 2) }"
+}
+'
+# ssh hands its standard input to the phone: only phone_in passes ours (the
+# secrets, a stream); phone reads nothing, so it can't eat the owner's answers
+phone() { "${PHONE_RUN[@]}" "$PHONE_LIB$1" </dev/null; }
+phone_in() { "${PHONE_RUN[@]}" "$PHONE_LIB$1"; }
+
+# The LUKS2 format of §11.6: Argon2id at 1 GiB, 4 threads, 4 iterations (about
+# 2 s on hotdog). A fixed cost, not --iter-time: cryptsetup would measure the
+# phone at format time and cut the memory if it ran slow then (a stalled
+# console gave 64 MiB in PT2)
+PBKDF="--pbkdf argon2id --pbkdf-memory 1048576 --pbkdf-parallel 4 --pbkdf-force-iterations 4"
+LUKS_FORMAT="--batch-mode --type luks2 --label omamobile-crypt --cipher aes-xts-plain64 --key-size 512 $PBKDF"
+OPEN_FLAGS="--persistent --allow-discards --perf-no_read_workqueue --perf-no_write_workqueue"
+
+mode=${1:-}
+arg=${2:-}
+case $mode in
+  --keep|--decrypt|--restore-plain|--backup-only|--fresh) [[ -n $arg && $# == 2 ]] || die "usage: $mode PATH (see --help)" ;;
+  --status) (($# == 1)) || die "--status takes no argument" ;;
+  *) die "usage: tools/phone-encrypt --keep|--fresh|--decrypt|--restore-plain|--backup-only|--status (see --help)" ;;
+esac
+for tool in sha256sum zstd tar python3; do command -v "$tool" >/dev/null || die "$tool not found"; done
+
+# A tar stream's SHA-256 as the phone's omamobile-tarnorm | sha256sum gives it
+# (initramfs/tarnorm/tarnorm.c, the same rules): each header's name and
+# prefix with "GNUSparseFile.<pid>" as "GNUSparseFile.0", its checksum
+# zeroed. "pass FILE": standard input goes through to standard output
+# unchanged and the digest goes to FILE; "sum": the digest is printed.
+TARNORM='
+import hashlib, re, sys
+mode = sys.argv[1]
+src, dst = sys.stdin.buffer, sys.stdout.buffer
+h = hashlib.sha256()
+sparse = re.compile(rb"GNUSparseFile\.[0-9]+")
+def norm(field):
+    out = sparse.sub(b"GNUSparseFile.0", field)
+    return out + bytes(len(field) - len(out))
+data, buf = 0, b""
+while True:
+    chunk = src.read(1 << 20)
+    if mode == "pass" and chunk:
+        dst.write(chunk)
+    buf += chunk
+    n = len(buf) // 512 * 512
+    for off in range(0, n, 512):
+        b = buf[off:off + 512]
+        if data:
+            data -= 1
+        elif b != bytes(512):
+            f = b[124:136]
+            size = int.from_bytes(f[1:], "big") if f[0] & 0x80 else int(b"".join(re.findall(rb"[0-7]", f.split(b"\0")[0])) or b"0", 8)
+            b = norm(b[:100]) + b[100:148] + bytes(8) + b[156:345] + norm(b[345:500]) + b[500:]
+            data = (size + 511) // 512
+        h.update(b)
+    buf = buf[n:]
+    if not chunk:
+        break
+if buf or data:
+    sys.exit("tarnorm: the stream ends inside a block")
+if mode == "pass":
+    dst.flush()
+    open(sys.argv[2], "w").write(h.hexdigest() + "\n")
+else:
+    print(h.hexdigest())
+'
+hashpass() { python3 -I -c "$TARNORM" pass "$1"; }
+tarsum_here() { python3 -I -c "$TARNORM" sum; }
+
+# --- What the phone's initramfs sees ---
+# One line of words: state luks|plain|none mounted|unmounted board
+phone_state() {
+  phone '
+dev=$(userdata)
+state=$(omamobile-unlock --status 2>/dev/null || echo unknown)
+if cryptsetup isLuks "$dev" 2>/dev/null; then kind=luks
+elif dumpe2fs -h "$dev" 2>/dev/null | grep -c "^Filesystem volume name: *omamobile-root$" >/dev/null; then kind=plain
+else kind=other; fi
+if grep -q " /newroot " /proc/mounts; then m=mounted; else m=unmounted; fi
+[ -e /etc/omamobile-crypt ] && c=crypt || c=nocrypt
+board=$(tr "\0" "\n" < /proc/device-tree/compatible 2>/dev/null | sed -n 1p)
+echo "$state $kind $m $c ${board:-unknown}"
+'
+}
+read -r st_unlock st_kind st_mount st_crypt st_board < <(phone_state) || die "the phone's initramfs doesn't answer over SSH (tools/phone-ssh)"
+[[ -n ${st_board:-} ]] || die "the phone's initramfs doesn't answer over SSH (tools/phone-ssh)"
+if [[ $mode == --status ]]; then
+  echo "unlock: $st_unlock  userdata: $st_kind  root: $st_mount  initramfs: $st_crypt  board: $st_board"
+  exit 0
+fi
+# The phone must be the descriptor's (DEVICE, from omamobile.conf or the
+# environment), whose codename the owner types
+DEVICE=${DEVICE:-$(cd "$here/.." && DEVICE='' && source ./omamobile.conf 2>/dev/null && echo "${DEVICE:-}")}
+[[ $DEVICE =~ ^[a-z0-9]+$ && -f $here/../device/$DEVICE/device.conf ]] || die "set DEVICE to the phone's codename"
+want_board=$(sed -n 's/^COMPATIBLE="\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' "$here/../device/$DEVICE/device.conf")
+[[ $st_board == "$want_board" ]] || die "the phone is $st_board, but DEVICE=$DEVICE is ${want_board:-unknown}"
+[[ $st_crypt == crypt ]] || die "this initramfs can't open an encrypted root (no /etc/omamobile-crypt): build one with INITRAMFS_CRYPT=yes in the descriptor and boot it first"
+[[ $st_mount == unmounted ]] || die "the root is mounted: run omamobile-encrypt-hold on the phone and reboot it"
+[[ $st_unlock != waiting ]] || die "the boot waits for the PIN: it was not held (omamobile-encrypt-hold, then reboot)"
+say "Phone: $st_board, userdata $st_kind"
+# The initramfs's clock can be the RTC's 1970 (hotdog): every file is then
+# "in the future" and tar warns once per file. The laptop's time, in RAM only
+phone "date -u -s @$(date +%s) >/dev/null" || note "could not set the phone's clock"
+
+# --- Questions ---
+# The owner types the codename the board names, and "erase"
+confirm_erase() {
+  local what=$1 codename=$DEVICE answer
+  echo
+  echo "This ERASES userdata on the phone ($codename): $what"
+  echo "Nothing else is written. The phone must not lose power until it is done."
+  read -rp "Type the phone's codename to go on: " answer
+  [[ $answer == "$codename" ]] || die "not confirmed; nothing was written"
+  read -rp "Type erase to erase userdata: " answer
+  [[ $answer == erase ]] || die "not confirmed; nothing was written"
+}
+
+pin=""
+recovery=""
+ask_pin() {
+  local again
+  echo
+  echo "The PIN unlocks the disk at every power-on, and the lock screen and sudo (the same PIN)."
+  echo "Digits only, at least 6. Nobody can limit guesses against a copy of the disk:"
+  echo "6 digits last hours to a determined attacker, 8 weeks, 10 years (SECURITY-PLAN §11.6)."
+  while :; do
+    read -rsp "New PIN: " pin; echo
+    read -rsp "The same PIN again: " again; echo
+    if [[ $pin != "$again" ]]; then echo "They differ."; continue; fi
+    if [[ ! $pin =~ ^[0-9]{6,64}$ ]]; then echo "Digits only, 6 to 64 of them."; continue; fi
+    if ((${#pin} < 8)); then
+      read -rp "Under 8 digits is weak against a copy of the disk. Keep it anyway? [y/N] " again
+      [[ $again == [yY] ]] || continue
+    fi
+    break
+  done
+}
+
+make_recovery() {
+  local typed last
+  recovery=$(python3 -I -c 'import secrets; print("".join(str(secrets.randbelow(10)) for _ in range(48)))')
+  echo
+  echo "Recovery key: it opens the disk if the PIN is forgotten. It is shown only now."
+  echo "Keep it in a password manager or on paper, away from the phone. The PIN pad takes it (all 48 digits)."
+  echo
+  echo "    $(sed -E 's/(.{6})/\1 /g' <<<"$recovery")"
+  echo
+  last=${recovery: -6}
+  while :; do
+    read -rp "Type its last group (6 digits) to show you kept it: " typed
+    [[ $typed == "$last" ]] && break
+    echo "That isn't its last group."
+  done
+  clear 2>/dev/null || printf '\n%.0s' {1..40}
+}
+
+# --- Backup and restore ---
+backup() {
+  local dir=$1 source=$2 used avail d_stream d_phone d_file n_phone n_file
+  mkdir -p "$dir"
+  chmod 700 "$dir"
+  [[ ! -e $dir/root.tar.zst ]] || die "$dir already holds a backup: use another directory"
+  used=$(phone "
+mkdir -p /mnt/old
+mount -o ro $source /mnt/old
+df -k /mnt/old | awk 'NR == 2 { print \$3 }'
+umount /mnt/old
+") || die "could not mount the root read-only on the phone"
+  avail=$(df -k --output=avail "$dir" | tail -1)
+  ((avail > used * 11 / 10)) || die "$dir has $((avail / 1024)) MiB free; the root uses $((used / 1024)) MiB (needs that plus 10 %)"
+  say "Backing up the root ($((used / 1024)) MiB used) to $dir/root.tar.zst"
+  # The stream's digest on the laptop as it arrives; the file is compressed here
+  set +e
+  phone "
+mkdir -p /mnt/old
+mount -o ro $source /mnt/old
+cd /mnt/old
+\$TAR_C
+" | hashpass "$dir/.stream.sha256" | zstd -T0 -3 -q -o "$dir/root.tar.zst.part"
+  local rc=("${PIPESTATUS[@]}")
+  set -e
+  phone 'umount /mnt/old 2>/dev/null || true' >/dev/null
+  [[ ${rc[0]} == 0 && ${rc[1]} == 0 && ${rc[2]} == 0 ]] || die "the backup stream failed (${rc[*]}); nothing was written to the phone"
+  d_stream=$(cat "$dir/.stream.sha256")
+  mv "$dir/root.tar.zst.part" "$dir/root.tar.zst"
+  say "Checking the backup"
+  read -r d_phone n_phone < <(phone "
+mkdir -p /mnt/old
+mount -o ro $source /mnt/old
+cd /mnt/old
+d=\$(\$TAR_C | tarsum)
+n=\$(entries)
+cd /
+umount /mnt/old
+echo \"\$d \$n\"
+") || die "the second read on the phone failed"
+  d_file=$(zstd -dc "$dir/root.tar.zst" | tarsum_here)
+  n_file=$(zstd -dc "$dir/root.tar.zst" | tar -tf - | wc -l)
+  note "stream on the laptop  $d_stream"
+  note "second read on phone  $d_phone"
+  note "the file here         $d_file"
+  note "entries: phone $n_phone, archive $n_file"
+  [[ $d_stream == "$d_phone" ]] || die "the phone's second read differs from what arrived: the backup can't be trusted; nothing was erased"
+  [[ $d_file == "$d_stream" ]] || die "the file on the laptop differs from the stream: nothing was erased"
+  [[ $n_phone == "$n_file" ]] || die "the archive has $n_file entries, the root $n_phone: nothing was erased"
+  {
+    echo "date: $(date -u +%FT%TZ)"
+    echo "board: $st_board"
+    echo "source: $( [[ $source == /dev/mapper/root ]] && echo encrypted || echo plain ) userdata"
+    echo "tar-sha256: $d_stream"
+    echo "entries: $n_file"
+  } > "$dir/MANIFEST"
+  rm -f "$dir/.stream.sha256"
+  say "Backup checked: $dir/root.tar.zst"
+}
+
+manifest_value() { sed -n "s/^$2: //p" "$1/MANIFEST"; }
+
+# Restore the backup in $1 into the file system just made on $2 (the phone
+# side mounts it at /mnt/new), then read it back: the same digest as the backup
+restore() {
+  local dir=$1 target=$2 want got n
+  want=$(manifest_value "$dir" tar-sha256)
+  [[ $want =~ ^[0-9a-f]{64}$ ]] || die "$dir/MANIFEST has no tar-sha256"
+  say "Restoring the root from $dir/root.tar.zst"
+  set +e
+  zstd -dc "$dir/root.tar.zst" | phone_in "
+mkdir -p /mnt/new
+mount $target /mnt/new
+cd /mnt/new
+\$TAR_X
+cd /
+sync
+"
+  local rc=("${PIPESTATUS[@]}")
+  set -e
+  [[ ${rc[0]} == 0 && ${rc[1]} == 0 ]] || die "the restore failed (${rc[*]}); the backup in $dir is intact: tools/phone-encrypt --restore-plain $dir"
+  read -r got n < <(phone "
+cd /mnt/new
+d=\$(\$TAR_C | tarsum)
+n=\$(entries)
+cd /
+umount /mnt/new
+echo \"\$d \$n\"
+") || die "reading the restored root back failed"
+  note "backup   $want"
+  note "restored $got ($n entries)"
+  [[ $got == "$want" ]] || die "the restored root differs from the backup; the backup in $dir is intact: --restore-plain $dir"
+  say "Restore checked"
+}
+
+# luksFormat userdata with the PIN, add the recovery key, open it with the
+# persistent flags, and make the ext4 inside. Both secrets on stdin.
+format_luks() {
+  say "Formatting userdata as LUKS2 (about 10 s)"
+  printf '%s\n%s\n' "$pin" "$recovery" | phone_in "
+dev=\$(userdata)
+IFS= read -r pin
+IFS= read -r rk
+umask 077
+printf '%s' \"\$rk\" > /run/omamobile-rk
+rk=''
+printf '%s' \"\$pin\" | cryptsetup luksFormat $LUKS_FORMAT --key-slot 0 --key-file=- \"\$dev\"
+printf '%s' \"\$pin\" | cryptsetup luksAddKey --batch-mode $PBKDF --key-slot 1 --key-file=- \"\$dev\" /run/omamobile-rk
+rm -f /run/omamobile-rk
+luks_strong \"\$dev\" || { echo 'the keyslots are not at the planned cost (luksDump)' >&2; exit 1; }
+printf '%s' \"\$pin\" | cryptsetup open $OPEN_FLAGS --key-file=- \"\$dev\" root
+pin=''
+mkfs.ext4 -q -F -L omamobile-root -m 1 /dev/mapper/root
+" || die "formatting failed; the backup is intact: tools/phone-encrypt --restore-plain BACKUP_DIR"
+}
+
+header_backup() {
+  local dir=$1
+  phone '
+dev=$(userdata)
+rm -f /run/omamobile-header
+cryptsetup luksHeaderBackup "$dev" --header-backup-file /run/omamobile-header
+cat /run/omamobile-header
+rm -f /run/omamobile-header
+' > "$dir/luks-header.img" || die "the LUKS header backup failed"
+  chmod 600 "$dir/luks-header.img"
+  note "LUKS header: $dir/luks-header.img (it opens with today's PIN or recovery key, even after a change)"
+}
+
+# Userdata as plain ext4 again, with the backup in $1 restored into it
+restore_plain() {
+  local dir=$1
+  say "Erasing userdata and making a plain ext4"
+  # The first 32 MiB zeroed: a LUKS header left under the ext4 would make
+  # the init take the disk for encrypted
+  phone '
+dev=$(userdata)
+[ -b /dev/mapper/root ] && cryptsetup close root
+dd if=/dev/zero of="$dev" bs=1M count=32 conv=fsync 2>/dev/null
+mkfs.ext4 -q -F -L omamobile-root -m 1 "$dev"
+' || die "making the plain file system failed; the backup in $dir is intact"
+  restore "$dir" '$(userdata)'
+  continue_boot
+  say "Done: the phone boots its plain root."
+}
+
+# Close what is open and let the init go on: it finds LUKS and shows the pad
+continue_boot() {
+  phone '
+umount /mnt/new 2>/dev/null || true
+umount /mnt/old 2>/dev/null || true
+[ -b /dev/mapper/root ] && cryptsetup close root
+sync
+touch /run/omamobile-continue
+' >/dev/null || die "could not hand the boot back to the init (touch /run/omamobile-continue on the phone)"
+}
+
+open_with_pin() {
+  local p
+  read -rsp "The disk's PIN (or recovery key): " p; echo
+  p=${p//[ -]/}
+  printf '%s\n' "$p" | phone_in '
+IFS= read -r pin
+printf "%s" "$pin" | cryptsetup open --readonly --key-file=- "$(userdata)" root
+' || die "the PIN didn't open the disk"
+}
+
+case $mode in
+  --backup-only)
+    case $st_kind in
+      plain) backup "$arg" '$(userdata)' ;;
+      luks) open_with_pin; backup "$arg" /dev/mapper/root; phone 'cryptsetup close root' ;;
+      *) die "userdata is neither an Omamobile root nor LUKS" ;;
+    esac ;;
+
+  --keep)
+    [[ $st_kind == plain ]] || die "userdata is $st_kind, not a plain omamobile-root: nothing to encrypt"
+    phone 'e2fsck -f -n "$(userdata)" >/dev/null' ||
+      die "the root's file system has errors: boot the phone normally once (it is checked at boot), then hold it again"
+    backup "$arg" '$(userdata)'
+    confirm_erase "its plain root is replaced by an encrypted one with the same files (the backup in $arg)"
+    ask_pin
+    make_recovery
+    format_luks
+    header_backup "$arg"
+    restore "$arg" /dev/mapper/root
+    continue_boot
+    pin="" recovery=""
+    say "Done: the phone shows the PIN pad. Type the PIN there (or tools/phone-unlock)."
+    note "If it isn't the lock screen's PIN too, run omamobile-pin on the phone to make them one."
+    note "$arg holds the whole unencrypted root: delete it once the phone has run well for a few days."
+    ;;
+
+  --fresh)
+    [[ -f $arg ]] || die "no image $arg"
+    for tool in debugfs dumpe2fs openssl; do command -v "$tool" >/dev/null || die "$tool not found"; done
+    work=$(mktemp -d)
+    trap 'rm -rf "$work"' EXIT
+    img=$arg
+    if [[ $arg == *.zst ]]; then
+      say "Decompressing $arg"
+      zstd -q -d --sparse -f "$arg" -o "$work/root.img"
+      img=$work/root.img
+    fi
+    [[ $(dumpe2fs -h "$img" 2>/dev/null | sed -n 's/^Filesystem volume name: *//p') == omamobile-root ]] ||
+      die "$arg is not an Omamobile root image (label omamobile-root)"
+    debugfs -R "cat /etc/omamobile/firstboot.conf" "$img" 2>/dev/null > "$work/firstboot.conf"
+    hash=$(sed -n 's/^PASSWORD_HASH=//p' "$work/firstboot.conf")
+    [[ $hash == \$6\$* ]] || die "$arg has no firstboot.conf with a PASSWORD_HASH: prepare it with tools/install-phone or prepare-userdata"
+    size=$(stat -c %s "$img")
+    ask_pin
+    salt=${hash#\$6\$}; salt=${salt%%\$*}
+    [[ $(openssl passwd -6 -salt "$salt" -stdin <<<"$pin") == "$hash" ]] ||
+      die "that PIN is not the password in the image's firstboot.conf; the disk and the lock screen share one PIN (PD2)"
+    confirm_erase "it gets an encrypted, new root from $(basename "$arg")"
+    make_recovery
+    format_luks
+    header_backup "$(dirname "$arg")"
+    say "Writing the root image ($((size >> 20)) MiB) into the encrypted volume"
+    want=$(sha256sum < "$img" | cut -d' ' -f1)
+    # Every block written, zeros too: under dm-crypt a skipped block reads
+    # back as noise, not zeros. gzip -1 for the link; busybox has gunzip.
+    set +e
+    gzip -1 -c "$img" | phone_in "gunzip -c | dd of=/dev/mapper/root bs=4M 2>/dev/null; sync"
+    rc=("${PIPESTATUS[@]}")
+    set -e
+    [[ ${rc[0]} == 0 && ${rc[1]} == 0 ]] || die "writing the image failed (${rc[*]})"
+    got=$(phone "head -c $size /dev/mapper/root | sha256sum | cut -d' ' -f1")
+    note "image $want"
+    note "phone $got"
+    [[ $got == "$want" ]] || die "the image read back differs: write it again"
+    continue_boot
+    pin="" recovery=""
+    say "Done: the phone shows the PIN pad; the first boot grows the root to the whole volume."
+    ;;
+
+  --decrypt)
+    [[ $st_kind == luks ]] || die "userdata is $st_kind, not encrypted"
+    open_with_pin
+    backup "$arg" /dev/mapper/root
+    phone 'cryptsetup close root'
+    confirm_erase "its encrypted root is replaced by a plain one with the same files (the backup in $arg)"
+    restore_plain "$arg"
+    ;;
+
+  --restore-plain)
+    [[ -f $arg/root.tar.zst && -f $arg/MANIFEST ]] || die "$arg holds no backup made by this tool"
+    [[ $(manifest_value "$arg" board) == "$st_board" ]] ||
+      die "$arg is a backup of $(manifest_value "$arg" board), not this phone ($st_board)"
+    confirm_erase "a plain root is restored from $arg"
+    restore_plain "$arg"
+    ;;
+esac

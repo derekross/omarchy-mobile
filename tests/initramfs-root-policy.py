@@ -38,6 +38,17 @@ with tempfile.TemporaryDirectory() as tmp:
     names = ('omamobile-root-label', 'omamobile-root-mode', 'omamobile-usb-recovery')
     default = pack('', 'default')
     assert not any((default / n).exists() for n in names)
+    # INITRAMFS_CRYPT (docs/SECURITY-PLAN.md §11): the marker that turns on
+    # the init's encrypted root, packed only on request
+    assert not (default / 'omamobile-crypt').exists()
+    assert (pack('INITRAMFS_CRYPT=yes\n', 'crypt') / 'omamobile-crypt').read_text() == ''
+    for i, bad in enumerate(('no', '1', '""', 'YES')):
+        pack('INITRAMFS_CRYPT=' + bad + '\n', 'bad-crypt-' + str(i), False)
+    # No shipped descriptor opts in yet: each phone does so in its own change
+    crypt_devices = set()
+    for d in sorted((repo / 'device').glob('*/device.conf')):
+        if any(line.split('#')[0].strip().startswith('INITRAMFS_CRYPT=') for line in d.read_text().splitlines()):
+            assert d.parent.name in crypt_devices, d.parent.name + ' sets INITRAMFS_CRYPT'
     for mode in ('persistent-development', 'ram-rescue'):
         out = pack('INITRAMFS_ROOT_LABEL=omamobile-root\nINITRAMFS_ROOT_MODE=' + mode +
                    '\nINITRAMFS_USB_RECOVERY=no\n', mode)
@@ -46,7 +57,7 @@ with tempfile.TemporaryDirectory() as tmp:
                              'INITRAMFS_ROOT_MODE=unknown\n', 'INITRAMFS_ROOT_MODE=ram-rescue\n',
                              'INITRAMFS_USB_RECOVERY=maybe\n')):
         pack(bad, 'bad-' + str(i), False)
-    print('ok - default packing is unchanged; explicit policies validated before output')
+    print('ok - default packing is unchanged (no crypt marker either); explicit policies validated before output')
 
     (fixture / 'initramfs').mkdir()
     (fixture / 'initramfs/init').write_text('#!/bin/sh\n')

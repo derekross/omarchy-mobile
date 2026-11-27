@@ -1,0 +1,63 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# phone-unlock: type an encrypted phone's PIN on the laptop, over USB SSH,
+# while its initramfs waits for it (docs/SECURITY-PLAN.md §11.7). For
+# development: after a push or a reboot, the phone needs no tap.
+#
+#   tools/phone-unlock [--wait SECONDS]
+#
+# Waits for the initramfs's SSH (up to --wait seconds, default 120), checks
+# that the phone waits for its PIN (omamobile-unlock --status), asks for the
+# PIN here without echo, and sends it to omamobile-unlock on the phone's
+# standard input. The PIN pad on the phone works meanwhile; the first to
+# open the disk wins. OMAMOBILE_DISK_PIN_CMD: a command that prints the PIN
+# (a password manager's), run instead of asking. The recovery key works the
+# same way (spaces and dashes are dropped).
+#
+# The PIN is never stored and never on a command line. Agents never run this
+# with a PIN of their own or ask for one: the owner types it (docs/SECURITY-PLAN.md §11.11, PD11).
+set -euo pipefail
+here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+die() { printf 'phone-unlock: %s\n' "$*" >&2; exit 1; }
+
+wait_s=120
+case ${1:-} in
+  -h|--help) source "$here/lib/usage.sh"; usage_from_header "$0"; exit 0 ;;
+  --wait) [[ ${2:-} =~ ^[0-9]+$ ]] || die "--wait takes seconds"; wait_s=$2 ;;
+  '') ;;
+  *) die "usage: tools/phone-unlock [--wait SECONDS]" ;;
+esac
+read -ra PHONE_RUN <<<"${OMAMOBILE_PHONE_RUN:-$here/phone-ssh --fresh}"
+
+state=""
+end=$((SECONDS + wait_s))
+until state=$("${PHONE_RUN[@]}" /usr/local/bin/omamobile-unlock --status 2>/dev/null </dev/null); do
+  ((SECONDS < end)) || die "no answer from the phone's initramfs in ${wait_s} s"
+  sleep 2
+done
+case $state in
+  waiting) ;;
+  open) echo "The disk is already open."; exit 0 ;;
+  *) die "the phone doesn't wait for a disk PIN ($state)" ;;
+esac
+
+while :; do
+  if [[ -n ${OMAMOBILE_DISK_PIN_CMD:-} ]]; then
+    pin=$(bash -c "$OMAMOBILE_DISK_PIN_CMD") || die "OMAMOBILE_DISK_PIN_CMD failed"
+  else
+    read -rsp "Disk PIN: " pin
+    echo
+  fi
+  pin=${pin//[ -]/}
+  [[ $pin =~ ^[0-9]+$ ]] || { [[ -n ${OMAMOBILE_DISK_PIN_CMD:-} ]] && die "OMAMOBILE_DISK_PIN_CMD printed no digits"; echo "Digits only."; continue; }
+  echo "Unlocking (about 2 s)..."
+  rc=0
+  printf '%s\n' "$pin" | "${PHONE_RUN[@]}" /usr/local/bin/omamobile-unlock || rc=$?
+  pin=""
+  case $rc in
+    0) echo "Unlocked: the phone goes on booting."; exit 0 ;;
+    2) [[ -z ${OMAMOBILE_DISK_PIN_CMD:-} ]] || die "wrong PIN from OMAMOBILE_DISK_PIN_CMD"
+       echo "Wrong PIN." ;;
+    *) die "omamobile-unlock failed ($rc)" ;;
+  esac
+done
