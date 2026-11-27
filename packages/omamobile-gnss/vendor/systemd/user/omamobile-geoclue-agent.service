@@ -13,6 +13,14 @@
 # that started the autostart one before the mask (an upgrade from before 0.2.6,
 # without a new login) still runs it, and a second agent only finds the
 # first one and exits: stop that one first, so this unit takes over.
+#
+# The agent also carries the desktop's location setting
+# (org.gnome.system.location enabled): xdg-desktop-portal's Location portal,
+# which libgeoclue's GClueSimple goes through, refuses every request while it
+# is false ("org.freedesktop.portal.Error.NotAllowed: Location services
+# disabled"), and it is false on a new account. So it is on while this agent
+# runs (the Location switch on) and off when it stops (the switch off, or the
+# session ending; the next login's start turns it on again).
 [Unit]
 Description=GeoClue agent (location authorization)
 After=graphical-session.target
@@ -21,7 +29,9 @@ ConditionPathExists=/usr/lib/geoclue-2.0/demos/agent
 
 [Service]
 ExecStartPre=-/usr/bin/systemctl --user stop app-geoclue\\x2ddemo\\x2dagent@autostart.service
+ExecStartPre=-/usr/bin/gsettings set org.gnome.system.location enabled true
 ExecStart=/usr/lib/geoclue-2.0/demos/agent
+ExecStopPost=-/usr/bin/gsettings set org.gnome.system.location enabled false
 Restart=on-failure
 RestartSec=5
 
