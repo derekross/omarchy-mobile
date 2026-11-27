@@ -9007,6 +9007,59 @@ reset remains unverified. Keep PHY TX and DSI0 host
 reads disabled. This audit used saved artifacts and
 did not build or boot a fixture.
 
+###### D1 DPU request word and trigger-ready status
+
+The exact D1 CPM image has 20 direct literal references
+to `0x6f40a000`. Each leads to a write in the DPU
+transition callbacks. The reads on these paths preserve
+fields for the update. The code uses the word to request
+LPCM hardware transitions, then polls descriptor-derived
+PSM status. No direct-reference path checks bits 2 or 3
+as status or exports either to the AP.
+
+The DSI0 PSM3 transitions use bit 3. Other matrix entries
+can also change that bit or the shared bit 2. The PSM0
+and PSM2 callbacks below each write a GPCSR control
+before modifying the request word.
+
+| Matrix transition | CPM callback | GPCSR write (CPM alias) | Request word update |
+| --- | --- | --- | --- |
+| PSM0 0 → 6 | `0x3a528` | `0x6f791070 = 1` | Replace bits 2:0 with `0x5` |
+| PSM0 6 → 0 | `0x3a608` | `0x6f791070 = 0` | Set mask `0x0f`, including bits 2 and 3 |
+| PSM0 6 → 5 | `0x3a640` | `0x6f79104c = 1` | Clear mask `0x39`, including bit 3 |
+| PSM2 2 → 1 | `0x3a7d4` | `0x6f79104c = 0` | Set mask `0x05`, including bit 2 |
+
+These are static transition paths. The isolated DSI0
+trial did not capture these wider state transitions.
+The GPCSR words at AP `0x0f79104c` and `0x0f791070`
+fall under GC bridge policy `0x30303`. The traced
+writes and that address policy establish no readback
+meaning. The stock BE idle transaction uses separate
+GPCSR offsets `0x107c` and `0x1084`. The legacy
+`curr_state` sysfs getter in `lpm_pm_domains.ko` reads
+a cached software index at `0x16f4`. It supplies no
+physical clock or reset status.
+
+CPM's internal LPCM trigger-ready getter at `0x39334`
+reads a global bitmap at `0x5008e014`. The table at
+`0x627f8` gives DPU LPCM `0x23` compact wrapper index
+8, and `0x62b98` maps that index to bitmap bit 8.
+The wait routine at `0x392ac` uses mask `0x16803e4f`
+and skips index 8 before reading the bitmap. The
+matching interrupt handling at `0x39370` also excludes
+that index. This is wrapper trigger readiness, with no
+identified AP-facing readout or per-DSI indication.
+The saved stock display bugreport and 61 retained
+trace and pstore files contain no read witness for the
+GPCSR controls or trigger-ready word.
+
+The software evidence ends at LPCM transition requests
+and the sequencer's state poll. The downstream TX bus
+clock and external reset signals remain unverified, and
+no qualified read-only status for them was found.
+Keep PHY TX and DSI0 host reads disabled. This audit
+built no fixture and took no on-device measurements.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
