@@ -7900,7 +7900,16 @@ The saved kernel config enables kprobes, kretprobes
 and dynamic events. It lacks the function and ftrace
 syscall tracers. Kernel support alone does not grant
 the shell permission to create the collector's
-instance and probes.
+instance and probes. This denial was recorded while
+the bootloader was already unlocked.
+
+The exact D1 ABL includes a boottrace command, and
+the saved Android init log shows `atrace.rc` checks
+`ro.boot.fastboot.boottrace` during late init. The
+property was unset in the capture. This is a boot-time
+path. It cannot arm the collector alongside the
+already-running stock client, and the saved evidence
+does not show that it creates the six custom probes.
 
 The stock bugreport shows the System Tracing app,
 `traced` and `traced_probes`. The probe daemon runs
