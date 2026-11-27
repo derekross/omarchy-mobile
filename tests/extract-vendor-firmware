@@ -7,8 +7,8 @@
 # failed write is an error message and exit 0). Checked: a run into a
 # reused output directory keeps no firmware or sensor registry file from
 # an earlier run (another device's, or one the new image doesn't have),
-# and leaves the rest of the directory alone; a husky run drops an earlier
-# registry; a panther run adds the video codec's firmware and reports its
+# and leaves the rest of the directory alone; a husky run replaces an
+# earlier registry with its own; a panther run adds the video codec's firmware and reports its
 # version, and refuses one that doesn't start with an ARM vector table; a successful run's checksum list names exactly the mapped
 # files; a failed run (a missing file or registry, debugfs reporting a
 # short write, also under a file size limit, a failed sanity check, a
@@ -105,6 +105,7 @@ make_vendor() {
     halo "FIRMWARE_CS40L26 BUZZ_EFFECTS2_BUZZ_LEVEL $g" > "$v/firmware/cs40l26.wmfw"
     halo "calib $g" > "$v/firmware/cs40l26-calib.wmfw"
     for f in cs40l26.bin cs40l26-svc.bin cs40l26-dvl.bin; do echo "WMDR $f $g" > "$v/firmware/$f"; done
+    echo "{\"accel\": \"$g\"}" > "$v/etc/sensors/registry/fictional_accel.json"
     return
   fi
   printf 'fictional 4389c1-roml Version=1.0.1 (%s)\n' "$g" > "$v/firmware/fw_bcmdhd.bin"
@@ -294,7 +295,8 @@ fi
 o=$t/husky-reuse n=$failed
 seed "$o"
 if run "$t/husky" "$t/ext4.img" -d husky -o "$o"; then
-  [[ ! -e $o/usr/share/omamobile/sensors ]] || fail "husky: an earlier device's sensor registry is dropped"
+  [[ $(cat "$o/$REG/fictional_accel.json") == '{"accel": "gen3"}' && ! -e "$o/$REG/stale_sensor.json" ]] ||
+    fail "husky: its own sensor registry replaces an earlier device's"
   [[ $(listed "$o" | tr '\n' ' ') == "brcm/BCM.google,zuma-husky.hcd brcm/brcmfmac4398d0-pcie.google,zuma-husky.bin brcm/brcmfmac4398d0-pcie.google,zuma-husky.clm_blob brcm/brcmfmac4398d0-pcie.google,zuma-husky.txcap_blob brcm/brcmfmac4398d0-pcie.google,zuma-husky.txt cs40l26-calib.wmfw cs40l26-dvl.bin cs40l26-svc.bin cs40l26.bin cs40l26.wmfw " ]] ||
     fail "husky: the checksum list names husky's ten files only"
   [[ $(find "$o/$FW" -type f | wc -l) == 10 ]] || fail "husky: no cheetah firmware stays"

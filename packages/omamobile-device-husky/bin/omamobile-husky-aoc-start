@@ -117,4 +117,7 @@ echo aoc.bin > "$node/firmware" || fail "the firmware load failed"
 for _ in $(seq 40); do grep -q aoc-snd-card "$cards" 2>/dev/null && break; sleep 0.5; done
 grep -q aoc-snd-card "$cards" 2>/dev/null || fail "the sound card did not appear"
 log "the sound card is up"
+# The sensor proxy's unit needs the USF node the moment it is checked.
+for _ in $(seq 25); do [[ -c /dev/acd-com.google.usf ]] && break; sleep 0.2; done
+[[ -c /dev/acd-com.google.usf ]] || log "no /dev/acd-com.google.usf (sensors unavailable)"
 finish

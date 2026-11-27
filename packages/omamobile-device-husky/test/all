@@ -148,12 +148,45 @@ bash -n bin/omamobile-usb-rescue || fail "the USB rescue parses"
 grep -q '10cb0000.i2c' bin/omamobile-usb-rescue || fail "the USB rescue watches husky's bus (hsi2c_11)"
 grep -q 'i2cset -f -y "$bus" $tcpc 0x93 0x09' bin/omamobile-usb-rescue || fail "the USB rescue closes the data switch"
 [[ $(grep -c 'i2cset' bin/omamobile-usb-rescue) -eq 1 ]] || fail "the USB rescue writes one register only"
+grep -q 'udevadm monitor --kernel --subsystem-match=power_supply' bin/omamobile-usb-rescue || fail "the USB rescue waits on udev events"
+# The monitor ends early: the rescue falls back to polling and keeps running.
+ur=$tmp/usbrescue; mkdir -p "$ur/bin" "$ur/sys/bus/i2c/devices" "$ur/dev/10cb0000.i2c/i2c-7"
+ln -s "$ur/dev/10cb0000.i2c/i2c-7" "$ur/sys/bus/i2c/devices/i2c-7"
+printf '#!/bin/sh\nexit 0\n' >"$ur/bin/udevadm"
+printf '#!/bin/sh\necho 0x09\n' >"$ur/bin/i2cget"
+printf '#!/bin/sh\necho "$@" >>%s/writes\n' "$ur" >"$ur/bin/i2cset"
+chmod +x "$ur/bin/"*
+PATH="$ur/bin:$PATH" OMAMOBILE_USB_RESCUE_SYS="$ur/sys" OMAMOBILE_USB_RESCUE_RECHECK=1 OMAMOBILE_USB_RESCUE_POLL=0.1 \
+  timeout 3 bash bin/omamobile-usb-rescue >"$ur/log" 2>&1 && rc=0 || rc=$?
+[[ $rc -eq 124 ]] || fail "the USB rescue keeps running after udevadm monitor ends: $(cat "$ur/log")"
+grep -q 'udevadm monitor ended; looking every 2 s' "$ur/log" || fail "the USB rescue falls back to polling: $(cat "$ur/log")"
+! grep -q 'unbound variable' "$ur/log" || fail "the USB rescue survives the reaped coproc"
+[[ ! -e $ur/writes ]] || fail "the USB rescue leaves a closed switch alone"
 grep -q '^ExecStart=/usr/bin/omamobile-usb-rescue$' vendor/systemd/system/omamobile-usb-rescue.service \
   || fail "the USB rescue unit runs the script"
 [[ $(readlink "$tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-usb-rescue.service") == ../omamobile-usb-rescue.service ]] \
   || fail "the USB rescue is enabled by a vendor wants link"
 grep -q 'i2c-tools' PKGBUILD || fail "the USB rescue needs i2cget and i2cset"
 pass "the USB replug rescue is installed, enabled by a wants link, and writes one register"
+# A gadget stuck in "default" with VBUS valid and the switch closed (seen
+# 2026-11-26: the host could not enumerate it until a reboot) gets its
+# pull-up cycled through soft_connect, at most TRIES times, and is left on.
+us=$tmp/usbstuck; mkdir -p "$us/bin" "$us/sys/bus/i2c/devices" "$us/dev/10cb0000.i2c/i2c-7" "$us/sys/class/udc/11210000.usb"
+ln -s "$us/dev/10cb0000.i2c/i2c-7" "$us/sys/bus/i2c/devices/i2c-7"
+echo default >"$us/sys/class/udc/11210000.usb/state"
+: >"$us/sys/class/udc/11210000.usb/soft_connect"
+printf '#!/bin/sh\nexit 0\n' >"$us/bin/udevadm"
+printf '#!/bin/sh\n[ "$5" = 0xb5 ] && echo 0x60 || echo 0x09\n' >"$us/bin/i2cget"
+printf '#!/bin/sh\necho "$@" >>%s/writes\n' "$us" >"$us/bin/i2cset"
+chmod +x "$us/bin/"*
+PATH="$us/bin:$PATH" OMAMOBILE_USB_RESCUE_SYS="$us/sys" OMAMOBILE_USB_RESCUE_POLL=0.1 OMAMOBILE_USB_RESCUE_STUCK=1 \
+  timeout 12 bash bin/omamobile-usb-rescue >"$us/log" 2>&1 && rc=0 || rc=$?
+[[ $rc -eq 124 ]] || fail "the USB rescue keeps running with a stuck gadget: $(cat "$us/log")"
+n=$(grep -c 'reconnecting the gadget' "$us/log")
+[[ $n -eq 3 ]] || fail "the USB rescue reconnects a stuck gadget 3 times, not $n: $(cat "$us/log")"
+[[ $(cat "$us/sys/class/udc/11210000.usb/soft_connect") == connect ]] || fail "the USB rescue leaves the gadget's pull-up on"
+[[ ! -e $us/writes ]] || fail "the USB rescue leaves a closed switch alone while reconnecting"
+pass "the USB rescue reconnects a gadget stuck in default, 3 times at most, and leaves it connected"
 # The omarchy-trace Plymouth theme (#266): 30 frames rendered from Omarchy's
 # logo by tools/gen-plymouth-trace.py, and the script and .plymouth file that
 # name them.
@@ -211,6 +244,9 @@ pass "the charge limit declaration, its udev rule and the apply unit are staged;
 
 # --- the AoC start: hang marker, nothing without the node ------------------
 bash -n bin/omamobile-husky-aoc-start || fail "the AoC start parses"
+[[ $(readlink "$tmp/root/usr/lib/systemd/system/omamobile-aoc.service") == omamobile-husky-aoc.service ]] \
+  || fail "omamobile-aoc.service is an alias of the husky AoC start (the sensor proxy requires it)"
+grep -q "'omamobile-sensors>=0.2.3'" PKGBUILD || fail "the package pulls in the sensor proxy that knows the 120 Hz panel"
 grep -q '^ExecStart=/usr/bin/omamobile-husky-aoc-start$' vendor/systemd/system/omamobile-husky-aoc.service \
   || fail "the AoC unit runs the script"
 grep -q '^ConditionPathExists=/sys/bus/platform/devices/154b0000.aoc$' vendor/systemd/system/omamobile-husky-aoc.service \

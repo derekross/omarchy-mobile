@@ -517,8 +517,8 @@ done
 
 # The AoC's sensor registry (which sensors this board has, their buses and
 # settings), read by omamobile-sensor-proxy; without it only virtual sensors.
-# husky has no AoC driver yet, so it skips the registry.
-if [[ $DEVICE != husky && $DEVICE != dipper ]]; then
+# dipper skips it (no AoC sensors there yet).
+if [[ $DEVICE != dipper ]]; then
   reg="$new/usr/share/omamobile/sensors"
   get_dir etc/sensors/registry "$reg" ||
     die "/vendor/etc/sensors/registry is missing from this image or could not be copied"
