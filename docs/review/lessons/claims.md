@@ -3,6 +3,16 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-1237. A descriptor set to `ram-only` turns "later writes go through the
+  project's tools" into "no tool will write it", and the review says so.** On
+  #993 the decision asked for project tools for every later `boot`/`userdata`
+  write, while `bin/omamobile` refuses `initramfs-config`, `images`, `flash`
+  and `push` for `BOOT_METHOD=ram-only` (lines 640, 691, 908, 1282, 1348).
+  *Check:* for a device whose notes promise tool-only writes, `DEVICE=<x>
+  bin/omamobile initramfs-config <scratch>` and grep `bin/omamobile` for the
+  method's refusals; name the descriptor change that turns the tools on and
+  what the owner uses until then. Extends L-1029 and L-82. *From:* #993, round
+  69.
 - **L-1228. A soname-rebuild PR is checked against the issue tracker and every
   channel the old build is on, not only the channel the description names.**
   #1124 missed #1098, which showed stable phones blocked; merging feeds
@@ -405,10 +415,3 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   *Check:* `grep -n '^-.*\(Copyright\|Author\|SPDX\|based on\)'
   patches/*.patch`; any hit is a request to keep the notice and add to it.
   Extends L-62 and L-221. *From:* #888, round 61, 2026-11-18.
-- **L-918. A contributor's incident log is read for what it says about a
-  claim we published.** #881's log shows the network ending the IMS bearer
-  with the internet one; the 2026.11.15 release notes say calls and texts "use
-  a separate connection, which didn't drop". *Check:* `git grep -n -i
-  '<subsystem>' docs/release-notes/<latest>.md docs/DEVICES.md` for sentences
-  the new evidence contradicts, and put them in the maintainer's list. Extends
-  L-654 and L-433. *From:* #881, round 61, 2026-11-18.

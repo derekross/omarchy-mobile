@@ -3,6 +3,16 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-716. A check whose input can fail to be read is walked for what the
+  failed read decides.** #596's `cpio -it 2>/dev/null | grep -c … || true`
+  read a broken archive as "no keys" (key appended, then flashed) and a late
+  failure as "keys present"; `extract-vendor-firmware` compares
+  `ro.product.vendor.device` only `if` `build.prop` could be read, so a failed
+  read stages another phone's firmware. *Check:* take the producer's status
+  alone (`out=$(cmd) || die`), test the text from a here-string, try a
+  truncated input, and grep `if get_file` and `2>/dev/null` above each
+  compare. Extends L-161 and L-635. *From:* #623 (after #596) and #625, round
+  50.
 - **L-715. Folding independent once-only steps into one helper makes them all
   wait for its precondition.** #581 moved `--no-first-run`, the user agent and
   the input-method flags, which need no geometry, into a helper that returns
@@ -396,11 +406,3 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   host CPU state, `mem` and `port` host memory and I/O), and ask for a failing
   Android feature without it before it goes in. Extends L-540 and L-454.
   *From:* #493, round 45, 2026-11-08.
-- **L-572. A lock added to an input handler is checked for what a holder that
-  hangs does to every later press.** #508's `flock` without `-w` made a stuck
-  short-press action freeze the power key for the session, where main would
-  have let the next press through. *Check:* for any new `flock`, mutex or
-  queue in a key, touch or wake path, run the PR's harness with the slowest
-  helper made to sleep past the press interval, measure when the next press
-  acts on main and on the head, and ask for a bound. Extends L-161 (fail
-  towards the user being able to act). *From:* #508, round 45, 2026-11-08.
