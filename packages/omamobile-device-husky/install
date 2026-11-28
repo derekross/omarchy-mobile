@@ -58,6 +58,10 @@ ln -sfn ../omamobile-husky-aoc.service \
   "$destination/usr/lib/systemd/system/multi-user.target.wants/omamobile-husky-aoc.service"
 install -Dm644 vendor/modprobe.d/omamobile-husky-aoc.conf \
   "$destination/usr/lib/modprobe.d/omamobile-husky-aoc.conf"
+install -Dm755 bin/omamobile-husky-speaker-cal "$destination/usr/bin/omamobile-husky-speaker-cal"
+# not enabled here: an owner enables it after an attended run passes
+install -Dm644 vendor/systemd/system/omamobile-husky-speaker-cal.service \
+  "$destination/usr/lib/systemd/system/omamobile-husky-speaker-cal.service"
 install -Dm644 charge-limit.conf \
   "$destination/usr/share/omamobile/charge-limit.conf"
 install -Dm644 vendor/udev/rules.d/75-omamobile-charge-limit.rules \

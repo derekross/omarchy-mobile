@@ -1,0 +1,345 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Give the Pixel 8 Pro's two CS35L41 speaker-protection DSPs this phone's
+# factory calibration, as omamobile-audio's omamobile-speaker-protection does on
+# the 7 Pro (steps 4 and 5 there): the protection firmware models the voice
+# coil from its measured resistance. persist is f2fs here, so speaker.cal is
+# read with dump.f2fs only while the storage guard holds the block device
+# read-only (the script never changes that flag), never mounted,
+# and only that one file is kept (in a private tmpfs directory, then deleted).
+#
+# While a DSP is not running, the driver keeps CAL_* writes in its control
+# cache and copies them into DSP memory just before it starts the core, at
+# the first stream after the firmware load. Once the core runs, the driver
+# writes them straight into DSP memory, but the firmware was not seen to use
+# them then (CAL_SET_STATUS 1). So the unit runs before user sessions (nothing
+# has opened the speaker PCM yet), and a DSP that has already run gets its
+# firmware reloaded first (Preload Switch off, then on; the driver keeps the
+# written values across that). Reading CAL_* back only shows the driver's
+# cache, so success is read during the first stream with "check":
+# CAL_SET_STATUS 2 (applied), as the Pixel 7 Pro's stock HAL checks.
+#
+# A marker is written and synced before the first amixer call and removed
+# when the script ends. If a boot hangs here, the next one finds the marker
+# and skips the calibration without touching any amplifier control;
+# "omamobile-husky-speaker-cal --retry" tries again.
+#
+#   omamobile-husky-speaker-cal [start]   (the unit; after omamobile-husky-aoc)
+#   omamobile-husky-speaker-cal --retry   (by hand, after a run that never finished)
+#   omamobile-husky-speaker-cal check     (during or after the first stream)
+#   omamobile-husky-speaker-cal --stop-post  (the unit's ExecStopPost=)
+# Exit status: 0 handed over (or check passed), 1 failure, 2 usage, 3 skipped
+# without touching the calibration (a marker from a run that never finished,
+# or no sound card); the unit counts 3 as success.
+# Any failure exits 1 and turns a Preload Switch it turned off back on. A
+# failure (or SIGTERM) in the middle of one amplifier's four writes puts back
+# what the driver's cache held before them, so the first stream cannot copy a
+# half record into the DSP. A DSP that started during its amplifier's writes
+# took part of the record at its start: its Preload Switch is turned off, the
+# cache is put back and the firmware loaded again. If putting back fails, a
+# stream holds such a DSP, reboot before any speaker stream. Values are
+# never logged.
+# A SIGKILL (the unit's stop timeout) skips that cleanup, and the boot goes
+# on. So before an amplifier's writes, the cached values to put back go into
+# a root-only file in /run, removed once the writes or the cleanup are done;
+# the unit's ExecStopPost= ("--stop-post", which systemd runs after a SIGKILL
+# too) finds a file left there and does the same put-back. Turning the
+# Preload Switch off alone would not do: it keeps the cache and every set
+# flag, and each stream start then loads the firmware and copies them in.
+set -uo pipefail
+export LC_ALL=C
+log() { echo "omamobile-husky-speaker-cal: $*"; }
+AMPS=(Top Bottom)
+CTL_WAIT=${OMAMOBILE_SPK_CTL_WAIT:-10}
+SYSBLOCK=${OMAMOBILE_SYSBLOCK:-/sys/class/block}
+MOUNTINFO=${OMAMOBILE_MOUNTINFO:-/proc/self/mountinfo}
+RUNDIR=${OMAMOBILE_RUN_DIR:-/run}
+state=${OMAMOBILE_STATE_DIR:-/var/lib/omamobile}
+marker=$state/speaker-cal-started
+# "control=value" to put back, for the amplifier being written
+writing=$RUNDIR/omamobile-husky-speaker-cal.writing
+# the firmware controls this script reads or writes, per amplifier
+NEED=(CSPL_STATE CAL_AMBIENT CAL_R CAL_STATUS CAL_CHECKSUM)
+# stderr stays visible: amixer's errors name the control, never a value
+ctl() { amixer -c 0 "$@"; }
+ctl_values() { ctl cget "name=$1" 2>/dev/null | sed -n 's/^  : values=//p' | tail -n1; }
+dsp_name() { echo "$1 DSP1 Protection cd $2"; }
+has_ctl() { local all; all=$(ctl controls 2>/dev/null); [[ $all == *"name='$1'"* ]]; }
+# all of NEED listed for amplifier $1? The driver adds each firmware control
+# to ALSA from its own work item after the load, so they appear one by one.
+has_all() {
+  local all c
+  all=$(ctl controls 2>/dev/null)
+  for c in "${NEED[@]}"; do [[ $all == *"name='$(dsp_name "$1" "$c")'"* ]] || return 1; done
+}
+be_bytes() { printf '0x%02x,0x%02x,0x%02x,0x%02x' $(($1 >> 24 & 255)) $(($1 >> 16 & 255)) $(($1 >> 8 & 255)) $(($1 & 255)); }
+# Is this amplifier's DSP running now? CSPL_STATE is a volatile firmware
+# control: the driver reads it only while the DSP runs and refuses otherwise
+# (EPERM: not run since the load, or the load failed). The text decides, not
+# amixer's exit code: cget exits 0 when the read itself fails (alsa-utils
+# 1.2.16, amixer.c cset()). 0 = runs, 1 = does not, 2 = unknown.
+dsp_running() {
+  local out
+  out=$(ctl cget "name=$(dsp_name "$1" CSPL_STATE)" 2>&1)
+  [[ $out == *"Operation not permitted"* ]] && return 1
+  [[ $out == *$'\n  : values='* ]] && return 0
+  log "$1: reading CSPL_STATE failed: $out"
+  return 2
+}
+# amplifier $1's DSP must not be running; $2 says what a running one means
+need_stopped() {
+  dsp_running "$1"
+  case $? in
+    1) ;;
+    0) fail "$1: $2" ;;
+    *) fail "$1: cannot tell whether the DSP runs; not writing" ;;
+  esac
+}
+
+# When amplifier $1's writes stop or end: a DSP that started during them took
+# part of the record at its start. Its Preload Switch goes off, so the
+# cleanup puts the cache back into a stopped DSP and then loads the firmware
+# again. Returns 0 if it had not started, 1 if it had (or it cannot tell)
+# and is stopped now, 2 if it still runs after Preload off (logged: reboot).
+stop_if_started() {
+  dsp_running "$1"; (($? == 1)) && return 0
+  preload_off=$1
+  ctl cset "name=$1 DSP1 Preload Switch" off >/dev/null
+  dsp_running "$1"
+  if (($? == 1)); then
+    log "$1: the DSP started during the writes; Preload Switch off to stop it (the firmware is loaded again at the end)"
+    return 1
+  fi
+  log "$1: the DSP still runs after Preload off (an open stream holds it) and took part of the record at its start: reboot before any speaker stream"
+  return 2
+}
+
+# Put back the driver's cache from undo (one amplifier's "control=value");
+# a DSP that started during the writes is stopped first, so the put-back
+# goes into its cache and turning Preload on loads the firmware again.
+put_back() {
+  local u a bad= held=
+  a=${undo[0]%% *}
+  # 2: the DSP still runs (logged with the reboot line); still put back
+  if [[ $preload_off != "$a" ]]; then stop_if_started "$a"; (($? == 2)) && held=1; fi
+  for u in "${undo[@]}"; do ctl cset "name=${u%%=*}" "${u#*=}" >/dev/null || bad=1; done
+  if [[ -n $bad ]]; then log "$a: putting the cached values back failed; a partial calibration is in the driver's cache: reboot before any speaker stream"; return 1; fi
+  log "$a: the writes so far were undone (the driver's cache holds what it held before)"
+  [[ -z $held ]]
+}
+
+# The unit's ExecStopPost=: a file left in /run means the run was killed
+# (SIGKILL) during an amplifier's writes, with no cleanup.
+# The unit's TimeoutStopSec= (15 s) bounds this too, so all of it runs
+# within one budget below that (each amixer call gets what is left, at most
+# 4 s), and the stop timeout's SIGTERM is logged. An amixer stuck in the
+# kernel (D state) ignores the time limit; systemd's SIGKILL then ends this
+# without a message.
+STOP_BUDGET=${OMAMOBILE_SPK_STOP_BUDGET:-12}
+# the trap can run inside a `>/dev/null` (fd 3 is stdout, set in stop_post)
+cut_short() { exec 1>&3; log "putting the cache back was cut short: reboot before any speaker stream"; exit 1; }
+stop_post() {
+  local rc=0 a l
+  # a SIGKILL during dump.f2fs leaves the private copy of persist in /run
+  rm -rf "$RUNDIR"/omamobile-spk-cal.*
+  [[ -e $writing ]] || return 0
+  exec 3>&1
+  trap cut_short TERM INT HUP
+  ctl() {
+    local left=$((STOP_BUDGET - SECONDS))
+    ((left >= 1)) || { log "no time left for amixer $1 within ${STOP_BUDGET}s" >&3; return 1; }
+    timeout -k 1 $((left < 4 ? left : 4)) amixer -c 0 "$@"
+  }
+  mapfile -t undo < "$writing"
+  # exactly one amplifier's four controls, each with a 4-byte value
+  a=${undo[0]-}; a=${a%% *}
+  [[ $a == Top || $a == Bottom ]] && ((${#undo[@]} == 4)) || a=
+  for l in "${undo[@]}"; do
+    [[ $l =~ ^(Top|Bottom)\ DSP1\ Protection\ cd\ CAL_[A-Z]+=0x[0-9a-f]{2}(,0x[0-9a-f]{2}){3}$ && ${l%% *} == "$a" ]] || a=
+  done
+  if [[ -z $a ]]; then
+    log "$writing is not what this script writes; the driver's cache may hold a partial calibration: reboot before any speaker stream"
+    rm -f "$writing"; return 1
+  fi
+  log "the run was killed during $a's writes; putting the driver's cache back"
+  preload_off=
+  put_back || rc=1
+  # always on again: the killed run may have turned it off (stop_if_started);
+  # unchanged it does nothing (wm_adsp.c:985-986)
+  ctl cset "name=$a DSP1 Preload Switch" on >/dev/null || { log "$a: setting DSP1 Preload Switch on again failed"; rc=1; }
+  rm -f "$writing"
+  return $rc
+}
+
+check() {
+  local p v rc=0
+  for p in "${AMPS[@]}"; do
+    v=$(ctl_values "$(dsp_name "$p" CAL_SET_STATUS)")
+    case $v in
+      0x00,0x00,0x00,0x02) log "$p: calibration applied (CAL_SET_STATUS 2)" ;;
+      0x00,0x00,0x00,0x01) log "$p: firmware defaults (CAL_SET_STATUS 1)"; rc=1 ;;
+      "") log "$p: CAL_SET_STATUS unreadable (the DSP is not running: no stream, or its firmware did not load)"; rc=1 ;;
+      *) log "$p: CAL_SET_STATUS $v"; rc=1 ;;
+    esac
+  done
+  return $rc
+}
+
+case ${1:-start} in
+  start) ;;
+  --retry) rm -f "$marker" ;;
+  check) check; exit ;;
+  --stop-post) stop_post; exit ;;
+  *) echo "usage: $0 [start|--retry|check|--stop-post]" >&2; exit 2 ;;
+esac
+
+if [[ -e $marker ]]; then
+  # No amplifier control is touched here: a firmware load may be what hung.
+  # A Preload Switch a killed run left off stays off for that boot only: no
+  # ALSA state is stored on the phone (/var/lib/alsa empty, 2026-11-27), and
+  # the UCM verb sets "Preload Switch" on when the audio session enables it.
+  log "the last run ($(cat "$marker" 2>/dev/null)) never finished; no calibration this boot, and no amplifier control is touched (the audio session's UCM verb turns the Preload Switches on)."
+  log "after checking the previous boot's log, retry with: $0 --retry"
+  exit 3
+fi
+mkdir -p "$state" || { log "cannot create $state"; exit 1; }
+date -Is > "$marker" || { log "cannot write $marker"; exit 1; }
+sync -f "$marker" 2>/dev/null || sync
+
+# On every exit (a hang or SIGKILL never gets here, so its marker stays): the
+# cached values an unfinished amplifier had before its writes go back, a
+# Preload Switch this run turned off goes back on, the private copy goes, and the marker goes.
+tmp= dev= preload_off=
+undo=()      # "control=value it held", for the amplifier being written
+written=()   # the amplifiers whose four writes are done
+# the cleanup's messages must not land in a `>/dev/null` that a trap
+# interrupted (a SIGTERM during `ctl cset ... >/dev/null` runs the trap there)
+exec 3>&1 4>&2
+cleanup() {
+  # a second signal must not end the cleanup halfway
+  trap '' TERM INT HUP
+  exec 1>&3 2>&4
+  # stopped midway (a signal, or a failure that did not check yet)
+  if ((${#undo[@]})); then put_back; fi
+  if ((${#written[@]} == 1)); then
+    log "${written[0]} keeps its whole record (taken at its first stream); ${AMPS[1]} gets no calibration from this run"
+  fi
+  if [[ -n $preload_off ]]; then
+    ctl cset "name=$preload_off DSP1 Preload Switch" on >/dev/null || log "$preload_off: setting DSP1 Preload Switch on again failed"
+  fi
+  if [[ -n $tmp ]]; then rm -rf "$tmp"; fi
+  # only now: a SIGKILL during the put-back leaves it for --stop-post
+  rm -f "$writing" "$writing.new"
+  rm -f "$marker"; sync -f "$state" 2>/dev/null || sync
+}
+trap cleanup EXIT
+# bash runs a trap only after the command it waits for (amixer) completes
+trap 'exit 143' TERM; trap 'exit 130' INT; trap 'exit 129' HUP
+fail() { log "$*"; exit 1; }
+
+# 0. No sound card or amplifier controls (the AoC was left off this boot):
+# nothing to do, and persist is not read.
+for p in "${AMPS[@]}"; do
+  has_ctl "$p DSP1 Preload Switch" || { log "no $p DSP1 Preload Switch (the sound card is not up); nothing to do"; exit 3; }
+done
+
+# 1. persist:/audio/speaker.cal, read-only
+u=$(grep -l '^PARTNAME=persist$' "$SYSBLOCK"/*/uevent 2>/dev/null | head -n1)
+[[ -n $u ]] || fail "no persist partition"
+dev=/dev/$(basename "$(dirname "$u")")
+mm=$(<"$(dirname "$u")/dev"); [[ -n $mm ]] || fail "cannot read the device number of $dev"
+command -v dump.f2fs >/dev/null || fail "no dump.f2fs (f2fs-tools)"
+# mounted under any name? mountinfo's third field is the device number
+while read -r _ _ m _; do [[ $m == "$mm" ]] && fail "$dev is mounted; not reading it"; done < "$MOUNTINFO"
+# the storage guard sets persist read-only at boot; never change that flag here
+[[ $(blockdev --getro "$dev") == 1 ]] || fail "$dev is writable: the storage guard is not in force; not reading it"
+tmp=$(mktemp -d "$RUNDIR/omamobile-spk-cal.XXXXXX") || { tmp=; fail "no tmp dir"; }
+chmod 700 "$tmp"
+timeout 60 dump.f2fs -r -f -o "$tmp/p" "$dev" >/dev/null 2>&1; rc=$?
+cal=$tmp/p/audio/speaker.cal
+[[ $rc == 0 && -f $cal ]] || fail "persist:/audio/speaker.cal not found (dump.f2fs rc $rc)"
+mv "$cal" "$tmp/speaker.cal" && rm -rf "$tmp/p"
+(($(stat -c %s "$tmp/speaker.cal") >= 48)) || fail "speaker.cal is short"
+mapfile -t W < <(od -An -v -tu4 -w4 --endian=little "$tmp/speaker.cal" | tr -d ' ')
+rm -rf "$tmp"; tmp=
+# the 7 Pro's checks (omamobile-speaker-protection); the checksum leaves out ambient
+for i in 0 1; do
+  r=${W[i*6]} st=${W[i*6+1]} ck=${W[i*6+2]} amb=${W[i*6+3]}
+  (( (r + st) % 4294967296 == ck )) || fail "${AMPS[i]}: calibration checksum does not match"
+  (( st == 1 )) || fail "${AMPS[i]}: calibration status is not 1"
+  (( r > 0 && r < 1 << 24 )) || fail "${AMPS[i]}: calibration resistance out of range"
+  (( amb <= 60 )) || fail "${AMPS[i]}: calibration ambient temperature out of range"
+done
+
+# 2. Protection firmware loaded on both DSPs, neither run since the load
+for p in "${AMPS[@]}"; do
+  if has_ctl "$(dsp_name "$p" CSPL_STATE)"; then
+    dsp_running "$p"; run=$?
+    ((run == 2)) && fail "$p: cannot tell whether the DSP has run"
+    if ((run == 0)); then
+      log "$p: the DSP has already run; reloading its firmware so it takes the calibration"
+      preload_off=$p
+      ctl cset "name=$p DSP1 Preload Switch" off >/dev/null || fail "$p DSP1 Preload Switch off failed"
+      need_stopped "$p" "the DSP still runs after Preload off (an open stream holds it); not writing"
+    fi
+  fi
+  ctl cset "name=$p DSP1 Firmware" Protection >/dev/null || fail "$p DSP1 Firmware failed"
+  ctl cset "name=$p DSP1 Preload Switch" on >/dev/null || fail "$p DSP1 Preload Switch failed"
+  preload_off=
+done
+# A failed reload is not seen here (the controls stay listed and read EPERM
+# as after a good load); "check" during the first stream catches it.
+for p in "${AMPS[@]}"; do
+  for ((t = 0; t < CTL_WAIT * 5; t++)); do has_all "$p" && break; sleep 0.2; done
+  has_all "$p" || fail "$p: the protection firmware's controls did not appear (firmware not loaded)"
+  need_stopped "$p" "the DSP runs before the calibration is written; not writing"
+done
+
+# 3. Calibration. The driver holds the values and writes them into the DSP
+# when its core starts; the order of these writes does not matter. Each write
+# sets the control's "set" flag, and every set control is copied at the next
+# core start, so a half-written record must not stay: the cached values are
+# read first (a stopped DSP's CAL_* read the cache) and put back by the
+# cleanup if this amplifier's writes stop midway. They are not read back
+# afterwards: that would show the cache only.
+for i in 0 1; do
+  p=${AMPS[i]}
+  fs=(CAL_AMBIENT:${W[i*6+3]} CAL_R:${W[i*6]} CAL_STATUS:${W[i*6+1]} CAL_CHECKSUM:${W[i*6+2]})
+  old=()
+  for f in "${fs[@]}"; do
+    v=$(ctl_values "$(dsp_name "$p" "${f%%:*}")"); [[ -n $v ]] || fail "$p: reading ${f%%:*} from the driver's cache failed"
+    old+=("$v")
+  done
+  # on disk before the first write (a value already in the cache is a no-op
+  # to put back: cs_dsp.c:828-831)
+  k=0
+  (umask 077; for f in "${fs[@]}"; do echo "$(dsp_name "$p" "${f%%:*}")=${old[k++]}"; done > "$writing.new") \
+    && mv -f "$writing.new" "$writing" \
+    || fail "$p: cannot write $writing"
+  k=0
+  for f in "${fs[@]}"; do
+    c=$(dsp_name "$p" "${f%%:*}")
+    undo+=("$c=${old[k++]}")
+    # A failed write keeps its undo entry: on a running DSP the driver caches
+    # the value (set = 1) before the DSP write that failed (cs_dsp.c:827-836),
+    # and an amixer killed by a signal may have finished its write. Putting
+    # back a value the cache already holds changes nothing (cs_dsp.c:828-831
+    # return before set = 1).
+    ctl cset "name=$c" "$(be_bytes "${f#*:}")" >/dev/null || { stop_if_started "$p"; fail "$p: writing ${f%%:*} failed"; }
+  done
+  # checked before the undo entries go; a DSP that starts after its own four
+  # writes takes the whole record, as meant
+  stop_if_started "$p"
+  case $? in
+    1) fail "$p: the DSP started while the calibration was written (or it cannot tell whether it runs); run again with the speaker PCM closed" ;;
+    2) fail "$p: the DSP started while the calibration was written" ;;
+  esac
+  # The file stays through that check, so a DSP that started during the
+  # writes is still put back after a SIGKILL. A SIGKILL inside the check
+  # undoes a whole record too: no calibration this boot, never a partial one.
+  undo=()
+  rm -f "$writing"
+  written+=("$p")
+done
+unset W fs old
+log "factory calibration handed to both DSPs; they take it at the first stream (check during it: $0 check)"
