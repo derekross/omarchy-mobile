@@ -197,9 +197,10 @@ grep -cx 'After=omamobile-rmtfs.service omamobile-tqftpserv.service' \
 # The SAR sensor's state service starts at boot, unprivileged
 [[ -x $stage/usr/lib/omamobile/hotdog/omamobile-hotdog-sar && \
    $(readlink "$stage/usr/lib/systemd/system/multi-user.target.wants/omamobile-hotdog-sar.service") == ../omamobile-hotdog-sar.service ]] &&
-  grep -cx 'DynamicUser=yes' "$stage/usr/lib/systemd/system/omamobile-hotdog-sar.service" >/dev/null ||
+  grep -cx 'DynamicUser=yes' "$stage/usr/lib/systemd/system/omamobile-hotdog-sar.service" >/dev/null &&
+  grep -cx 'CapabilityBoundingSet=CAP_NET_ADMIN' "$stage/usr/lib/systemd/system/omamobile-hotdog-sar.service" >/dev/null ||
   { echo "not ok - SAR service"; exit 1; }
-echo "ok - the SAR service starts at boot, unprivileged"
+echo "ok - the SAR service starts at boot, unprivileged but for CAP_NET_ADMIN (the Wi-Fi limit)"
 # The sensors: hexagonrpcd follows the SLPI's FastRPC node (udev starts it,
 # the device's removal stops it), and its root is built read-only
 grep -cx 'BindsTo=dev-fastrpc\\x2dsdsp.device' "$stage/usr/lib/systemd/system/omamobile-hotdog-sensors.service" >/dev/null &&

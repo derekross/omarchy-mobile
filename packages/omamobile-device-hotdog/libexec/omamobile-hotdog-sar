@@ -16,8 +16,24 @@ QMI (QRTR service 400) and keeps the latest sample in /run/omamobile/sar/:
 Every new subscription makes the chip compensate against whatever touches it
 at that moment, so the daemon subscribes once and keeps the subscription. It
 asks for non-wakeup delivery: a grip never wakes the phone from sleep, and the
-state catches up at the next wake. The modem reads the sensor through the
-Sensor Core by itself (section 6), so nothing here is sent to the modem.
+state catches up at the next wake.
+
+While the state is near, the radios transmit less (section 6, R4-R5):
+
+  modem    QMI SAR RF state 8 (QRTR service 17 on the modem); the modem's
+           own tables take 2-3 dB off LTE bands 3 and 7 and nothing off
+           bands 8 and 20. Sent again whenever the modem's service comes
+           back, since a modem restart clears it
+  Wi-Fi    an nl80211 SAR limit on both bands (`iw phy ... set sar_specs`),
+           14 dBm unless set otherwise; ath10k applies it while connected
+
+Far gives both back. An unknown state (the Sensor Core restarting) keeps
+the last one, and the daemon's exit clears them. Settings, read from the
+unit's environment (/etc/omamobile/sar.conf):
+
+  OMAMOBILE_SAR_BACKOFF=no        report the state only
+  OMAMOBILE_SAR_MODEM_STATE=8     the modem's RF state while near
+  OMAMOBILE_SAR_WIFI_DBM=14       the Wi-Fi limit while near (0: none)
 
   omamobile-hotdog-sar           run (the unit)
   omamobile-hotdog-sar --once    print the first sample and exit
@@ -27,6 +43,7 @@ import select
 import signal
 import socket
 import struct
+import subprocess
 import sys
 import time
 
@@ -44,7 +61,14 @@ MSG_ENABLE_ON_CHANGE, MSG_DISABLE = 514, 10
 MSG_CONFIG_EVENT, MSG_SENSOR_EVENT = 768, 1026
 PROCESSOR_APSS, SUSPEND_NO_WAKEUP = 1, 1
 
+QMI_SAR_SERVICE, QMI_SAR_RF_SET_STATE = 17, 0x0001
+MODEM_NODE = 0
+
 RUN = os.environ.get("OMAMOBILE_SAR_DIR", "/run/omamobile/sar")
+BACKOFF = os.environ.get("OMAMOBILE_SAR_BACKOFF", "yes") != "no"
+NEAR_MODEM_STATE = int(os.environ.get("OMAMOBILE_SAR_MODEM_STATE", "8"))
+NEAR_WIFI_DBM = float(os.environ.get("OMAMOBILE_SAR_WIFI_DBM", "14"))
+IEEE80211 = "/sys/class/ieee80211"
 
 
 # --- protobuf, just what the Sensor Core's messages need ---------------------
@@ -199,6 +223,97 @@ class Ssc:
         return None
 
 
+# --- radio backoff while near ------------------------------------------------
+
+def sar_rf_request(txn, state):
+    tlv = struct.pack("<BHI", 0x01, 4, state)
+    return struct.pack("<BHHH", QMI_REQUEST, txn, QMI_SAR_RF_SET_STATE, len(tlv)) + tlv
+
+
+def wifi_command(phy, dbm):
+    """iw's SAR limit for both of ath10k's ranges, in 0.25 dBm; 0 is none."""
+    q = max(0, int(round(dbm * 4)))
+    return ["iw", "phy", phy, "set", "sar_specs", "power", "0:%d" % q, "1:%d" % q]
+
+
+class Backoff:
+    def __init__(self):
+        self.ns = socket.socket(AF_QIPCRTR, socket.SOCK_DGRAM)
+        self.qmi = socket.socket(AF_QIPCRTR, socket.SOCK_DGRAM)
+        self.modem = None
+        self.near = None
+        self.phys = set()
+        self.txn = 0
+        self.ns.sendto(struct.pack("<5I", QRTR_TYPE_NEW_LOOKUP, QMI_SAR_SERVICE, 0, 0, 0),
+                       (1, QRTR_PORT_CTRL))
+
+    def ns_event(self):
+        d = self.ns.recv(64)
+        kind, svc, _inst, node, port = struct.unpack_from("<5I", d)
+        if svc != QMI_SAR_SERVICE or node != MODEM_NODE or port == 0:
+            return
+        if kind == QRTR_TYPE_NEW_SERVER:
+            self.modem = (node, port)
+            if self.near is not None:
+                self.send_modem()
+        elif kind == QRTR_TYPE_DEL_SERVER and self.modem == (node, port):
+            self.modem = None
+
+    def send_modem(self):
+        if not self.modem:
+            return
+        self.txn = (self.txn + 1) & 0xFFFF or 1
+        state = NEAR_MODEM_STATE if self.near else 0
+        try:
+            self.qmi.sendto(sar_rf_request(self.txn, state), self.modem)
+        except OSError as e:
+            log("modem SAR state %d not sent: %s" % (state, e))
+
+    def modem_reply(self):
+        d = self.qmi.recv(512)
+        if len(d) >= 14 and struct.unpack_from("<BHH", d)[::2] == (QMI_RESPONSE, QMI_SAR_RF_SET_STATE):
+            result, error = struct.unpack_from("<HH", d, 10)
+            if result:
+                log("modem refused SAR state (error %d)" % error)
+
+    def send_wifi(self, phys):
+        dbm = NEAR_WIFI_DBM if self.near else 0
+        for phy in sorted(phys):
+            r = subprocess.run(wifi_command(phy, dbm), stdout=subprocess.DEVNULL,
+                               stderr=subprocess.PIPE, text=True)
+            if r.returncode:
+                log("Wi-Fi SAR limit on %s not set: %s" % (phy, r.stderr.strip()))
+
+    def apply(self, near):
+        if near == self.near:
+            return
+        self.near = near
+        self.send_modem()
+        self.phys = self.list_phys()
+        self.send_wifi(self.phys)
+
+    @staticmethod
+    def list_phys():
+        try:
+            return set(os.listdir(IEEE80211))
+        except OSError:
+            return set()
+
+    def watch_wifi(self):
+        """A Wi-Fi driver loaded again comes back as a new phy without the limit."""
+        phys = self.list_phys()
+        new = phys - self.phys
+        self.phys = phys
+        if new and self.near:
+            self.send_wifi(new)
+
+    def clear(self):
+        if self.near:
+            self.near = False
+            self.send_modem()
+            self.send_wifi(self.list_phys())
+
+
 # --- state -------------------------------------------------------------------
 
 def publish(state, diff="", offset=""):
@@ -217,6 +332,8 @@ def log(msg):
 def main():
     once = "--once" in sys.argv[1:]
     ssc = Ssc()
+    backoff = Backoff() if BACKOFF and not once else None
+    watched = time.monotonic()
     sar_uid, last_state, subscribed_at = None, None, 0.0
     running = True
 
@@ -236,10 +353,19 @@ def main():
                 subscribed_at = time.monotonic()
                 body = field(1, 2, b"sars") + field(2, 0, 1)
                 ssc.control(client_request(SUID_UID, MSG_SUID_REQUEST, body))
-            r, _, _ = select.select([ssc.ns, ssc.qmi], [], [], 1.0)
+            socks = [ssc.ns, ssc.qmi] + ([backoff.ns, backoff.qmi] if backoff else [])
+            r, _, _ = select.select(socks, [], [], 1.0)
             if deadline and time.monotonic() > deadline:
                 log("no SAR sample in 30 s")
                 return 1
+            if backoff:
+                if backoff.ns in r:
+                    backoff.ns_event()
+                if backoff.qmi in r:
+                    backoff.modem_reply()
+                if time.monotonic() - watched > 10:
+                    watched = time.monotonic()
+                    backoff.watch_wifi()
             if ssc.ns in r:
                 ev = ssc.ns_event()
                 if ev == "up":
@@ -282,12 +408,16 @@ def main():
                         if state != last_state:
                             log("%s (diff %d, offset %d)" % (state, diff, offset))
                             last_state = state
+                        if backoff:
+                            backoff.apply(state == "near")
     finally:
         if sar_uid and ssc.server:
             try:
                 ssc.control(client_request(sar_uid, MSG_DISABLE))
             except OSError:
                 pass
+        if backoff:
+            backoff.clear()
         if not once:
             publish("unknown")
     return 0

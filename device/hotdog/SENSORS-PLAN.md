@@ -3,7 +3,8 @@
 
 **Status (2026-11-18): ambient light works, and the screen turns off at
 the ear in calls; on `boot_a`, slot A marked. The SAR sensor (SX9324) works
-since 2026-11-28 (§6).** The SLPI starts from the
+since 2026-11-28, and while it reads near the modem and Wi-Fi transmit less
+(§6).** The SLPI starts from the
 device tree and the fastrpc fix is in the kernel; the TCS3701's light reaches
 iio-sensor-proxy from boot (`monitor-sensor --light`: about 700-1,300 lux
 indoors, 100 covered, 12,300 at a lamp). The TCS3701's proximity is listed
@@ -193,10 +194,10 @@ wake. Then flash `boot_a` as [KEYS-PLAN](KEYS-PLAN.md) K6, re-mark slot A
 - `sleepstate` is never driven: the SSC always sees the APPS as awake.
 - SAR (§6): the sensors PD's crash at every resume makes the SAR daemon
   resubscribe, which re-zeroes the chip against the hand holding the phone.
-- SAR (§6): nothing lowers the modem's transmit power while the phone is
-  held. On LTE band 20 neither a near reading nor any QMI SAR state (1-8)
-  changed it (R4); other bands, and what stock does when held, are not
-  measured.
+- SAR (§6): the modem's state 8 lowers LTE bands 3 and 7 by 2-3 dB and
+  bands 8 and 20 not at all (R4); other bands, 3G and 2G, and what stock
+  sends when held, are not measured. Wi-Fi's 14 dBm limit is our choice:
+  stock has no Wi-Fi body limit.
 
 ## 5. Proximity from the touchscreen's ear mode
 
@@ -244,7 +245,8 @@ finger test above, but not measured with the panel off.
 ## 6. SAR sensor (Semtech SX9324)
 
 **Status (2026-11-28): fitted and working, near/far from the SSC;
-device-hotdog 0.1.24 keeps it in `/run/omamobile/sar/`.**
+device-hotdog 0.1.24 keeps it in `/run/omamobile/sar/`, and 0.1.25 lowers the
+modem's and Wi-Fi's transmit power while it reads near (R4, R5).**
 
 | What | Source |
 | --- | --- |
@@ -255,7 +257,9 @@ device-hotdog 0.1.24 keeps it in `/run/omamobile/sar/`.**
 | Every new subscription makes the chip compensate against whatever touches it: with a hand on the phone at that moment the offset went to 16383 (its maximum), `diff` read 0 and it never reported near | hand test, below |
 | Mainline's SM8150 DT gives `sdhc_2` (the SD card controller, which this phone lacks) `cd-gpios = <&tlmm 96>`, the SAR's interrupt line. The hotdog DT keeps `sdhc_2` disabled, so the line stays free; a DT that enables it takes the interrupt from the SSC | `/sys/kernel/debug/gpio`, `/proc/device-tree` |
 | Stock Android never sends the sensor to the modem: no QMI SAR (`rf_set_state`) caller outside Qualcomm's test tool, AOSP Wi-Fi body-SAR off (`config_wifi_framework_enable_body_proximity_sar_tx_power_limit` false, no overlay), and the OEM hook `AP_2_MODEM_SAR_SENSOR_OPERATE` only in the factory app. The modem's OnePlus OEM service names the SSC data type `sars` itself, next to an NV switch `/oem/oem_sar_disable`. Under Linux it does not act on the sensor by itself: a near reading left its power unchanged (R4) | `dexdump` of stock's `framework.jar`, `wifi-service.jar`, `qcnvitems.jar`; `aapt2` of `framework-res.apk` and the vendor overlays; `strings` of `modem.mbn` |
-| The modem's QMI SAR service answers over QRTR: `qmicli -d qrtr://0 --sar-rf-get-state` reads 0, and it accepts and reads back states 1-8, but on LTE band 20 none of them lowers the transmit power (R4) | on the phone |
+| The modem's SAR tables answer QMI SAR RF state 8 on LTE band 3 (22 to 19 dBm) and states 7-8 on band 7 (22 to 20 dBm); no state 1-8 changes bands 8 and 20 | R4 |
+| The WCN3990's ath10k supports nl80211 SAR limits (`dynamic_sar_support`, two ranges, 2.4 and 5 GHz, applied while connected as the firmware's `txpower_limit2g`/`5g`); a 14 dBm limit took 5 dB and 8 dBm 11 dB off the phone's 5 GHz signal at a laptop | `drivers/net/wireless/ath/ath10k/mac.c`; R5 |
+| The modem's QMI SAR service answers over QRTR (service 17): `qmicli -d qrtr://0 --sar-rf-get-state` reads 0, and it accepts and reads back states 1-8 | on the phone |
 
 Hand test, 2026-11-28 (owner; phone on its stand, the subscription started
 with nothing near it, then the hand put on):
@@ -280,9 +284,19 @@ client in Python: it looks up `sars`, subscribes once on change, and writes
 iio-sensor-proxy always ask for wakeup), so a grip never wakes the phone from
 sleep, and keeps its one subscription because a new one re-zeroes the chip. It
 follows SLPI restarts through the QRTR name service and runs with a dynamic
-user. Nothing is sent to the modem: stock sends nothing either, and on band
-20 no QMI SAR state the modem accepts changes its power (R4), so there is no
-known message that would make it back off.
+user.
+
+While the state is near, 0.1.25 lowers the radios: the modem gets QMI SAR RF
+state 8 (the only state that lowers both band 3 and band 7, R4), sent again
+whenever the modem's SAR service comes back, since a modem restart clears it,
+and Wi-Fi gets an nl80211 SAR limit of 14 dBm on both bands (`iw phy ... set
+sar_specs`, re-applied to a phy that appears while near). Far gives both back;
+an unknown state (the Sensor Core restarting) keeps the last one; the
+service's exit clears them. For `iw` the service keeps `CAP_NET_ADMIN` and
+nothing else. `/etc/omamobile/sar.conf` sets `OMAMOBILE_SAR_BACKOFF=no`,
+`OMAMOBILE_SAR_MODEM_STATE` or `OMAMOBILE_SAR_WIFI_DBM` (0: no limit).
+Stock never sent the modem a state from Android, so what it does when held is
+not known; state 8 is the strongest backoff the modem's tables give.
 
 **R1. The service by hand (phone, read-only).**
 `/usr/lib/omamobile/hotdog/omamobile-hotdog-sar --once`. Expect: the Sensor
@@ -322,12 +336,42 @@ bottom edge. (b) Untouched, with `qmicli -d qrtr://0 --sar-rf-set-state=N`
 for N = 0, 1-8, then 0. Pass: a steady drop while near, or in some state.
 Restore: `--sar-rf-set-state=0` (also cleared by a modem restart), mobile
 data down. Risk: low (runtime QMI only, no NV write); about 10-20 MB of
-mobile data per run.
+mobile data per run. (c) The same sweep on other bands: QMI NAS Set System
+Selection Preference (0x0033) with only TLV 0x15 (the LTE band mask) and TLV
+0x17 = 0 (until the next power cycle; this modem refuses the extended mask,
+TLV 0x23, as malformed), then the saved mask back the same way. The modem's
+EFS is served by `rmtfs -r`, so even a permanent setting would stay in RAM.
+Mobile service moves band for the run.
 *2026-11-28, `7.3.0-rc6-omamobile-crypt1-gf3a11a5f5062`, LTE band 20, RSRP
 about -103 dBm, so the upload ran at full power: (a) untouched (far)
 22-23 dBm, gripped (near, `diff` 18138) 21-22 dBm over 30 s, the same
 spread: no backoff. (b) Every state 1-8 was accepted and read back, and the
 power stayed at 21-23 dBm in each; restored to 0. Either this phone's
 tables don't back off on band 20, or its SAR is off (`/oem/oem_sar_disable`)
-or not loaded; another band would tell them apart, and Linux won't change
-the modem's band settings to find out.*
+or not loaded; another band would tell them apart.*
+*(c) 2026-11-28, same kernel, untouched: band 3 (RSRP -118 dBm) 22 dBm in
+states 0-7 and 19 dBm in state 8; band 7 (-122 dBm) 22 dBm in states 0-6 and
+20 dBm in 7 and 8; band 8 (-116 dBm) 21-22 dBm in every state. The tables
+exist and work on the high bands. The band mask was restored, the phone back
+on band 20, SAR state 0.*
+
+**R5. The backoff end to end (phone and laptop).** Install 0.1.25, then
+measure the phone's Wi-Fi from the laptop: the laptop's card in monitor mode
+on the phone's channel (it hears only its own traffic while associated, so it
+leaves its network for the run; the laptop's internet goes over Ethernet),
+radiotap signal of the frames the phone sends while it pings its gateway.
+(a) Fixed limits, untouched, by hand: none, 14 and 8 dBm in turn. (b) A grip
+held still: near (service running), then `systemctl restart
+omamobile-hotdog-sar`, which re-zeroes the chip against the same hand, so it
+reads far with nothing else changed; the modem's state read alongside
+(`--sar-rf-get-state`). Pass: the limits lower the signal, and near reads
+state 8 and a weaker signal than far. Rollback: `OMAMOBILE_SAR_BACKOFF=no` in
+`/etc/omamobile/sar.conf`, or reinstall 0.1.24. Risk: low.
+*2026-11-28, `7.3.0-rc6-omamobile-crypt1-gf3a11a5f5062`, 5 GHz channel 52:
+(a) about 1,000 frames per step, twice: none -39 dBm, 14 dBm -44, 8 dBm -50.
+(b) near: modem state 8, -35 dBm; after the restart, far: state 0, -31 dBm
+(about 1,200 frames each), so the limit takes 4 dB off with the hand in place.
+A grip and release without the restart read -41 near and -44 far: the hand
+and the phone's angle move the path by more than the limit, so only (b)
+compares like with like. The service runs with CapEff 0x1000
+(CAP_NET_ADMIN), and the modem read 8 for the whole 21 s grip and 0 after.*

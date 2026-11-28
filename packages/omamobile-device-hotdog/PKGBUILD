@@ -8,7 +8,7 @@ url="https://github.com/derekross/omamobile"
 # The package's own files are MIT; the Bluetooth address helper is
 # Apache-2.0; qrtr, rmtfs and tqftpserv (linux-msm) are BSD-3-Clause.
 license=(MIT Apache-2.0 BSD-3-Clause)
-depends=(bash systemd systemd-libs util-linux bluez-utils zstd xz python modemmanager python-gobject alsa-lib alsa-utils e2fsprogs hexagonrpc libssc iio-sensor-proxy)
+depends=(bash systemd systemd-libs util-linux bluez-utils zstd xz python modemmanager python-gobject alsa-lib alsa-utils e2fsprogs hexagonrpc libssc iio-sensor-proxy iw)
 backup=(etc/pacman.d/omamobile-mirrorlist etc/pam.d/omarchy-lock-fingerprint etc/geoclue/conf.d/92-omamobile-hotdog.conf)
 optdepends=('mmsd-tng: MMS through ModemManager (packaged with the MMS pull request, #936; start it in the session with systemctl --user enable mmsd-tng)'
             'feedbackd: the alert slider sets its profile (Silent, Vibrate, Ring)'

@@ -3,7 +3,9 @@
 # near/far state in /run/omamobile/sar/ (device/hotdog/SENSORS-PLAN.md
 # section 6). It subscribes once over QMI with non-wakeup delivery, so a grip
 # never wakes the phone, and follows SLPI restarts through the QRTR name
-# service. The modem reads the sensor by itself; nothing is sent to it.
+# service. While near, the modem gets QMI SAR state 8 and Wi-Fi a 14 dBm
+# limit (CAP_NET_ADMIN, for nl80211); far gives both back.
+#   /etc/omamobile/sar.conf               OMAMOBILE_SAR_BACKOFF=no, ..._MODEM_STATE, ..._WIFI_DBM
 #   systemctl mask omamobile-hotdog-sar   keeps it off
 [Unit]
 Description=OnePlus 7T Pro SAR sensor state (SX9324 through the Sensor Core)
@@ -13,16 +15,18 @@ After=omamobile-hotdog-sensors.service
 ExecStart=/usr/lib/omamobile/hotdog/omamobile-hotdog-sar
 Restart=on-failure
 RestartSec=5
+EnvironmentFile=-/etc/omamobile/sar.conf
 DynamicUser=yes
 RuntimeDirectory=omamobile/sar
 RuntimeDirectoryMode=0755
-RestrictAddressFamilies=AF_QIPCRTR AF_UNIX
+RestrictAddressFamilies=AF_QIPCRTR AF_UNIX AF_NETLINK
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
 PrivateDevices=yes
 NoNewPrivileges=yes
-CapabilityBoundingSet=
+CapabilityBoundingSet=CAP_NET_ADMIN
+AmbientCapabilities=CAP_NET_ADMIN
 SystemCallArchitectures=native
 
 [Install]
