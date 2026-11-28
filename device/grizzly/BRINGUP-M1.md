@@ -8123,6 +8123,41 @@ surface token, start and duration, with multiplicities. The
 71 errors affect surface presentation classification. They
 did not reduce either frame count in this capture.
 
+###### Offline Composer analysis of the saved gfx trace
+
+The earlier combined `gfx` and FrameTimeline capture wrapped
+three times and overwrote 757 chunks. These counts describe
+only its retained records. Each of the 258 SurfaceFlinger
+`HwcPresentOrValidateDisplay 0` slices contains exactly one
+`PresentDisplay` slice across the process boundary. All 258
+Composer slices are under `DispatchDisplayCommand[0]`. Of the
+256 retained actual display-frame intervals, 255 each contain
+one such Composer call. The first interval has no matching
+call in the retained trace.
+
+Composer recorded 257 `wait_present` slices under `CommitFrame`
+and `PresentDisplay`. Each contains a `fence_timestamp` marker.
+250 marker values match a retained display-frame end within
+1 microsecond. Of the 254 waits inside a retained display-frame
+interval, 249 match the previous retained frame's end within
+that tolerance. The matched differences are 26–286 ns. This is
+consistent with Composer observing the prior present fence.
+The wait slice duration is not the current frame's presentation
+latency. Android's FrameTimeline uses the present fence signal
+time as the actual display-frame endpoint when it is valid.
+[Android FrameTimeline source](https://android.googlesource.com/platform/frameworks/native/+/43a68c3fd6da28753a612965b4072ef93f9f888e/services/surfaceflinger/FrameTimeline/FrameTimeline.cpp#1474).
+
+The retained `gfx` markers include 319 `initiateDisplayModeChanges`,
+31 `chooseDisplayModes` and 31 `AtomicSetRefreshControlState refresh only`
+slices. They show policy checks and refresh-control work. The
+SurfaceFlinger mode-check function can exit without a request.
+Neither the decoded slices nor the raw retained `print` markers
+show an explicit `setActiveConfig`, `setDisplayMode`, modeset or
+atomic commit marker. The trace supplies no positive evidence
+of a Composer modeset or a vendor display interrupt. It cannot
+exclude a modeset outside the retained records or one without a
+marker. [Android mode-check source](https://android.googlesource.com/platform/frameworks/native/+/refs/heads/main/services/surfaceflinger/SurfaceFlinger.cpp#1509).
+
 After this stock Android session, take and verify a fresh
 guarded nine-partition NV backup before the next Linux
 slot B trial. Keep Android off between the rescue and trial.
