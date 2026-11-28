@@ -8583,6 +8583,45 @@ This can verify IRQ delivery for that fence.
 Direct hardware frame-start status remains
 unavailable through stock tracing.
 
+###### Attended stock D1 modeset fence inside the BE IRQ
+
+The owner switched stock A once from 1280×2856 to
+1080×2410. A 40-second `gfx sync irq` atrace and a
+45-second FrameTimeline-only Perfetto session were
+running. The earlier capture window had no switch.
+The attended trace retained all 1,953,972 atrace
+entries. FrameTimeline retained 44.977 seconds with
+zero target-buffer discards, overwrites and wraps.
+Perfetto reported six service-wide discarded chunks
+and 66 FrameTimeline parser errors. The matching
+display slice is intact.
+
+There was one Composer configuration request,
+`SetActiveConfigInternal:1080x2410x120@120`. Times
+below are relative to the end of its parent
+`setActiveConfigWithConstraints[0]` scope.
+
+| Time (ms) | Joined evidence |
+| ---: | --- |
+| +1.341 | First mode-bearing `PresentDisplay` begins. |
+| +5.014 | Previous CRTC fence, sequence 39624, signals. |
+| +5.101 | First new-mode `CommitFrame` creates `vs-drm` `CRTC:32-Out_ctrl0` context 1 sequence 39625. |
+| +8.673 | Composer enters the successful commit's configuration callback. |
+| +21.669 | CPU 0 enters IRQ 439, `f600000.dc9x00:dpu_be@80000`. |
+| +21.692 | The same CRTC fence key signals on CPU 0. |
+| +21.701 | The IRQ exits with `ret=handled`. |
+
+Display FrameTimeline token 895480 has a Late Present
+endpoint 974 ns before the kernel fence tracepoint.
+It agrees with Composer's successful fence timestamp
+within 404 ns after applying the recorded clock
+offset. This confirms that the first new-mode
+CRTC fence signaled inside the display BE IRQ in
+this switch. The trace does not expose which DPU
+status bit was asserted or when pixels reached
+the panel. Stock A remained at 1080×2410 after
+the capture.
+
 After this stock Android session, take and verify a fresh
 guarded nine-partition NV backup before the next Linux
 slot B trial. Keep Android off between the rescue and trial.
