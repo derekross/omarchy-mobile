@@ -1,0 +1,15 @@
+// SPDX-License-Identifier: MIT
+/*
+ * Bring-up only (BATTERY-PLAN.md B1): enable the Pixel Tablet's fuel gauge,
+ * the MAX77759's at 0x36 on USI13. The board file describes it with the
+ * tablet's 1 kOhm pack model and leaves it disabled; the bus is already on.
+ * On a power-on reset the driver writes the model into the gauge's RAM
+ * (volatile; stock reloads its own). The charger stays undescribed.
+ * Applied with fdtoverlay; the tangorpro DTB is built with -@.
+ */
+/dts-v1/;
+/plugin/;
+
+&fuel_gauge {
+	status = "okay";
+};
