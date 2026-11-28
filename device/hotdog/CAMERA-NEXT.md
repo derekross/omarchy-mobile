@@ -95,16 +95,15 @@ Follow-ups in the same area:
 ## 2. Front camera: the pop-up
 
 P3-P5 passed on 2026-11-28, with drop protection from the accelerometer
-(CAMERA-PLAN §7). Left:
+(CAMERA-PLAN §7). device-hotdog 0.1.26 is installed on the phone and
+`omamobile-hotdog-popup.service` is enabled, so the pop-up follows the
+front camera from every boot. Left:
 
-- **Make it stay:** install device-hotdog 0.1.26, remove `/root/omamobile-hotdog-popup`,
-  and `systemctl enable --now omamobile-hotdog-popup` (the owner's decision 4;
-  the enable file exists on the phone).
 - **Faster drop detection:** `ssccli` streams at the SSC's default rate
   (about 26 Hz). libssc has a `sample-rate` property; a small client at
   100 Hz would cut the detection from about 0.1 s to about 0.06 s.
-- **Done when:** the service starts at boot and the front camera rises and
-  lowers five times in a row in omacam, picture upright and mirrored.
+- **Done when:** after a reboot, the front camera rises and lowers five
+  times in a row in omacam, picture upright and mirrored.
 
 ## 3. The random bad RAM boots
 

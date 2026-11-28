@@ -519,6 +519,10 @@ device-hotdog 0.1.25 with the tool from 0.1.26 run from `/root`): pass.**
   stop), and raised again after the camera was reopened. The owner:
   "the cam closes nicely when dropped". `watch-fall` (read-only) gave no
   false alarm on the table.
+- **Installed (decision 4):** device-hotdog 0.1.26 installed,
+  `/root/omamobile-hotdog-popup` removed, `omamobile-hotdog-popup.service`
+  enabled and started; the accelerometer stream also runs under the unit's
+  sandbox (`ProtectSystem=strict`, `NoNewPrivileges`).
 
 **2026-11-05, RAM boot 1 (`7.3.0-rc6-omamobile-push1-g43b7e8ece3ad`,
 overlays torch, camera and popup): T1, C0-C6 pass; the D-PHY cameras give
