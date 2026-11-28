@@ -189,10 +189,14 @@ function portPlacements(raw) {
   return out
 }
 
-// What a fresh home gets, before the user changes anything: a clock and the
-// first of these apps that are installed along the bottom row.
-var DEFAULT_APPS = ["chromium", "Alacritty", "org.gnome.Nautilus", "omarchy-menu", "org.omarchy.settings",
+// What a fresh home gets, before the user changes anything: a clock, the
+// first of these apps that are installed along the bottom row, and Settings
+// (when installed) in the first free cell above that row.
+var DEFAULT_APPS = ["chromium", "Alacritty", "org.gnome.Nautilus", "omarchy-menu",
                     "foot", "org.gnome.Calculator", "omawrite", "nvim", "localsend"]
+
+// Desktop id of the Settings app (packages/omamobile-settings), case kept.
+var SETTINGS_APP = "org.omamobile.Settings"
 
 function clampInt(value, lo, hi, fallback) {
   var n = Math.round(Number(value))
@@ -358,6 +362,11 @@ function defaultLayout(availableApps, grid) {
     layout.pages[0].items.push({ id: takeId(layout, "a"), kind: "app", app: DEFAULT_APPS[i],
                                  x: x, y: grid.rows - 1, w: 1, h: 1 })
     x += 1
+  }
+  if (have[SETTINGS_APP]) {
+    var spot = freeSpot(layout.pages[0].items, { columns: grid.columns, rows: grid.rows - 1 }, 1, 1)
+    if (spot) layout.pages[0].items.push({ id: takeId(layout, "a"), kind: "app", app: SETTINGS_APP,
+                                           x: spot.x, y: spot.y, w: 1, h: 1 })
   }
   layout.pages.push({ items: [] })
   var battery = REGISTRY.battery, media = REGISTRY.media

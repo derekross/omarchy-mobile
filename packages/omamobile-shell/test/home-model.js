@@ -56,6 +56,28 @@ test("the default layout uses only installed apps", () => {
   assert.deepStrictEqual(M.parse(M.serialize(l)), l)
 })
 
+test("the default layout adds Settings above the bottom row", () => {
+  const installed = ["chromium", "Alacritty", "org.gnome.Nautilus", "omarchy-menu", "foot"]
+  const without = M.defaultLayout(installed, grid)
+  const l = M.defaultLayout(installed.concat(["org.omamobile.Settings.desktop"]), grid)
+  const bottom = (x) => x.pages[0].items.filter((i) => i.y === grid.rows - 1).map((i) => [i.app, i.x])
+  assert.deepStrictEqual(bottom(l), [["chromium", 0], ["Alacritty", 1], ["org.gnome.Nautilus", 2], ["omarchy-menu", 3]])
+  assert.deepStrictEqual(bottom(l), bottom(without))
+  const s = l.pages[0].items.filter((i) => i.app === "org.omamobile.Settings")
+  assert.strictEqual(s.length, 1)
+  assert.deepStrictEqual([s[0].x, s[0].y, s[0].w, s[0].h], [0, 2, 1, 1])
+  const items = l.pages[0].items
+  for (let i = 0; i < items.length; i++)
+    for (let j = i + 1; j < items.length; j++) assert.ok(!M.overlaps(items[i], items[j]), items[i].id + " " + items[j].id)
+  assert.ok(!without.pages[0].items.some((i) => i.app === "org.omamobile.Settings"))
+  assert.ok(!l.pages.slice(1).some((p) => p.items.some((i) => i.kind === "app")))
+  assert.deepStrictEqual(M.normalize(l), l)
+  assert.deepStrictEqual(M.parse(M.serialize(l)), l)
+  const few = M.defaultLayout(["foot", "org.omamobile.Settings"], grid).pages[0].items.filter((i) => i.kind === "app")
+  assert.deepStrictEqual(few.map((i) => [i.app, i.x, i.y]), [["foot", 0, 5], ["org.omamobile.Settings", 0, 2]])
+  assert.ok(!M.defaultLayout(["org.omamobile.settings"], grid).pages[0].items.some((i) => i.kind === "app"))
+})
+
 test("garbage reads as no layout", () => {
   for (const bad of ["", "{", "null", "[]", "{}", '{"pages": 3}'])
     assert.strictEqual(M.parse(bad), null, bad)
