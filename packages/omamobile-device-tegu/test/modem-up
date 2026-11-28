@@ -68,6 +68,18 @@ n_driver=$(grep -n '^modprobe pcie_gs201_cp' "$c" | cut -d: -f1)
 n_check=$(grep -n '^chroot modem check' "$c" | cut -d: -f1)
 (( n_inhibit < n_driver && n_driver < n_check )) || fail "the sleep inhibitor, then the drivers, then the profile check (it needs CPIF loaded)"
 [[ -e $t/k2/latch ]] || fail "the latch stays past ONLINE"
+# omamobile-modem's sleep policy decides the inhibitor: yes takes none, no
+# (or a policy that isn't there, as in the run above) takes it
+printf '#!/bin/bash\necho "policy $*" >> "$T/calls"; exit 0\n' > "$t/policy-yes"; chmod +x "$t/policy-yes"
+printf '#!/bin/bash\necho "policy $*" >> "$T/calls"; exit 1\n' > "$t/policy-no"; chmod +x "$t/policy-no"
+run_tree ky IN_TREE=1 MMD=1 OMAMOBILE_MODEM_SLEEP_POLICY="$t/policy-yes" || { cat "$t/ky/out"; fail "a start the policy allows to sleep succeeds"; }
+grep -qx 'policy check' "$t/ky/calls" || fail "the start asks the sleep policy"
+grep -q 'unit=omamobile-tegu-modem-nosleep' "$t/ky/calls" && fail "no sleep inhibitor where the policy allows sleep with the modem up"
+grep -q 'may sleep with the modem up' "$t/ky/out" || fail "the start says it takes no inhibitor"
+run_tree kn IN_TREE=1 MMD=1 OMAMOBILE_MODEM_SLEEP_POLICY="$t/policy-no" || { cat "$t/kn/out"; fail "a start the policy refuses succeeds"; }
+n_inhibit=$(grep -n 'unit=omamobile-tegu-modem-nosleep' "$t/kn/calls" | cut -d: -f1)
+n_driver=$(grep -n '^modprobe pcie_gs201_cp' "$t/kn/calls" | cut -d: -f1)
+[[ -n $n_inhibit ]] && (( n_inhibit < n_driver )) || fail "where the policy says no, the inhibitor is taken before the drivers"
 grep -qx 'invocation cccccccccccccccccccccccccccccccc' "$t/k2/latch" && grep -qx online "$t/k2/latch" || fail "the latch names the profile unit's invocation and ONLINE"
 # Without the modem package's stop-witness contract nothing loads
 rm -rf "$t/k3"; mkdir -p "$t/k3"; : > "$t/k3/no-contract"

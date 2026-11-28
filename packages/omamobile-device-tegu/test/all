@@ -102,11 +102,13 @@ for f in usr/bin/reboot-to usr/bin/tegu-tcpc-switch \
          usr/share/uwsm/env.d/omamobile-tegu-graphics \
          usr/share/omamobile/device.conf \
          usr/share/omamobile/device-tegu/version \
-         usr/share/omamobile/auto-sleep-default \
+         usr/share/omamobile/auto-sleep-default usr/lib/omamobile-modem/suspend-verified \
          usr/share/licenses/omamobile-device-tegu/LICENSE \
          etc/pacman.d/omamobile-mirrorlist etc/NetworkManager/conf.d/zz-omamobile-wifi-powersave.conf; do
   [[ -f $tmp/root/$f ]] || fail "install stages $f"
 done
+verified=$tmp/root/usr/lib/omamobile-modem/suspend-verified
+[[ ! -x $verified && $(grep -cv '^#' "$verified") == 0 ]] || fail "the suspend-verified declaration is a plain, comment-only file"
 # The sleep runs with the kernel's clock ticking, so no service watchdog may
 # outlast it: one drop-in for every service, and nothing else in it.
 wd=$tmp/root/usr/lib/systemd/system/service.d/10-omamobile-tegu-sleep-watchdog.conf
