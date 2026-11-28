@@ -1,0 +1,341 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+#
+# power-baseline: the shared power baseline of #867 (Parts A, B and C), run
+# the same way on every device so the numbers can be compared. Runs ON the
+# phone, as root, detached: the cable has to be out for Part B and USB may
+# not come back after an unplug until the next boot, so the results go to a
+# folder on the root filesystem, with a report.md ready to paste into the
+# device's "Power baseline: <device> (<codename>)" issue.
+#
+# Usage (on the phone, as root):
+#   power-baseline [--detach] [options]   measure
+#   power-baseline --report DIR           write DIR/report.md again from a
+#                                         run's files (no root needed)
+#
+# Install it from the laptop:
+#   tools/phone-ssh 'cat > /usr/local/bin/power-baseline && chmod +x /usr/local/bin/power-baseline' < tools/power-baseline
+#
+# What it does, in order:
+#   1. holds a logind sleep inhibitor (block mode) for the whole run, so
+#      auto-sleep can't suspend the phone while it reads Part A or the
+#      floor: the baseline is the awake screen-off floor. --no-inhibit
+#      leaves it out;
+#   2. records the conditions (kernel, packages, gauge model, Wi-Fi power
+#      save, modem, auto-sleep) and runs Part A (idle driver and states,
+#      governors, devfreq, thermal zones and trips, cooling devices, Wi-Fi
+#      power save, pm_genpd);
+#   3. waits until the battery reads Discharging and the screen is off
+#      (bl_power not 0), at most --wait seconds. Pull the cable and turn the
+#      screen off after starting it;
+#   4. Part B: waits --settle seconds, then logs the gauge and every thermal
+#      zone every 15 s, 12 times;
+#   5. Part C: interrupts and context switches per second over 60 s, the
+#      top 15 processes, the top 15 wakeup sources, and powertop if present.
+#
+# It changes nothing on the phone apart from the inhibitor, which ends with
+# the run. Close your SSH login before Part B starts (an open one keeps
+# sshd and Wi-Fi busy): the run doesn't need it.
+#
+# Options:
+#   --detach        re-run itself with setsid/nohup and return at once (the
+#                   script has to be a file for that, not streamed to bash -s)
+#   --wait SECS     longest wait for cable out and screen off (default 1800)
+#   --settle SECS   seconds between screen off and Part B's log (default 600)
+#   --out DIR       where the run's folder goes (default /var/lib/omamobile/power)
+#   --no-inhibit    don't hold the sleep inhibitor
+#
+# Output: <out>/<time>-baseline/ with conditions.txt, partA.txt, floor.txt
+# (Part B), partC.txt, progress.txt and report.md. The report replaces the
+# user and host names with <user> and <host>; read it before you post it.
+#
+# See docs/POWER-BASELINE.md.
+
+set -uo pipefail
+# the same sort order and number format on every phone
+export LC_ALL=C
+
+detach=0 wait_s=1800 settle=600 out=/var/lib/omamobile/power inhibit=1 report= run=
+
+while (($#)); do
+  case "$1" in
+    --detach) detach=1 ;;
+    --wait) wait_s="${2:?}"; shift ;;
+    --settle) settle="${2:?}"; shift ;;
+    --out) out="${2:?}"; shift ;;
+    --no-inhibit) inhibit=0 ;;
+    --report) report="${2:?}"; shift ;;
+    --run-dir) run="${2:?}"; shift ;;   # internal: the folder a detached run writes
+    -h|--help) awk 'NR > 2 && !/^#/ { exit } NR > 2 { sub(/^# ?/, ""); print }' "${BASH_SOURCE[0]}"; exit 0 ;;
+    *) echo "power-baseline: unknown argument '$1' (see --help)" >&2; exit 1 ;;
+  esac
+  shift
+done
+
+for v in "$wait_s" "$settle"; do
+  [[ $v =~ ^[0-9]+$ ]] || { echo "power-baseline: '$v' is not a number of seconds" >&2; exit 1; }
+done
+if ((detach)) && [[ ! -f ${BASH_SOURCE[0]:-} ]]; then
+  echo "power-baseline: --detach re-runs the script from its file, and this one was streamed (bash -s); install it first (see --help)" >&2
+  exit 1
+fi
+
+# ---------------------------------------------------------------- report
+
+# median of the numbers on stdin, one a line
+median() { sort -n | awk '{ v[NR] = $1 } END { if (!NR) exit; print (NR % 2) ? v[(NR + 1) / 2] : (v[NR / 2] + v[NR / 2 + 1]) / 2 }'; }
+
+# stdin to stdout with the host name H replaced by <host> and then the user
+# name U by <user>, as whole words. Literal: the names come from a run's
+# files, which may be someone else's, so they are never a regex or a sed
+# program. top cuts a user name of more than 8 characters to 7 and a '+'.
+scrub() { # HOST USER
+  H=$1 U=$2 awk '
+    function word(c) { return c ~ /[[:alnum:]_]/ }
+    function rep(s, w, r,   out, i, pre) {
+      if (w == "") return s
+      out = ""
+      while ((i = index(s, w)) > 0) {
+        pre = (i > 1) ? substr(s, i - 1, 1) : ""
+        if (!word(pre) && !word(substr(s, i + length(w), 1))) out = out substr(s, 1, i - 1) r
+        else out = out substr(s, 1, i - 1 + length(w))
+        s = substr(s, i + length(w))
+      }
+      return out s
+    }
+    BEGIN { h = ENVIRON["H"]; u = ENVIRON["U"]; if (u == "root") u = ""
+      if (length(u) > 8) ut = substr(u, 1, 7) "+" }
+    { s = rep($0, h, "<host>"); s = rep(s, u, "<user>"); if (ut != "") s = rep(s, ut, "<user>"); print s }'
+}
+
+write_report() { # DIR
+  local d=$1 f
+  [[ -s $d/floor.txt ]] || { echo "power-baseline: no floor.txt in $d" >&2; return 1; }
+  local user host
+  user=$(sed -n 's/^user: //p' "$d/conditions.txt" 2>/dev/null)
+  host=$(sed -n 's/^host: //p' "$d/conditions.txt" 2>/dev/null)
+  # samples: "HH:MM:SS <status> <current> uA batt=T zones: ...", where the
+  # status can be two words ("Not charging"), so the current is the field
+  # before "uA", and a sample whose current didn't read is left out of it
+  local samples n discharging currents nc cur_med cur_min cur_max cur_mean volt_med
+  samples=$(grep -E '^[0-9]{2}:[0-9]{2}:[0-9]{2} ' "$d/floor.txt")
+  n=$(grep -c . <<<"$samples")
+  discharging=$(awk '{ for (i = 3; i <= NF && $i != "uA"; i++) ; st = $2; for (j = 3; j < i - 1; j++) st = st " " $j
+      if (st == "Discharging") k++ } END { print k + 0 }' <<<"$samples")
+  currents=$(awk '{ for (i = 3; i <= NF && $i != "uA"; i++) ; c = $(i - 1)
+      if (i <= NF && c ~ /^-?[0-9]+$/) print (c < 0 ? -c : c) / 1000 }' <<<"$samples")
+  nc=$(grep -c . <<<"$currents")
+  cur_med=$(median <<<"$currents")
+  [[ -n $cur_med ]] && read -r cur_min cur_max cur_mean < <(awk '{ s += $1
+      if (NR == 1 || $1 < lo) lo = $1; if ($1 > hi) hi = $1 } END { printf "%.1f %.1f %.1f\n", lo, hi, s / NR }' <<<"$currents")
+  volt_med=$(sed -n 's/^voltage_now: //p' "$d/floor-extra.txt" 2>/dev/null | median)
+  # each zone's range over Part B, named by its type from Part A: both read
+  # the zones by the same glob, one value or '-' a zone, so the positions
+  # match. The battery's zone is left out, it has its own line
+  local zones batt types
+  types=$(sed -n 's/^\([^ ]*\) temp=.*/\1/p' "$d/partA.txt" 2>/dev/null)
+  zones=$(sed -n 's/.* zones: //p' <<<"$samples" | awk -v types="$types" '
+    { for (i = 1; i <= NF; i++) { if ($i !~ /^-?[0-9]+$/) continue; v = $i / 1000
+        if (!(i in lo) || v < lo[i]) lo[i] = v; if (!(i in hi) || v > hi[i]) hi[i] = v }
+      if (NF > nz) nz = NF }
+    END { nt = split(types, t, "\n")
+      for (i = 1; i <= nz; i++) {
+        name = (i <= nt && t[i] != "") ? t[i] : "zone" (i - 1)
+        if (name ~ /batt/) continue
+        r = !(i in lo) ? "not read" : (lo[i] == hi[i]) ? lo[i] : lo[i] "-" hi[i]
+        out = out sep name " " r; sep = ", " }
+      if (out != "") print out " °C" }')
+  batt=$(sed -n 's/.* batt=\([0-9-]*\) .*/\1/p' <<<"$samples" | median)
+  local screen_on
+  screen_on=$(grep -c '^bl_power: 0$' "$d/floor-extra.txt" 2>/dev/null)
+  local rates idle cap0 cap1
+  cap0=$(sed -n 's/.*cable out and screen off at \([0-9]*\) %.*/\1/p' "$d/progress.txt" 2>/dev/null)
+  cap1=$(sed -n 's/.*battery at the end \([0-9]*\) %.*/\1/p' "$d/progress.txt" 2>/dev/null)
+  rates=$(grep -m1 'interrupts/s' "$d/partC.txt" 2>/dev/null)
+  idle=$(sed -n 's/^cpuidle driver: //p' "$d/partA.txt" 2>/dev/null)
+
+  {
+    echo "Recipe from #867 (Parts A, B and C), run with \`tools/power-baseline\`."
+    echo
+    echo "**Conditions**"
+    sed -n 's/^cond: /- /p' "$d/conditions.txt"
+    echo
+    echo "**Result**"
+    if [[ -n $cur_med ]]; then
+      local watts=
+      [[ -n $volt_med ]] && watts=$(awk -v c="$cur_med" -v v="$volt_med" 'BEGIN { printf ", about %.2f W at %.2f V", c * v / 1e9, v / 1e6 }')
+      echo "- Screen-off floor: **median ${cur_med} mA** (${cur_min} to ${cur_max} mA over $nc samples, mean ${cur_mean})${watts}."
+    fi
+    ((nc < n)) && echo "- The current didn't read in $((n - nc)) of $n samples."
+    echo "- Status Discharging in $discharging of $n samples; screen on in ${screen_on:-0} of them."
+    [[ -n $zones ]] && echo "- Thermal zones during Part B: $zones; battery $(awk -v t="$batt" 'BEGIN { printf "%.1f", t / 10 }') °C (median)."
+    [[ -n $cap0 && -n $cap1 ]] && echo "- Battery: $cap0 % at cable out, $cap1 % at the end of Part C."
+    [[ -n $rates ]] && echo "- $rates."
+    [[ -n $idle ]] && echo "- cpuidle driver: \`$idle\`."
+    sed -n 's/^suspend: \([^;.]*\).*/- \1./p' "$d/progress.txt" 2>/dev/null
+    for f in partA:"Part A" floor:"Part B" partC:"Part C"; do
+      echo
+      echo "<details><summary>${f#*:}</summary>"
+      echo
+      echo '```'
+      cat "$d/${f%%:*}.txt"
+      echo '```'
+      echo
+      echo "</details>"
+    done
+  } | scrub "$host" "$user" > "$d/report.md"
+  echo "power-baseline: wrote $d/report.md"
+}
+
+if [[ -n $report ]]; then
+  write_report "$report"
+  exit
+fi
+
+# ---------------------------------------------------------------- measure
+
+[[ $EUID -eq 0 ]] || { echo "power-baseline: run as root" >&2; exit 1; }
+
+# the phone's own battery: a paired controller's or a stylus's is a
+# Battery too, with scope Device
+bat=
+for d in /sys/class/power_supply/*; do
+  [[ "$(cat "$d/type" 2>/dev/null)" == Battery && -r "$d/current_now" ]] || continue
+  [[ "$(cat "$d/scope" 2>/dev/null)" == Device ]] && continue
+  bat=$d; break
+done
+[[ -n $bat ]] || { echo "power-baseline: no battery with current_now" >&2; exit 1; }
+bl=
+for d in /sys/class/backlight/*; do [[ -r $d/bl_power ]] && { bl=$d; break; }; done
+[[ -n $bl ]] || { echo "power-baseline: no backlight with bl_power, so a screen off can't be seen" >&2; exit 1; }
+
+if [[ -z $run ]]; then
+  run=$out/$(date +%Y%m%d-%H%M%S)-baseline
+  mkdir -p "$run" || exit 1
+fi
+
+if ((detach)); then
+  args=(--wait "$wait_s" --settle "$settle" --run-dir "$run")
+  ((inhibit)) || args+=(--no-inhibit)
+  setsid nohup "${BASH_SOURCE[0]}" "${args[@]}" > "$run/run.log" 2>&1 < /dev/null &
+  echo "power-baseline: started (pid $!), writing $run"
+  echo "power-baseline: pull the cable and turn the screen off within $wait_s s; it takes about $(( (settle + 180 + 60 + 60) / 60 )) minutes after that"
+  echo "power-baseline: then: cat $run/progress.txt, and $run/report.md once it says done"
+  exit 0
+fi
+
+cd "$run" || exit 1
+progress() { echo "$(date +%T) $*" >> progress.txt; }
+
+# The inhibitor's child watches this run, so the lock goes with it even
+# when the run is killed with SIGKILL
+inh_pid=
+stop_inhibit() {
+  [[ -n $inh_pid ]] || return 0
+  pkill -P "$inh_pid" 2>/dev/null; kill "$inh_pid" 2>/dev/null; inh_pid=
+}
+trap 'stop_inhibit; progress "stopped by a signal"; exit 1' TERM INT HUP
+trap stop_inhibit EXIT
+
+# 1. the inhibitor, before anything is read: auto-sleep suspends the phone
+# 30 s after the screen goes off once no SSH login is open, and its sleep
+# hook unloads Wi-Fi, which took Part A's Wi-Fi line with it in a run that
+# took the inhibitor later
+s_start=$(cat /sys/power/suspend_stats/success 2>/dev/null)
+if ((inhibit)); then
+  systemd-inhibit --what=sleep --mode=block --who=power-baseline \
+    --why="measuring the awake screen-off floor (#867)" \
+    bash -c 'while kill -0 "$1" 2>/dev/null; do sleep 5; done' _ "$$" &
+  inh_pid=$!
+  sleep 1   # let logind take the lock before the first reading
+fi
+
+# 2. conditions and Part A
+user=$(loginctl list-users --no-legend 2>/dev/null | awk '$2 != "root" { print $2; exit }')
+pkgs=$(pacman -Q 2>/dev/null | awk '$1 ~ /^(linux-omamobile|omamobile-device-|omamobile-shell$|omamobile-modem$|omarchy$)/ { printf "%s%s %s", sep, $1, $2; sep = ", " }')
+gauge=$(journalctl -k -b -o cat --no-pager 2>/dev/null | grep -E 'battery model (load|loaded)' | tail -n1)
+psave=$(for i in $(iw dev 2>/dev/null | awk '$1 == "Interface" { print $2 }'); do printf '%s %s; ' "$i" "$(iw dev "$i" get power_save 2>/dev/null)"; done)
+sleepd=$(systemctl --user -M "${user:-root}@" is-active omamobile-sleepd.service 2>/dev/null || true)
+toggle=
+if [[ -n $user ]] && command -v omarchy-toggle-enabled >/dev/null; then
+  runuser -u "$user" -- omarchy-toggle-enabled omamobile-sleep 2>/dev/null && toggle=on || toggle=off
+fi
+{
+  echo "user: ${user:-root}"
+  echo "host: $(hostname 2>/dev/null)"
+  echo "cond: Kernel: \`$(uname -r)\` ($(tr -d '\0' < /proc/device-tree/model 2>/dev/null))"
+  echo "cond: Packages: ${pkgs:-not read}"
+  echo "cond: Gauge: ${gauge:-no battery model line in the kernel log of this boot}; charge_full $(cat "$bat/charge_full" 2>/dev/null) µAh, design $(cat "$bat/charge_full_design" 2>/dev/null) µAh"
+  echo "cond: Battery when the run started (before the cable is pulled): $(cat "$bat/capacity" 2>/dev/null) %, $(cat "$bat/status" 2>/dev/null)"
+  echo "cond: Wi-Fi power save: ${psave%; }"
+  echo "cond: omamobile-modem.service: $(systemctl is-active omamobile-modem.service 2>/dev/null)"
+  echo "cond: Auto-sleep: omamobile-sleepd ${sleepd:-not found}, omamobile-sleep toggle ${toggle:-not read}; sleep inhibitor held by this run: $( ((inhibit)) && echo yes || echo no)"
+  echo "cond: devfreq devices: $(ls /sys/class/devfreq 2>/dev/null | paste -sd ' ')"
+  echo "cond: Uptime at start: $(uptime -p 2>/dev/null); clock synchronized: $(timedatectl show -p NTPSynchronized --value 2>/dev/null)"
+  echo "cond: Room temperature: not measured (add it if known)"
+} > conditions.txt
+progress "conditions written"
+
+{
+uname -r; tr -d '\0' < /proc/device-tree/model; echo
+tr ' ' '\n' < /proc/cmdline | grep -E 'ignore_unused|mem_sleep'
+cat /sys/power/mem_sleep
+echo "cpuidle driver: $(cat /sys/devices/system/cpu/cpuidle/current_driver 2>/dev/null)"
+grep . /sys/devices/system/cpu/cpu0/cpuidle/state*/name /sys/devices/system/cpu/cpu0/cpuidle/state*/usage 2>/dev/null || echo "cpu0 has no idle states"
+grep . /sys/devices/system/cpu/cpufreq/policy*/scaling_governor /sys/devices/system/cpu/cpufreq/policy*/scaling_max_freq
+ls /sys/class/devfreq/
+grep . /sys/class/devfreq/*/governor /sys/class/devfreq/*/cur_freq 2>/dev/null
+for z in /sys/class/thermal/thermal_zone*; do
+  echo "$(cat $z/type) temp=$(cat $z/temp) policy=$(cat $z/policy)"
+  grep . $z/trip_point_*_type $z/trip_point_*_temp 2>/dev/null
+done
+grep . /sys/class/thermal/cooling_device*/type
+for i in $(iw dev | awk '$1=="Interface"{print $2}'); do echo "$i: $(iw dev $i get power_save)"; done
+head -40 /sys/kernel/debug/pm_genpd/pm_genpd_summary
+} > partA.txt 2>&1
+progress "Part A done"
+
+# 3. cable out, screen off
+progress "waiting for Discharging and the screen off (at most $wait_s s)"
+waited=0
+until [[ $(cat "$bat/status") == Discharging && $(cat "$bl/bl_power") != 0 ]]; do
+  if ((waited >= wait_s)); then
+    progress "gave up: status $(cat "$bat/status"), bl_power $(cat "$bl/bl_power") after $wait_s s"
+    exit 1
+  fi
+  sleep 5; waited=$((waited + 5))
+done
+s0=$(cat /sys/power/suspend_stats/success 2>/dev/null)
+progress "cable out and screen off at $(cat "$bat/capacity") %; settling $settle s"
+
+# 4. Part B, the recipe's loop, but each zone read on its own with '-' for
+# one that fails, so the report can name them by position; bl_power and
+# voltage_now go beside it
+{
+echo "gauge: $bat"; sleep "$settle"
+for i in $(seq 12); do
+  echo "$(date +%T) $(cat $bat/status) $(cat $bat/current_now) uA batt=$(cat $bat/temp) zones: $(for z in /sys/class/thermal/thermal_zone*/temp; do t=$(cat "$z" 2>/dev/null); printf '%s ' "${t:--}"; done)"
+  { echo "bl_power: $(cat "$bl/bl_power")"; echo "voltage_now: $(cat "$bat/voltage_now")"; } >> floor-extra.txt
+  sleep 15
+done
+} > floor.txt 2>&1
+progress "Part B done"
+
+# 5. Part C, root already (no sudo); /sys/class/wakeup if debugfs has none
+{
+a=$(awk '/^intr/{print $2}' /proc/stat); c=$(awk '/^ctxt/{print $2}' /proc/stat); sleep 60
+echo "$(( ($(awk '/^intr/{print $2}' /proc/stat) - a) / 60 )) interrupts/s, $(( ($(awk '/^ctxt/{print $2}' /proc/stat) - c) / 60 )) context switches/s"
+top -b -w 200 -d 30 -n 2 -o %CPU | awk '/^top -/{n++} n==2' | sed -n '1,15p'
+echo "--- wakeup_sources"
+if [[ -r /sys/kernel/debug/wakeup_sources ]]; then
+  sort -k3 -nr /sys/kernel/debug/wakeup_sources | sed -n '1,15p'
+else
+  for w in /sys/class/wakeup/wakeup*; do echo "$(cat $w/name) $(cat $w/event_count) $(cat $w/active_count)"; done | sort -k3 -nr | sed -n '1,15p'
+fi
+if command -v powertop >/dev/null; then powertop --time=60 --csv=powertop.csv; else echo "powertop: not installed"; fi
+} > partC.txt 2>&1
+s1=$(cat /sys/power/suspend_stats/success 2>/dev/null)
+echo "suspend: Suspends during Parts B and C: $(( ${s1:-0} - ${s0:-0} )) ($(( ${s1:-0} - ${s_start:-0} )) since the run started); battery at the end $(cat "$bat/capacity") %, $(cat "$bat/status")." >> progress.txt
+stop_inhibit
+write_report "$run" >> progress.txt
+progress "done"

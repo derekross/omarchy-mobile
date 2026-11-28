@@ -85,6 +85,8 @@ tests/module-load-once
 # don't meet in the same line
 echo "# tests/power-ab/samples.py"
 python3 tests/power-ab/samples.py
+echo "# tests/power-baseline/report"
+tests/power-baseline/report
 echo "# tests/review-lessons"
 tests/review-lessons
 echo "# tests/head-pipes"   # no pipefail script pipes into head
