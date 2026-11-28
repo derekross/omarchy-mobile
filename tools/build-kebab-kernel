@@ -62,6 +62,12 @@ docker run --rm \
       [ "$got" = "$want" ] || echo "CHANGED: $o=$want is $o=$got"
     done | tee /obj/dropped-options.txt
     make ARCH=arm64 O=/obj -j"$JOBS" Image.gz qcom/sm8250-oneplus-kebab.dtb modules
+    # Out-of-tree modules of this port (device/kebab/kernel/*), built from a
+    # copy: Kbuild writes its objects next to the sources and /repo is
+    # read-only. They install under updates/, beside the tree modules.
+    rm -rf /obj/omamobile-ext
+    cp -r /repo/device/kebab/kernel /obj/omamobile-ext
+    for m in /obj/omamobile-ext/*/; do make ARCH=arm64 O=/obj M="$m" -j"$JOBS" modules; done
     # OUT is laid out as a kernel build directory (KERNEL_OUT) for
     # bin/omamobile initramfs, tools/build-kebab-images and tools/build-rootfs:
     # the release, Image.gz, the DTB and modules-<release>.tar.zst
@@ -75,6 +81,9 @@ docker run --rm \
     cp /obj/dropped-options.txt /out/
     rm -rf /out/modroot "/out/modules-$rel.tar.zst"
     make ARCH=arm64 O=/obj INSTALL_MOD_PATH=/out/modroot INSTALL_MOD_STRIP=1 modules_install >/dev/null
+    for m in /obj/omamobile-ext/*/; do
+      make ARCH=arm64 O=/obj M="$m" INSTALL_MOD_PATH=/out/modroot INSTALL_MOD_STRIP=1 modules_install >/dev/null
+    done
     rm -f "/out/modroot/lib/modules/$rel/build" "/out/modroot/lib/modules/$rel/source"
     # as bin/omamobile modules packs it: paths relative to /usr/lib/modules
     tar -C /out/modroot/lib/modules --owner=0 --group=0 --numeric-owner -cf - "$rel" |

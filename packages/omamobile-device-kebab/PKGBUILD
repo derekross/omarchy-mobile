@@ -2,14 +2,17 @@
 pkgname=omamobile-device-kebab
 pkgver=$(cat "${startdir:-.}/version")
 pkgrel=1
-pkgdesc="Omamobile support for the OnePlus 8T (kebab): firmware from its own partitions, reboot-to-fastboot, USB networking, display start, audio UCM"
+pkgdesc="Omamobile support for the OnePlus 8T (kebab): firmware and sensor files from its own partitions, reboot-to-fastboot, USB networking, display start, audio UCM, sensors"
 arch=(aarch64)
 url="https://github.com/derekross/omamobile"
 license=(MIT)
-# linux-firmware: the GPU's SQE and GMU, ath11k; erofs-utils and python:
-# omamobile-kebab-firmware reads the zap shader from vendor_a
+# linux-firmware: the GPU's SQE and GMU, ath11k; erofs-utils, e2fsprogs and
+# python: omamobile-kebab-firmware reads vendor_a, odm_a, persist and dsp_a;
+# hexagonrpcd, libssc and iio-sensor-proxy: the sensors on the SLPI;
+# omamobile-autorotate: the rotation tile and auto-rotate
 depends=(bash systemd alsa-ucm-conf linux-firmware-qcom linux-firmware-atheros
-         erofs-utils python util-linux)
+         erofs-utils e2fsprogs python util-linux
+         hexagonrpcd libssc iio-sensor-proxy omamobile-autorotate)
 
 build() {
   # Same syscall as device/kebab/initramfs/reboot-to.c. No libc.
@@ -45,6 +48,10 @@ package() {
   install -d "$pkgdir/usr/lib/systemd/system/sysinit.target.wants"
   ln -s ../omamobile-kebab-firmware.service \
     "$pkgdir/usr/lib/systemd/system/sysinit.target.wants/omamobile-kebab-firmware.service"
+  # Sensors: hexagonrpcd serves the SLPI the files staged above; the udev
+  # rule gives iio-sensor-proxy the accelerometer and proximity sensor
+  install -Dm644 "$startdir/udev/81-omamobile-kebab-sensors.rules" \
+    "$pkgdir/usr/lib/udev/rules.d/81-omamobile-kebab-sensors.rules"
   # The display manager waits for msm DRM to take the panel
   install -Dm755 "$startdir/bin/omamobile-kebab-display-wait" \
     "$pkgdir/usr/bin/omamobile-kebab-display-wait"
@@ -70,9 +77,10 @@ package() {
   # at scale 3); read by omamobile-shell 0.2.159 and later (#1143)
   install -Dm644 "$startdir/shell/bar-cutout.json" \
     "$pkgdir/usr/share/omamobile/shell/bar-cutout.json"
-  # Enable sshd and networkd. Nothing else starts.
+  # Enable sshd, networkd and the SLPI file server. Nothing else starts.
   local wants="$pkgdir/usr/lib/systemd/system/multi-user.target.wants"
   install -d "$wants"
   ln -s ../systemd-networkd.service "$wants/systemd-networkd.service"
   ln -s ../sshd.service "$wants/sshd.service"
+  ln -s ../hexagonrpcd-sdsp.service "$wants/hexagonrpcd-sdsp.service"
 }

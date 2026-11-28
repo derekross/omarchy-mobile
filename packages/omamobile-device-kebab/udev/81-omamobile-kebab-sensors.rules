@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: MIT
+# iio-sensor-proxy's SSC drivers on the sensor DSP (SLPI). Its own rules tag
+# the node with ssc-light and ssc-compass only; the 8T's accelerometer and
+# proximity sensor are there too. The DSP reports Android's axes (y up,
+# z out of the screen) and iio-sensor-proxy expects them reversed: upright
+# then reads "normal".
+SUBSYSTEM=="misc", KERNEL=="fastrpc-sdsp", ENV{IIO_SENSOR_PROXY_TYPE}+="ssc-accel ssc-proximity", ENV{ACCEL_MOUNT_MATRIX}="-1, 0, 0; 0, -1, 0; 0, 0, -1"

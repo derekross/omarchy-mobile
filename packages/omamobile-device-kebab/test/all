@@ -25,6 +25,13 @@ grep -q "^ExecStart=/usr/bin/omamobile-kebab-firmware" systemd/omamobile-kebab-f
 grep -q "^Before=omamobile-kebab-display.service" systemd/omamobile-kebab-firmware.service
 grep -q "losetup -r" bin/omamobile-kebab-firmware
 grep -q "mount -t vfat -o ro" bin/omamobile-kebab-firmware
+grep -q "debugfs -R \"rdump /sensors/registry/registry" bin/omamobile-kebab-firmware
+grep -q "sensors_complete" bin/omamobile-kebab-firmware
+echo ok sensor-files
+grep -q 'IIO_SENSOR_PROXY_TYPE}+="ssc-accel ssc-proximity"' udev/81-omamobile-kebab-sensors.rules
+grep -q "ACCEL_MOUNT_MATRIX" udev/81-omamobile-kebab-sensors.rules
+grep -q "hexagonrpcd-sdsp.service" PKGBUILD
+echo ok sensors
 echo ok firmware
 python3 -c 'import json,sys; v=json.load(open("shell/bar-cutout.json")); sys.exit(0 if isinstance(v.get("left"), (int, float)) and v["left"] > 0 else 1)'
 echo ok bar-cutout
