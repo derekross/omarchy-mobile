@@ -380,6 +380,9 @@ private slots:
             QVERIFY(intro->y() >= 0);
             QCOMPARE(intro->parentItem(), list->parentItem());
             QVERIFY(list->y() >= intro->y() + intro->height());
+            QCOMPARE(intro->height(), intro->implicitHeight());
+            QVERIFY(intro->mapToScene(QPointF(0, 0)).y() >= 0);
+            QVERIFY(intro->property("lineCount").toInt() > 1);
         }
         QVERIFY(QMetaObject::invokeMethod(window, "goBack"));
         QCOMPARE(backend.page(), QString("about"));
