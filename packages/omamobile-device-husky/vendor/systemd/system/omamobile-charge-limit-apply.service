@@ -2,14 +2,22 @@
 # Applies the saved charge limit (/etc/omamobile/charge-limit) to the charger this package declares
 # (/usr/share/omamobile/charge-limit.conf). Pulled in by udev when the charger appears
 # (75-omamobile-charge-limit.rules); without a saved file the helper does nothing. The helper is omamobile-settings'.
-# Not enabled.
+# Not enabled. RemainAfterExit= keeps it active after one run, so the charger's change events (each one
+# re-wants it) do not start it again (6968 starts in one boot on 2026-11-25 without it). StopWhenUnneeded= stops
+# it when the charger device goes away (driver unbind or module reload), so the next add runs it again. A cable
+# replug does not remove the device; the driver keeps the limit across it (checked 2026-11-25).
+# On the 2026-11-27 boot systemd marked the charger active on its first change event, not the add, so
+# that was the start. If that first run fails the unit is left failed, and the next change event wants it
+# again: it is retried, within systemd's default start limit (5 starts in 10 s), not left failed until the
+# next boot. (Read from systemd's behaviour and the 2026-11-25 count; a failing first run is not tested.)
 [Unit]
 Description=Apply the saved charge limit
-StartLimitIntervalSec=0
 After=local-fs.target
 ConditionFileIsExecutable=/usr/lib/omamobile-settings/charge-limit
+StopWhenUnneeded=yes
 
 [Service]
 Type=oneshot
+RemainAfterExit=yes
 ExecStart=/usr/lib/omamobile-settings/charge-limit
 TimeoutStartSec=15

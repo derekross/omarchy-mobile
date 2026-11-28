@@ -106,7 +106,7 @@ if [[ -d $h ]]; then
     { echo "FAIL: udev: one rule, no ACTION filter, pulls in the apply unit" >&2; exit 1; }
   a=$h/vendor/systemd/system/omamobile-charge-limit-apply.service
   grep -qx 'ExecStart=/usr/lib/omamobile-settings/charge-limit' "$a" && grep -qx 'Type=oneshot' "$a" &&
-    grep -qx 'StartLimitIntervalSec=0' "$a" && ! grep -q '^\[Install\]' "$a" ||
+    grep -qx 'RemainAfterExit=yes' "$a" && ! grep -q '^\[Install\]' "$a" ||
     { echo "FAIL: apply unit: oneshot helper with no argument, not enabled" >&2; exit 1; }
   grep -qx 'supply=max77759-charger' "$h/charge-limit.conf" || { echo "FAIL: husky declares max77759-charger" >&2; exit 1; }
 fi
