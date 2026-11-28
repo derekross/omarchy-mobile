@@ -17,8 +17,9 @@
   still needs verified APB and external reset readiness and a working
   compressed display pipeline. PHY TX and DSI0 host reads stay disabled.
 - **Stock trace.** [Perfetto on A](#attended-stock-d1-perfetto-result)
-  could not find the two vendor display events. Take a fresh verified
-  nine-partition backup after that stock session before the next Linux trial.
+  captured live SurfaceFlinger frames while scrolling. The two vendor
+  events remain unavailable. Take a fresh verified nine-partition
+  backup after that stock session before the next Linux trial.
 
 See the [D1 recovery and trial record](NOTES.md#november-d1-recovery-and-first-light-checks)
 and the [kernel provenance and fixtures](bringup/README.md). Coordinate with
@@ -8085,9 +8086,17 @@ tracepoints. The producer reported both as unknown.
 The same trace enabled userspace `gfx` and SurfaceFlinger
 frame timeline. It contained no frames, and the subsequent
 power query showed the display session was dozing.
-The Android timeline can report presentation activity if
-active, but it is separate from the hardware completion
-and vendor modeset tracepoints.
+The 20-second rerun while the owner scrolled on awake stock A
+recorded 256 completed display-level SurfaceFlinger timeline
+rows with distinct display-frame tokens and 479 actual surface
+rows. The retained display rows span 6.839 seconds. The 8 MiB
+ring buffer wrapped, and Trace Processor reported four frame
+timeline parser errors and one unpaired end event. The counts
+describe the retained rows. Use the FrameTimeline data source
+alone for a cleaner frame capture if the userspace `gfx` track
+is unnecessary. SurfaceFlinger confirms live Android frame
+activity. Vendor modeset and hardware frame completion were
+unavailable in the separate ftrace check.
 
 After this stock Android session, take and verify a fresh
 guarded nine-partition NV backup before the next Linux
