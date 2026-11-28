@@ -338,11 +338,11 @@ if [[ $DEVICE == dipper ]]; then
 else
   [[ -f "$SRC" ]] || die "no such file: $1"
 fi
-# Absolute, because the checksum step runs from inside the staging dir
-OUT=$(realpath -m -- "$OUT")
-# Publishing replaces whole directories under OUT, so OUT=/ would replace this
-# machine's own; refuse before anything is written (WORK included)
-[[ $OUT != / ]] || die "-o resolves to /: publishing would replace this machine's own directories"
+# Absolute, because the checksum step runs from inside the staging dir;
+# publishing replaces whole directories under OUT, so OUT=/ (or a bind mount
+# of /) would replace this machine's own; refuse before anything is written (WORK included)
+source "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/lib/out-dir.sh" || die "can't load lib/out-dir.sh"
+resolve_out_dir OUT "$OUT" "-o resolves to /: publishing would replace this machine's own directories" || exit 1
 [[ -z $CAMERA_APEX || ( -d $(dirname -- "$CAMERA_APEX") && ! -d $CAMERA_APEX ) ]] ||
   die "-c needs a file name in an existing directory: $CAMERA_APEX"
 case $CAMERA_APEX in

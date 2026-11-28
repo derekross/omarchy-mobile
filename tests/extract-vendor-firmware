@@ -432,6 +432,63 @@ for root in / // /usr/.. "$t/link-to-root"; do
     pass "$name: refused before anything is written"
   fi
 done
+rm -rf "$t/work-root"
+if "$EVF" -w "$t/work-root" -o "" "$t/junk.img" > "$t/log" 2>&1; then
+  fail "-o '' (empty): refused"
+elif [[ $(sed -n '/^error: /p' "$t/log") != "error: can't resolve -o ''" || -e $t/work-root ]]; then
+  cat "$t/log"; fail "-o '' (empty): refused before anything is written"
+else
+  pass "-o '' (empty): refused before anything is written"
+fi
+nl_bind=$t/root-nl$'\n'
+mkdir -p "$t/root-bind" "$nl_bind"
+wrap=()
+bwrap_cmd=(bwrap --ro-bind / / --dev /dev --proc /proc --bind "$t" "$t" --ro-bind / "$t/root-bind" --ro-bind / "$nl_bind")
+if "${bwrap_cmd[@]}" bash -c '[[ $1 -ef / && $2 -ef / ]]' _ "$t/root-bind" "$nl_bind" 2>/dev/null; then
+  wrap=("${bwrap_cmd[@]}")
+elif unshare --user --map-root-user --mount \
+     bash -c 'mount --bind / "$1" && mount --bind / "$2" && [[ $1 -ef / && $2 -ef / ]]' _ "$t/root-bind" "$nl_bind" 2>/dev/null; then
+  wrap=(unshare --user --map-root-user --mount bash -c 'mount --bind / "$1" && mount --bind / "$2" && shift 2 && exec "$@"' _ "$t/root-bind" "$nl_bind")
+fi
+if ((${#wrap[@]})); then
+  for root in "$t/root-bind" "$nl_bind"; do
+    name="-o ${root#"$t/"}" name=${name//$'\n'/\\n}
+    rm -rf "$t/work-root"
+    if "${wrap[@]}" "$EVF" -w "$t/work-root" -o "$root" "$t/junk.img" > "$t/log" 2>&1; then
+      fail "$name (bind mount of /): refused"
+    elif ! grep -qF -- "-o resolves to /" "$t/log" || [[ -e $t/work-root ]]; then
+      cat "$t/log"; fail "$name (bind mount of /): refused before anything is written"
+    else
+      pass "$name (bind mount of /): refused before anything is written"
+    fi
+  done
+else
+  echo "ok - # skip: no user+mount namespace for bind-mount of / check"
+fi
+o=$t/new-nl$'\n'
+if run "$t/v1" "$t/erofs.img" -o "$o" && [[ -s $o/vendor-firmware.sha256 && ! -e $t/new-nl ]]; then
+  pass "-o new-nl\\n: accepted byte-for-byte"
+else
+  cat "$t/log"; fail "-o new-nl\\n: accepted byte-for-byte"
+fi
+if (cd "$t" && run "$t/v1" "$t/ext4.img" -o -x) && [[ -s $t/-x/vendor-firmware.sha256 ]]; then
+  pass "-o -x (dash-prefixed): accepted"
+else
+  cat "$t/log"; fail "-o -x (dash-prefixed): accepted"
+fi
+ln -s "$EVF" "$t/evf-link"
+rm -rf "$t/work-root"
+if "$t/evf-link" -w "$t/work-root" -o / "$t/junk.img" > "$t/log" 2>&1 ||
+   ! grep -qF -- "-o resolves to /" "$t/log" || [[ -e $t/work-root ]]; then
+  cat "$t/log"; fail "symlinked tool: -o / refused before anything is written"
+else
+  pass "symlinked tool: -o / refused before anything is written"
+fi
+if (EVF=$t/evf-link; run "$t/v1" "$t/ext4.img" -o "$t/sym-out") && [[ -s $t/sym-out/vendor-firmware.sha256 ]]; then
+  pass "symlinked tool: gets past the -o check"
+else
+  cat "$t/log"; fail "symlinked tool: gets past the -o check"
+fi
 
 # A move that fails while publishing (the registry's parent not writable)
 # puts back what was already replaced: OUT is left as it was

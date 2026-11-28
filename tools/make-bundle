@@ -130,7 +130,7 @@ if ((unsigned == 0)); then
 fi
 conf=device/$DEVICE/device.conf
 [[ -f $conf ]] || die "no $conf"
-provision_tools="phone-provision nv-backup phone-ssh phone-ssh-proxy extract-vendor-firmware extract-vendor-chroot extract-fingerprint-vendor extract-camera-data install-guided phone-smoke factory-index camera-requirements.txt"
+provision_tools="phone-provision nv-backup phone-ssh phone-ssh-proxy extract-vendor-firmware extract-vendor-chroot extract-fingerprint-vendor extract-camera-data install-guided phone-smoke factory-index camera-requirements.txt lib/out-dir.sh"
 for f in $provision_tools; do [[ -f tools/$f ]] || die "no tools/$f"; done
 [[ -f docs/INSTALL.md ]] || die "no docs/INSTALL.md"
 [[ -f tools/lib/bundle-tar.sh ]] || die "no tools/lib/bundle-tar.sh"
@@ -209,10 +209,10 @@ install -m644 docs/INSTALL.md "$dir/INSTALL.md"
 # so in the bundle it finds tools/phone-ssh and tools/extract-* beside it
 mkdir -p "$dir/tools"
 for f in $provision_tools; do
-  # A program is executable; a data file (camera-requirements.txt) is not
+  # A program is executable; a data file or sourced library is not
   mode=755
-  [[ $f != *.txt ]] || mode=644
-  install -m"$mode" "tools/$f" "$dir/tools/$f"
+  [[ $f != *.txt && $f != lib/* ]] || mode=644
+  install -Dm"$mode" "tools/$f" "$dir/tools/$f"
 done
 for p in $boot_images; do
   install -m644 "$KERNEL_OUT/images/$p.img" "$dir/images/$p.img"

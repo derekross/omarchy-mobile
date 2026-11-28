@@ -1826,7 +1826,7 @@ ptools=$(sed -n 's/^provision_tools="\(.*\)"$/\1/p' "$SRC/tools/make-bundle")
 for f in install-guided phone-smoke factory-index camera-requirements.txt; do
   [[ " $ptools " == *" $f "* ]] || fail "make-bundle ships tools/$f, which the guided install needs"
 done
-for f in $ptools; do cp "$SRC/tools/$f" "$M/tools/"; done
+for f in $ptools; do cp "$SRC/tools/$f" "$M/tools/$f"; done
 cp "$SRC/docs/INSTALL.md" "$M/docs/"
 descriptor > "$M/device/testdev/device.conf"
 index 2026-11-01 > "$M/device/testdev/factory-builds.json"
