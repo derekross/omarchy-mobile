@@ -8359,11 +8359,33 @@ IRQ-status evidence can further distinguish interrupt
 delivery from a poll that services pending hardware status.
 
 This route uses existing tracepoints and the existing
-Composer client. The saved artifacts qualify the trace
-format and call path, while stock producer access and
-emission remain untested. If either side is unavailable,
-the saved userspace trace still gives a fence timestamp
-without a matching kernel frame-start witness.
+Composer client.
+
+The 20-second scrolling preflight on stock A
+`CP4A.261105.040.D1` (production `user`, Perfetto v58.3)
+requested all five events explicitly alongside
+SurfaceFlinger FrameTimeline. The lean capture retained
+19.987 seconds, with 1,509 distinct display-frame tokens,
+no target-buffer overwrite or discard, and 96 FrameTimeline
+parser errors. Perfetto's setup packet reported:
+
+| Setup field | Events |
+| --- | --- |
+| `unknown_ftrace_events` | `dpu/tracing_mark_write`, `vs_drm/disp_frame_start`, `vs_drm/disp_frame_irqs` |
+| `failed_ftrace_events` | `dma_fence/dma_fence_init`, `dma_fence/dma_fence_signaled` |
+
+The trace contained zero `frame_tx` samples, CRTC
+event-delivery brackets, or DMA-fence signals. The
+stock producer also logged SELinux denials reading
+tracefs event formats during setup. Those audit lines
+give the file basename and inode without the event path,
+so they do not identify the cause for each event.
+[Perfetto setup stats](https://github.com/google/perfetto/blob/v58.3/protos/perfetto/trace/ftrace/ftrace_stats.proto#L111).
+The production stock A capture cannot correlate the
+hardware frame-start with the CRTC fence on this path.
+The saved userspace trace remains usable for Composer
+and FrameTimeline timing. No new resolution switch was
+performed.
 
 After this stock Android session, take and verify a fresh
 guarded nine-partition NV backup before the next Linux
