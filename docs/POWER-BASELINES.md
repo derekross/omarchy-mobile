@@ -1,0 +1,30 @@
+<!-- SPDX-License-Identifier: MIT -->
+# Power baselines
+
+One row per device and run, so the battery figures posted in the baseline issues can be compared without opening each one. The recipe (Parts A, B and C) is in [#867](https://github.com/derekross/omamobile/issues/867); the issue or comment in the last column has the full report.
+
+**Sorted by the longest full discharge, longest first.** Rows without a full discharge follow, sorted by the screen-off floor, lowest first.
+
+Read the conditions columns before comparing two rows. The modem's state, whether the phone was on battery, and whether the gauge is calibrated change the floor more than most kernel changes do. A run that is only partly comparable is in the table with a note, not left out.
+
+| Device | Longest full discharge | Screen-off floor | Screen on during the discharge | Modem | Battery or cable | Gauge | Kernel, packages | Stock Android (same phone) | Source |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Pixel 9a (tegu) | **10 h 05 min** (100 → 2 %, 2026-11-21) | mean 481 mA during the discharge (screen-off minutes); 464 mA mean the night before (min 385, 5 h); not the recipe's 12-sample median | 31 min | registered, awake (suspend blocked with the modem up) | battery only | POR defaults, not calibrated (percentages rough) | `7.3.0-rc6-omamobile-push1-g99b24b34811e` (C2 idle and energy model, [linux-omamobile#280](https://github.com/derekross/linux-omamobile/pull/280)); device-tegu 0.2.21, shell 0.2.133 | – | [#867](https://github.com/derekross/omamobile/issues/867#issuecomment-7061777893); the night's 464 mA: [linux-omamobile#280](https://github.com/derekross/linux-omamobile/pull/280) |
+| OnePlus 13 (dodge, SM8750) | – | median **79.5 mA** (79–82), 4 samples right after screen off, not the recipe's 12; s2idle (Wi-Fi off): **≈ 24 mA** (18–30) over a 10 min RTC sleep, from the charge counter. Note: 2S pack, so the mA are pack current (≈ 0.70 W awake, 0.21 W asleep) | – | no SIM, services off | battery only | qcom-battmgr, not calibrated; `current_now`/`charge_counter` are pack values, `voltage_now` per cell | `7.3.0-rc6-omamobile-s2idle1-geb671ce2555a` (#4; mrlund/linux-omarchy-mobile `dodge/s2idle1-portd3-mc0floor` 0442706534ce: PCIe root port D3 + MC0 sleep floor), `clk_ignore_unused pd_ignore_unused`; Wi-Fi power save off; device-dodge 20261016-1, shell 0.2.132, omarchy 4.5.0-3 | – | [#867](https://github.com/derekross/omamobile/issues/867#issuecomment-7220079321) |
+| OnePlus 13 (dodge, SM8750) | – | median **134 mA** (132–146), about 0.5 W | – | not stated | battery only | qcom-battmgr, not calibrated | `7.3.0-rc6-omamobile-push1-g6cc4b65df980` (local build), `clk_ignore_unused pd_ignore_unused`; shell 0.2.132, omarchy 4.5.0-3. Note: superseded by the 79.5 mA run above; its 0.5 W used one cell's voltage (2S pack), ≈ 1 W | – | [#869](https://github.com/derekross/omamobile/issues/869) |
+| OnePlus 6 (enchilada, SDM845) | – | median **148 mA** (147–160) | – | none (no modem, no Wi-Fi) | battery only | bq27411, not calibrated | `7.1.0-rc1-sdm845`, a rescue system on slot A: no compositor or shell, not an Omamobile image. Note: a kernel floor, not a phone in use | – | [#867](https://github.com/derekross/omamobile/issues/867#issuecomment-7119101826) |
+| Motorola razr ultra 2025 (leap, SM8750) | – | median **266 mA** (255–320), run 3 of 3; 656 mA before the sync_state fixes | – | not stated | battery only | qcom-battmgr, not calibrated | `7.3.0-rc6-omamobile-push1-g8b5a8faba1b0` (local port, RAM-booted), no ignore flags, crypto and dispcc disabled; device-leap 0.1.8. Note: no panel driver yet, so the panel stayed powered | – | [#873](https://github.com/derekross/omamobile/issues/873) |
+| Pixel 7 (panther) | – | median **299 mA** (one spike of 451) | – | not stated | battery only | not stated | `7.3.0-rc6-omamobile` (`g7f4bb936f9b1`) with the MIF devfreq of [linux-omamobile#279](https://github.com/derekross/linux-omamobile/pull/279) out of tree, schedutil on all clusters; suspend inhibited | – | [#867](https://github.com/derekross/omamobile/issues/867#issuecomment-7108449445) |
+| Pixel 7 Pro (cheetah) | – | median **486 mA** (474–515), about 1.9 W | – | up | battery only | max17042, model loaded | `kernel-2026.11.15` (`da171eae4cb7`), release install; device-cheetah 0.1.60, modem 0.1.26, shell 0.2.132, omarchy 4.5.0-3; Wi-Fi power save off | – | [#943](https://github.com/derekross/omamobile/issues/943#issuecomment-7050519638) |
+| Pixel 8 Pro (husky) | – | median **511.7 mA** (477–639), about 2.2 W | – | not stated | battery only | max170xx, no model, not calibrated | `7.3.0-rc6-omamobile-push1-g82f31d3a7a35`; device-husky 0.1.13, shell 0.2.108, omarchy 4.0.6; Wi-Fi power save off | – | [#878](https://github.com/derekross/omamobile/issues/878) |
+| Pixel 7 Pro (cheetah) | – | median **619.7 mA** (593–746), about 2.6 W | – | off (the unclean-stop guard held it) | battery only | max17042, model load failed, not calibrated | `7.3.0-rc6-omamobile-push1-g4cdfc1aa4b6b` (three releases behind); device-cheetah 0.1.60, shell 0.2.132. Note: superseded by the 486 mA run above | – | [#943](https://github.com/derekross/omamobile/issues/943) |
+
+## Adding a row
+
+Whoever posts a baseline or a full discharge adds their device's row here, or updates it, in a pull request of its own or with the change it measures:
+
+- Fill every conditions column. Write "not stated" rather than leaving a cell empty, and "–" where there's nothing to give (no full discharge yet, no stock Android figure).
+- The screen-off floor is the recipe's Part B median of 12 samples with the range. A figure taken any other way says how (a mean, a night's log).
+- Keep the order: full discharges first, longest first, then the floors, lowest first.
+- A newer run of the same device under better conditions goes above the old one's place in the order like any other row; mark the old row as superseded rather than deleting it.
+- Link the issue or the comment with the full report.

@@ -10,8 +10,12 @@
 # passes on debugfs's own last line, the reason; a failed copy where
 # debugfs said nothing but its banner gets no reason. With mkfs.ext4 and
 # debugfs on the host, the same on real ext4 images: one without
-# build.prop, and one cut short. XVC=path and XFP=path run other copies of
-# the tools (a negative control).
+# build.prop, and one cut short. Also checked: -o resolving to / (including a
+# bind mount of / or one whose name ends in a newline when the host can create
+# a user+mount namespace) or an empty -o in extract-fingerprint-vendor is
+# refused before reading SOURCE or creating -w, while nested, scratch-local ..,
+# newline-ending, dash-prefixed and default output paths proceed.
+# XVC=path and XFP=path run other copies of the tools (a negative control).
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 XVC=$(realpath -- "${XVC:-tools/extract-vendor-chroot}")
@@ -61,29 +65,75 @@ with zipfile.ZipFile(sys.argv[1], "w") as z:
 }
 zipimg "$t/image-cheetah-fictional.zip" "$t/ext4.img" "$t/ext4.img"
 
-# refused NAME ZIP LINE: both tools refuse ZIP, and their error line is LINE
-# Compare the error bytes, including any trailing blanks from debugfs.
-refused() {
-  local tool name args
-  for tool in "$XVC" "$XFP"; do
-    name=${tool##*/}
-    args=()
-    [[ $tool != "$XVC" ]] || args=(-p gnss)
-    rm -rf "$t/work" "$t/out"
-    if PATH=$t/bin:$PATH "$tool" "${args[@]}" -w "$t/work" -o "$t/out" "$2" > "$t/log" 2>&1; then
-      fail "$name: $1: refused"
-    elif [[ $(sed -n '/^error: /p' "$t/log") != "$3" ]]; then
-      cat "$t/log"; fail "$name: $1: says $3"
-    else
-      pass "$name: $1: refused, says $3"
-    fi
-  done
+# check_one TOOL NAME ZIP LINE [OUT [DIR]]: TOOL exits non-zero and prints
+# LINE as its error (comparing bytes, including trailing blanks from debugfs
+# and embedded newlines). VERDICT overrides the pass suffix; EXPECT_NO_WORK=1
+# also checks -w was never created; NO_OUT=1 omits -o; WRAP prefixes the run.
+WRAP=()
+check_one() {
+  local tool=$1 label=${2//$'\n'/\\n} name=${1##*/} args=() dir=${6:-.} disp=${4//$'\n'/\\n}
+  [[ $tool != "$XVC" ]] || args=(-p gnss)
+  [[ -n ${NO_OUT:-} ]] || args+=(-o "${5-$t/out}")
+  rm -rf "$t/work" "$t/out"
+  if (cd "$dir" && PATH=$t/bin:$PATH "${WRAP[@]}" "$tool" "${args[@]}" -w "$t/work" "$3") > "$t/log" 2>&1; then
+    fail "$name: $label: refused"
+  elif [[ $(sed -n '/^error: /,$p' "$t/log") != "$4" ]]; then
+    cat "$t/log"; fail "$name: $label: says $disp"
+  elif [[ -n ${EXPECT_NO_WORK:-} && -e $t/work ]]; then
+    cat "$t/log"; fail "$name: $label: created work dir before refusing"
+  else
+    pass "$name: $label: ${VERDICT:-refused, says $disp}"
+  fi
 }
+refused() { local tool; for tool in "$XVC" "$XFP"; do check_one "$tool" "$@"; done; }
 msg="error: build.prop can't be read from vendor.img"
 PATH=$t/fake:$PATH refused "a build.prop whose copy fails" "$t/image-cheetah-fictional.zip" \
   "$msg: dump: No space left on device while writing file"
 DFS_REASON="" PATH=$t/fake:$PATH refused "a failed copy with only debugfs's banner" \
   "$t/image-cheetah-fictional.zip" "$msg"
+
+# -o resolving to / (or a bind mount of /) is refused before reading SOURCE
+# or creating -w; nested, scratch-local .., newline-ending, dash-prefixed and
+# default output paths proceed.
+nl_bind=$t/root-nl$'\n'
+mkdir -p "$t/a/b" "$t/root-bind" "$nl_bind"
+rel=$(realpath --relative-to="$t/a/b" /)
+ln -s / "$t/link-to-root"
+zip=$t/image-cheetah-fictional.zip
+refused_root() { # LABEL OUT [DIR [ZIP]]
+  EXPECT_NO_WORK=1 PATH=$t/fake:$PATH refused "$1" "${4:-$zip}" \
+    "error: -o '$2' resolves to /: would remove /root" "$2" "${3:-.}"
+}
+for out in / /// /tmp/.. /no-such/.. "$t/link-to-root" "$t/link-to-root/no-such/../.."; do
+  refused_root "-o ${out#"$t/"}" "$out"
+done
+refused_root "-o $rel (from a/b)" "$rel" "$t/a/b"
+refused_root "-o . (from /)" "." "/"
+refused_root "-o / with missing source" "/" "." "$t/missing.zip"
+EXPECT_NO_WORK=1 PATH=$t/fake:$PATH check_one "$XFP" "-o '' (empty)" \
+  "$zip" "error: can't resolve -o ''" ""
+bwrap_cmd=(bwrap --ro-bind / / --dev /dev --proc /proc --bind "$t" "$t" --ro-bind / "$t/root-bind" --ro-bind / "$nl_bind")
+if "${bwrap_cmd[@]}" bash -c '[[ $1 -ef / && $2 -ef / ]]' _ "$t/root-bind" "$nl_bind" 2>/dev/null; then
+  WRAP=("${bwrap_cmd[@]}")
+elif unshare --user --map-root-user --mount \
+     bash -c 'mount --bind / "$1" && mount --bind / "$2" && [[ $1 -ef / && $2 -ef / ]]' _ "$t/root-bind" "$nl_bind" 2>/dev/null; then
+  WRAP=(unshare --user --map-root-user --mount bash -c 'mount --bind / "$1" && mount --bind / "$2" && shift 2 && exec "$@"' _ "$t/root-bind" "$nl_bind")
+fi
+if ((${#WRAP[@]})); then
+  refused_root "-o root-bind (bind mount of /)" "$t/root-bind"
+  refused_root "-o root-nl\\n (bind mount of /)" "$nl_bind"
+  WRAP=()
+else
+  echo "ok - # skip: no user+mount namespace for bind-mount of / check"
+fi
+VERDICT="gets past the -o check"
+dfs_err="$msg: dump: No space left on device while writing file"
+for out in "$t/new/dir" "$t/x/../out" "$t/new-nl"$'\n' $'/\n'; do
+  PATH=$t/fake:$PATH refused "-o ${out#"$t/"}" "$zip" "$dfs_err" "$out"
+done
+PATH=$t/fake:$PATH refused "-o -x (from scratch)" "$zip" "$dfs_err" "-x" "$t"
+NO_OUT=1 PATH=$t/fake:$PATH check_one "$XVC" "default -o (from scratch)" "$zip" "$dfs_err" "" "$t"
+VERDICT=""
 
 # --- Real ext4 images (made-up files), when the host can make them ------------
 mkdir -p "$t/v" "$t/s/system"

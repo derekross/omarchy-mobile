@@ -51,29 +51,34 @@ class PrivateBus:
         self.path = os.path.join(directory, 'bus')
         config = os.path.join(directory, 'bus.conf')
         with open(config, 'w') as f:
-            f.write(BUS_CONFIG.format(path=self.path))
+            f.write(BUS_CONFIG.format(path='bus'))
         self.proc = subprocess.Popen(['dbus-daemon', '--nofork', '--config-file=' + config],
-                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        self.address = 'unix:path=' + self.path
+                                     cwd=directory, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.address = 'unix:path=bus'
         deadline = time.monotonic() + 10
         try:
             while not os.path.exists(self.path):
                 if time.monotonic() > deadline or self.proc.poll() is not None:
                     raise RuntimeError('private dbus-daemon did not start')
                 time.sleep(.02)
-            while True:
-                try:
-                    self.connection = Gio.DBusConnection.new_for_address_sync(
-                        self.address, Gio.DBusConnectionFlags.AUTHENTICATION_CLIENT |
-                        Gio.DBusConnectionFlags.MESSAGE_BUS_CONNECTION, None, None)
-                    break
-                except GLib.Error as error:
-                    # bind() creates the socket before listen() accepts clients.
-                    if not error.matches(Gio.io_error_quark(), Gio.IOErrorEnum.CONNECTION_REFUSED):
-                        raise
-                    if time.monotonic() > deadline or self.proc.poll() is not None:
-                        raise RuntimeError('private dbus-daemon did not start') from error
-                    time.sleep(.02)
+            orig_cwd = os.getcwd()
+            os.chdir(directory)
+            try:
+                while True:
+                    try:
+                        self.connection = Gio.DBusConnection.new_for_address_sync(
+                            self.address, Gio.DBusConnectionFlags.AUTHENTICATION_CLIENT |
+                            Gio.DBusConnectionFlags.MESSAGE_BUS_CONNECTION, None, None)
+                        break
+                    except GLib.Error as error:
+                        # bind() creates the socket before listen() accepts clients.
+                        if not error.matches(Gio.io_error_quark(), Gio.IOErrorEnum.CONNECTION_REFUSED):
+                            raise
+                        if time.monotonic() > deadline or self.proc.poll() is not None:
+                            raise RuntimeError('private dbus-daemon did not start') from error
+                        time.sleep(.02)
+            finally:
+                os.chdir(orig_cwd)
         except BaseException:
             if self.proc.poll() is None:
                 self.proc.terminate()
@@ -216,7 +221,7 @@ class Mmd:
             self.proc = subprocess.Popen(
                 [sys.executable, BIN, '--socket', socket_path, *polkit,
                  '--sit-config', os.path.join(directory, 'sit.conf'), *[a for a in args if a != '--polkit']],
-                env=env, stdout=log, stderr=subprocess.STDOUT)
+                cwd=directory, env=env, stdout=log, stderr=subprocess.STDOUT)
 
     def output(self):
         with open(self.log) as f:

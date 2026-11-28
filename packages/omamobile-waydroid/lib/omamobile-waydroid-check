@@ -5,6 +5,8 @@
 # 1 if anything required is missing. Touches nothing.
 #   omamobile-waydroid-check            the running kernel (/proc/config.gz)
 #   CONFIG_FILE=path omamobile-waydroid-check   a .config instead (tests, laptop)
+#   SYSFS_ROOT=dir                      a fake /sys: the render-node check then
+#                                       runs with CONFIG_FILE too (test/all)
 set -uo pipefail
 
 cfg=${CONFIG_FILE:-/proc/config.gz}
@@ -64,10 +66,27 @@ done
 if [[ -z ${CONFIG_FILE:-} ]]; then
   if grep -qw binder /proc/filesystems; then echo "ok    binderfs in /proc/filesystems"; else echo "MISS  binderfs not registered"; missing=1; fi
   if [[ -e /proc/pressure/memory ]]; then echo "ok    /proc/pressure/memory"; else echo "MISS  /proc/pressure/memory (psi=0 on the command line?)"; missing=1; fi
-  render= render_rdev=
-  for r in /sys/class/drm/renderD*; do
+fi
+
+# The render node: on the running kernel, or under a test SYSFS_ROOT
+sysfs=${SYSFS_ROOT:-/sys}
+if [[ -z ${CONFIG_FILE:-} || -n ${SYSFS_ROOT:-} ]]; then
+  # The GPUs whose render node Android's Mesa can drive: panthor
+  # (Mali-G710, the Pixels; needs "omamobile-waydroid mesa"), found on any
+  # render node as before; and, only on a phone with no panthor node, msm
+  # (Adreno, the OnePlus 7T Pro; freedreno as the vendor image ships it).
+  # Waydroid binds the first render node, and msm's sits on the display
+  # controller (msm_dpu), so for msm an Adreno must also be bound, or the
+  # node has no GPU behind it.
+  render= render_rdev= rdrv= first= first_rdev= first_drv=
+  for r in "$sysfs"/class/drm/renderD*; do
     [[ -e $r/device/driver ]] || continue
-    if [[ $(basename "$(readlink -f "$r/device/driver")") == panthor ]]; then
+    rdrv=$(basename "$(readlink -f "$r/device/driver")")
+    if [[ -z $first ]]; then
+      first=/dev/dri/$(basename "$r") first_drv=$rdrv
+      read -r first_rdev < "$r/dev" || first_rdev=
+    fi
+    if [[ $rdrv == panthor ]]; then
       render=/dev/dri/$(basename "$r")
       # Its major:minor, as sysfs gives it, to check against lxc-omamobile.conf below
       read -r render_rdev < "$r/dev" || render_rdev=
@@ -75,9 +94,19 @@ if [[ -z ${CONFIG_FILE:-} ]]; then
   done
   if [[ -n $render ]]; then
     echo "ok    $render is panthor"
+  elif [[ $first_drv == msm || $first_drv == msm_dpu ]]; then
+    render=$first render_rdev=$first_rdev
+    if compgen -G "$sysfs/bus/platform/drivers/adreno/*.gpu" >/dev/null; then
+      echo "ok    $render is $first_drv with an Adreno bound (freedreno)"
+    else
+      echo "MISS  $render is $first_drv but no Adreno GPU is bound"; missing=1
+    fi
   else
     echo "MISS  no panthor render node (GPU-PLAN.md)"; missing=1
   fi
+fi
+
+if [[ -z ${CONFIG_FILE:-} ]]; then
   if mountpoint -q /sys/fs/cgroup && [[ $(stat -fc %T /sys/fs/cgroup) == cgroup2fs ]]; then
     echo "ok    cgroup2 on /sys/fs/cgroup"
   else
@@ -100,7 +129,7 @@ if [[ -z ${CONFIG_FILE:-} || -n ${LXC_CONF:-} ]]; then
       echo "MISS  /dev/binderfs/$n is not allowed in $lxc_conf (Android would not boot)"; missing=1
     fi
   done
-  # The render node's numbers are fixed in the file: they must be the panthor node's
+  # The render node's numbers are fixed in the file: they must be the GPU node's
   render_rdev=${RENDER_RDEV:-${render_rdev:-}}
   if [[ -n $render_rdev ]]; then
     if grep -qx "lxc.cgroup2.devices.allow = c $render_rdev rwm" "$lxc_conf" 2>/dev/null; then

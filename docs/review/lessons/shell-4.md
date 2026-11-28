@@ -3,6 +3,32 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-572. A lock added to an input handler is checked for what a holder that
+  hangs does to every later press.** #508's `flock` without `-w` made a stuck
+  short-press action freeze the power key for the session, where main would
+  have let the next press through. *Check:* for any new `flock`, mutex or
+  queue in a key, touch or wake path, run the PR's harness with the slowest
+  helper made to sleep past the press interval, measure when the next press
+  acts on main and on the head, and ask for a bound. Extends L-161 (fail
+  towards the user being able to act). *From:* #508, round 45, 2026-11-08.
+- **L-573. Deferring a surface's "on open" reads is checked against what the
+  surface shows first and what refreshes it while it's closed.** #518 queued
+  the shade's notification read ninth, behind the reveal, and the shade's
+  periodic read runs only while it's open (`running: root.opened`, first tick
+  at 3 s), so every open showed the previous open's list for about 0.65 s.
+  *Check:* for each read moved off the open path, `grep -n` its function for
+  the timers and watchers that call it, note their `running:` condition, and
+  compute when the first fresh value appears after opening; ask that what the
+  first screen shows goes first. Extends L-235. *From:* #518, round 45,
+  2026-11-08.
+- **L-574. (Provisional, not yet checked on a phone.) A network-sharing
+  feature is checked against the firewall the image turns on.** #525 makes the
+  hotspot's dnsmasq start, but firstboot's ufw denies incoming and forwarded
+  traffic, so a client's DHCP and DNS may never reach it, and the PR's test
+  (the server side came up) can't show that. *Check:* `git grep -n 'ufw '
+  packages/omamobile-firstboot` for the defaults, and ask for one client test
+  (an address, then a ping out) before a "hotspot works" claim. Confirm or
+  drop once a client test has run. *From:* #525, round 45, 2026-11-08.
 - **L-575. A Mesa `pkgrel` bump moves `_omamobile` with it (1.3 with
   omamobile3, 1.4 with omamobile4).** The marker is what shows in `GL_VERSION`
   and the libgallium name, so a bump that leaves it reports the old build on

@@ -437,6 +437,7 @@ mkpkg() {  # mkpkg DIR NAME VER-REL [FILE [ARCH]]: a package file (NAME-VER-REL-
   if command -v bsdtar >/dev/null; then bsdtar --zstd -cf "$file" -C "$t/pkginfo" .PKGINFO
   else tar --zstd -cf "$file" -C "$t/pkginfo" .PKGINFO; fi
 }
+mksigned() { mkpkg "$@"; sign signer "$1/${4:-$2-$3-any.pkg.tar.zst}"; }
 mkdir -p "$t/bin-import"
 printf '#!/bin/bash\nwhile [[ $1 == -* ]]; do [[ $1 == --key ]] && shift; shift; done\ntouch "$1"; ln -sf "$1" omamobile.db\n' > "$t/bin-import/repo-add"
 chmod +x "$t/bin-import/repo-add"
@@ -444,10 +445,10 @@ r=$R/out/panther/repo/aarch64
 # Two folders, the fault in the second: every folder is checked before the
 # first is copied, so the first folder's packages stay out too, and the
 # folder the checks copy into is gone
-mkpkg "$t/first" foo 0.2.10-1 && mkpkg "$t/first" bar 1-1
-mkpkg "$t/pair" baz 1.9-1 && mkpkg "$t/pair" baz 1.10-1
-mkpkg "$t/arch" baz 1-1 baz-1-1-x86_64.pkg.tar.zst x86_64
-mkpkg "$t/nameless" "" 1-1 nameless-1-1-any.pkg.tar.zst
+mksigned "$t/first" foo 0.2.10-1 && mksigned "$t/first" bar 1-1
+mksigned "$t/pair" baz 1.9-1 && mksigned "$t/pair" baz 1.10-1
+mksigned "$t/arch" baz 1-1 baz-1-1-x86_64.pkg.tar.zst x86_64
+mksigned "$t/nameless" "" 1-1 nameless-1-1-any.pkg.tar.zst
 # A package cut short, as an interrupted copy leaves it: a .PKGINFO longer
 # than one tar block, cut after that block, so the reader prints pkgname and
 # arch and then fails (a plain tar, which both readers take: the suite may
@@ -456,6 +457,7 @@ mkpkg "$t/nameless" "" 1-1 nameless-1-1-any.pkg.tar.zst
 if command -v bsdtar >/dev/null; then bsdtar --format=ustar -cf "$t/cut.tar" -C "$t/pkginfo" .PKGINFO
 else tar --format=ustar -cf "$t/cut.tar" -C "$t/pkginfo" .PKGINFO; fi
 mkdir -p "$t/cut" && head -c 1024 "$t/cut.tar" > "$t/cut/baz-1-1-any.pkg.tar.zst"
+sign signer "$t/cut/baz-1-1-any.pkg.tar.zst"
 for bad in pair arch nameless cut; do
   case $bad in
     pair) what="two files of one package" want="$t/pair has two files of baz" ;;
@@ -469,26 +471,29 @@ for bad in pair arch nameless cut; do
   [[ $(ls -A "$R/out/panther/repo") == aarch64 ]] || { ls -A "$R/out/panther/repo"; fail "leaves no folder of its own beside the repository ($what in the second)"; }
 done
 pass "build-packages --import checks every folder before the first copy: two files of one package, an x86_64 package, one with no pkgname, or one cut short, in the second adds nothing"
-mkpkg "$t/same" foo 0.2.9-1 renamed-0.2.9-1-any.pkg.tar.zst && mkpkg "$t/same" foo 0.2.10-1 && mkpkg "$t/same" bar 1-1
+mksigned "$t/same" foo 0.2.9-1 renamed-0.2.9-1-any.pkg.tar.zst && mksigned "$t/same" foo 0.2.10-1 && mksigned "$t/same" bar 1-1
 if run env PATH="$t/bin-import:$PATH" tools/build-packages --local panther --import "$t/same"; then cat "$t/log"; fail "--import refuses a folder with two files of one package"; fi
 line=$(grep -F 'two files of foo' "$t/log") || { cat "$t/log"; fail "says the folder has two files of foo"; }
 [[ $line == *renamed-0.2.9-1-any.pkg.tar.zst* && $line == *foo-0.2.10-1-any.pkg.tar.zst* ]] || { cat "$t/log"; fail "names both files of foo"; }
 [[ -z $(ls -A "$r" 2>/dev/null) ]] || { ls -A "$r"; fail "copies nothing from the folder and writes no index"; }
 pass "build-packages --import stops on two files of one package in a folder, names both, and adds nothing"
-mkpkg "$t/different" foo 0.2.10-1 && mkpkg "$t/different" foo-utils 1-1 && mkpkg "$t/different" bar 1-1
+mksigned "$t/different" foo 0.2.10-1 && mksigned "$t/different" foo-utils 1-1 && mksigned "$t/different" bar 1-1
 run env PATH="$t/bin-import:$PATH" tools/build-packages --local panther --import "$t/different" \
   || { cat "$t/log"; fail "--import takes a folder of different packages"; }
 gpgconf --homedir "$R/keys/panther/gnupg" --kill gpg-agent 2>/dev/null || true
 [[ -f $r/foo-0.2.10-1-any.pkg.tar.zst && -f $r/foo-utils-1-1-any.pkg.tar.zst && -f $r/bar-1-1-any.pkg.tar.zst && -e $r/omamobile.db ]] \
   || { ls -A "$r"; cat "$t/log"; fail "all three packages and the index are in the repository"; }
-pass "build-packages --import still takes a folder of different packages, foo and foo-utils among them"
+for f in foo-0.2.10-1-any.pkg.tar.zst foo-utils-1-1-any.pkg.tar.zst bar-1-1-any.pkg.tar.zst; do
+  cmp -s "$t/different/$f.sig" "$r/$f.sig" || fail "keeps $f.sig byte for byte in the repository"
+done
+pass "build-packages --import still takes a folder of different packages, foo and foo-utils among them, keeping each .sig byte for byte"
 # Two folders that both import, each with a package found in no other
 # folder, so both must be copied. A cp on PATH, at the first copy into the
 # repository (after the checks), moves an x86_64 package into the second
 # folder and writes an x86_64 archive over the second folder's grault, in
 # place: neither reaches the repository, because what goes in is the copy
 # that was checked
-mkpkg "$t/first" corge 1-1 && mkpkg "$t/different" grault 1-1
+mksigned "$t/first" corge 1-1 && mksigned "$t/different" grault 1-1
 late=qux-1-1-x86_64.pkg.tar.zst && mkpkg "$t/late" qux 1-1 "$late" x86_64 && mkdir -p "$t/bin-late"
 mkpkg "$t/late" zed 1-1 zed.pkg.tar.zst x86_64
 printf '#!/bin/bash\ncommand -p cp "$@" || exit\n[[ ${!#} == */repo/aarch64/* && -e %q ]] || exit 0\nmv %q %q\ncommand -p cp %q %q\n' \
@@ -504,3 +509,83 @@ gpgconf --homedir "$R/keys/panther/gnupg" --kill gpg-agent 2>/dev/null || true
   || { cat "$t/log"; fail "copies the grault it checked, not the x86_64 archive written over it after the checks"; }
 [[ $(ls -A "$R/out/panther/repo") == aarch64 ]] || { ls -A "$R/out/panther/repo"; fail "leaves no folder of its own beside the repository after an import"; }
 pass "build-packages --import copies every folder, and only what it checked: not a file that came into a folder, or one put over a checked file, after the checks"
+
+# Under --local, every imported package must carry a .sig that verifies
+# against the staged package bytes with a trusted, unrevoked Omamobile key
+# (the repository already holds the earlier good import above, and every
+# refusal below must leave it byte for byte unchanged with no staging folder).
+was=$(state "$r")
+refuse_import() {  # refuse_import WHAT WANT PATH_VAL ARGS...
+  local what=$1 want=$2 path=$3; shift 3
+  if run env PATH="$path" tools/build-packages --local panther "$@"; then cat "$t/log"; fail "--local --import refuses $what"; fi
+  grep -qF "$want" "$t/log" || { cat "$t/log"; fail "says why $what is refused"; }
+  [[ $(state "$r") == "$was" ]] || { state "$r"; fail "leaves the repository unchanged after refusing $what"; }
+  [[ $(ls -A "$R/out/panther/repo") == aarch64 ]] || { ls -A "$R/out/panther/repo"; fail "leaves no staging folder after refusing $what"; }
+}
+mkpkg "$t/sig-missing" nosig 1-1
+mkpkg "$t/sig-foreign" foreign 1-1 && sign other "$t/sig-foreign/foreign-1-1-any.pkg.tar.zst"
+mksigned "$t/sig-mismatch" mismatch 1-1 && printf 'changed' >> "$t/sig-mismatch/mismatch-1-1-any.pkg.tar.zst"
+mkpkg "$t/sig-garbage" garbage 1-1 && printf 'not a pgp signature\n' > "$t/sig-garbage/garbage-1-1-any.pkg.tar.zst.sig"
+mksigned "$t/sig-good" goodone 1-1
+for bad in missing foreign mismatch garbage; do
+  case $bad in
+    missing) what="a package with no .sig" want="$t/sig-missing/nosig-1-1-any.pkg.tar.zst has no .sig" ;;
+    foreign) what="a .sig from an untrusted key" want="$t/sig-foreign/foreign-1-1-any.pkg.tar.zst is not signed by a trusted, unrevoked Omamobile key" ;;
+    mismatch) what="a .sig that does not match the package bytes" want="$t/sig-mismatch/mismatch-1-1-any.pkg.tar.zst is not signed by a trusted, unrevoked Omamobile key" ;;
+    garbage) what="a garbage .sig" want="$t/sig-garbage/garbage-1-1-any.pkg.tar.zst is not signed by a trusted, unrevoked Omamobile key" ;;
+  esac
+  refuse_import "$what" "$want" "$t/bin-import:$PATH" --import "$t/sig-$bad"
+done
+# A key present in omamobile.gpg (so gpgv returns VALIDSIG) but not listed in
+# omamobile-trusted must still be refused.
+cp "$kr/omamobile.gpg" "$t/omamobile.gpg.orig"
+GNUPGHOME=$t/other gpg --batch --armor --export >> "$kr/omamobile.gpg"
+refuse_import "a key in omamobile.gpg not in omamobile-trusted" \
+  "$t/sig-foreign/foreign-1-1-any.pkg.tar.zst is not signed by a trusted, unrevoked Omamobile key" \
+  "$t/bin-import:$PATH" --import "$t/sig-foreign"
+mv "$t/omamobile.gpg.orig" "$kr/omamobile.gpg"
+# A key trusted in omamobile-trusted but listed in omamobile-revoked is refused,
+# and a malformed omamobile-revoked stops the run before copying anything.
+echo "$signer" > "$kr/omamobile-revoked"
+refuse_import "a revoked key" \
+  "$t/sig-good/goodone-1-1-any.pkg.tar.zst is not signed by a trusted, unrevoked Omamobile key" \
+  "$t/bin-import:$PATH" --import "$t/sig-good"
+echo "$signer:4:" > "$kr/omamobile-revoked"
+refuse_import "a malformed omamobile-revoked" \
+  "omamobile-revoked is malformed at line 1" \
+  "$t/bin-import:$PATH" --import "$t/sig-good"
+: > "$kr/omamobile-revoked"
+# A bad .sig in the second of two folders keeps the first folder's good
+# package out of the repository as well.
+refuse_import "a bad .sig in the second folder" \
+  "$t/sig-foreign/foreign-1-1-any.pkg.tar.zst is not signed by a trusted, unrevoked Omamobile key" \
+  "$t/bin-import:$PATH" --import "$t/sig-good" --import "$t/sig-foreign"
+# Missing gpgv is refused before anything is copied (using a clean PATH with
+# no host fallback so host gpgv is never reached).
+mkdir -p "$t/bin-nogpgv"
+for cmd in bash dirname mkdir rm cat bsdtar tar zstd; do
+  p=$(command -v "$cmd" 2>/dev/null) || continue
+  ln -s "$p" "$t/bin-nogpgv/$cmd"
+done
+refuse_import "missing gpgv" \
+  "verifying --local --import signatures needs gpgv" \
+  "$t/bin-nogpgv" --import "$t/sig-good"
+pass "build-packages --local --import verifies every staged .sig against trusted, unrevoked Omamobile keys, stops on malformed omamobile-revoked or missing gpgv, and leaves the repository unchanged on refusal"
+
+# Verification must read the staged .sig copy, not DIR's .sig: a cp on PATH
+# overwrites DIR's .sig with garbage right after it is copied into staging.
+# The import still succeeds and the repository keeps the original good .sig.
+mksigned "$t/sig-stage" staged 1-1 && cp "$t/sig-stage/staged-1-1-any.pkg.tar.zst.sig" "$t/staged-good.sig"
+mkdir -p "$t/bin-stage-sig"
+printf '#!/bin/bash\ncommand -p cp "$@" || exit\n[[ ${!#} == */import.*/*.sig ]] || exit 0\necho garbage > %q\n' \
+  "$t/sig-stage/staged-1-1-any.pkg.tar.zst.sig" > "$t/bin-stage-sig/cp" && chmod +x "$t/bin-stage-sig/cp"
+run env PATH="$t/bin-stage-sig:$t/bin-import:$PATH" tools/build-packages --local panther --import "$t/sig-stage" \
+  || { cat "$t/log"; fail "--local --import verifies the staged .sig, not DIR's"; }
+gpgconf --homedir "$R/keys/panther/gnupg" --kill gpg-agent 2>/dev/null || true
+! cmp -s "$t/sig-stage/staged-1-1-any.pkg.tar.zst.sig" "$t/staged-good.sig" \
+  || fail "the cp on PATH overwrote DIR's .sig with garbage after staging"
+cmp -s "$r/staged-1-1-any.pkg.tar.zst.sig" "$t/staged-good.sig" \
+  || fail "keeps the original good .sig byte for byte in the repository"
+[[ $(ls -A "$R/out/panther/repo") == aarch64 ]] \
+  || { ls -A "$R/out/panther/repo"; fail "leaves no staging folder after staged-.sig import"; }
+pass "build-packages --local --import verifies the staged .sig copy rather than DIR's, keeping the staged .sig bytes in the repository"

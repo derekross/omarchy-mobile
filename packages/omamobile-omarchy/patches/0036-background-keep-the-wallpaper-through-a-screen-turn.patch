@@ -1,0 +1,93 @@
+# Background: keep the wallpaper on screen through a turn of the screen. Since
+# Omarchy 4.5 the wallpaper is decoded at the screen's size, and a phone that
+# turns showed no wallpaper for about a second after each turn: a black screen
+# behind the clock. Two things emptied it. The background's window resizes
+# through a moment of zero width or height, which set the decode size to 0
+# and emptied the image's source, so the next decode (about 0.7 s for a
+# 1440x3120 WebP on a Pixel 7 Pro) ran on an empty layer. And the screen
+# reports its x and y as changed on a turn with the origin still at 0,0, so
+# ScreenMoveRemap unmapped the background for a remap meant for a monitor
+# that moved. BackgroundMedia now holds the last full decode size for its
+# path and keeps the last frame while a new size decodes
+# (retainWhileLoading), and ScreenMoveRemap remaps only when the origin
+# really moved. Candidate for upstream Omarchy.
+#
+# Against Omarchy 4.5.0-3.
+
+diff --git i/shell/Ui/BackgroundMedia.qml w/shell/Ui/BackgroundMedia.qml
+--- i/shell/Ui/BackgroundMedia.qml
++++ w/shell/Ui/BackgroundMedia.qml
+@@ -16,6 +16,21 @@
+   // than decoding at the file's native size first.
+   property bool constrainDecode: false
+   property size decodeSize: Qt.size(0, 0)
++  // The last full decode size for this path. A screen that turns resizes the
++  // window through a moment of zero width or height; following decodeSize
++  // there emptied the source, and the screen showed no wallpaper until the
++  // next decode finished. A new path starts again from its own size.
++  property size heldDecode: Qt.size(0, 0)
++  function holdDecode() {
++    if (decodeSize.width > 0 && decodeSize.height > 0) heldDecode = decodeSize
++  }
++  onDecodeSizeChanged: holdDecode()
++  // decodeSize may follow the new path before or after this handler runs.
++  onPathChanged: {
++    heldDecode = Qt.size(0, 0)
++    Qt.callLater(holdDecode)
++  }
++  Component.onCompleted: holdDecode()
+   readonly property var current: imageLoader.item
+   readonly property bool ready: current ? current.ready : false
+   // The file behind path could not be loaded, as when it was deleted.
+@@ -38,12 +53,15 @@
+     Image {
+       readonly property bool ready: status === Image.Ready
+       readonly property bool failed: status === Image.Error
+-      source: !root.constrainDecode || root.decodeSize.width > 0 ? root.imageUrl : ""
++      source: !root.constrainDecode || root.heldDecode.width > 0 ? root.imageUrl : ""
+       fillMode: Image.PreserveAspectCrop
+       asynchronous: true
++      // A new decode size (a screen that turns) decodes again; keep showing
++      // the last frame until it is ready instead of an empty layer.
++      retainWhileLoading: true
+       cache: root.cached
+-      sourceSize.width: root.constrainDecode ? root.decodeSize.width : (root.version > 0 ? width : 0)
+-      sourceSize.height: root.constrainDecode ? root.decodeSize.height : (root.version > 0 ? height : 0)
++      sourceSize.width: root.constrainDecode ? root.heldDecode.width : (root.version > 0 ? width : 0)
++      sourceSize.height: root.constrainDecode ? root.heldDecode.height : (root.version > 0 ? height : 0)
+     }
+   }
+ }
+diff --git i/shell/Ui/ScreenMoveRemap.qml w/shell/Ui/ScreenMoveRemap.qml
+--- i/shell/Ui/ScreenMoveRemap.qml
++++ w/shell/Ui/ScreenMoveRemap.qml
+@@ -35,9 +35,27 @@
+     onTriggered: root.remapping = false
+   }
+ 
++  // A screen that turns reports its x and y as changed with the origin where
++  // it was, and the remap then took the background away until it had drawn
++  // again. Only a real move of the origin remaps.
++  property real lastX: 0
++  property real lastY: 0
++  function remember() {
++    if (!screen) return
++    lastX = screen.x
++    lastY = screen.y
++  }
++  function originMoved() {
++    if (!screen || (screen.x === lastX && screen.y === lastY)) return
++    remember()
++    settleTimer.restart()
++  }
++  Component.onCompleted: remember()
++  onScreenChanged: remember()
++
+   Connections {
+     target: root.screen
+-    function onXChanged() { settleTimer.restart() }
+-    function onYChanged() { settleTimer.restart() }
++    function onXChanged() { root.originMoved() }
++    function onYChanged() { root.originMoved() }
+   }
+ }

@@ -24,9 +24,12 @@ class LibmmClient(unittest.TestCase):
     def start(self, status, handlers=()):
         self.dir, cleanup = tempdir()
         self.addCleanup(cleanup)
+        orig_cwd = os.getcwd()
+        os.chdir(self.dir)
+        self.addCleanup(os.chdir, orig_cwd)
         self.bus = PrivateBus(self.dir)
         self.addCleanup(self.bus.close)
-        self.sitd = FakeSitd(os.path.join(self.dir, 'sitd.sock'))
+        self.sitd = FakeSitd('sitd.sock')
         self.sitd.status = status
         self.sitd.handlers.update(handlers)
         self.mmd = Mmd(self.bus, self.sitd.path, self.dir)

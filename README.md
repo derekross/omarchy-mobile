@@ -47,6 +47,7 @@ The kernel and boot images come from `bin/omamobile kernel`, `modules`, `initram
 | `docker/` | Ubuntu 24.04 build environment |
 | `docs/DEVICES.md` | Supported-devices matrix |
 | `docs/ROADMAP.md` | Where things stand and the plan to a working phone |
+| `docs/POWER-BASELINES.md` | Battery baselines and full discharges, one row per device and run |
 | `docs/DEMO.md` | Fictional demo data, screenshots and screen recordings for the website and videos (`tools/phone-demo`) |
 | `docs/RELEASES.md` | How builds and releases work for several devices: device descriptors, the kernel package, release bundles |
 
