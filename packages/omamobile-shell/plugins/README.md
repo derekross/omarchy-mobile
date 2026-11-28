@@ -66,7 +66,7 @@ on an empty part does nothing:
 | Battery | Omarchy's own power panel (`plugins/panels/power/Panel.qml` from `OMARCHY_PATH`) |
 | Wi-Fi or Ethernet | Omarchy's network panel (`plugins/panels/network`) |
 | Bluetooth | Quick settings' Bluetooth panel, as its tile's chevron opens it: it makes the phone visible while open and shows a pairing's code, which Omarchy's card doesn't |
-| Cellular signal | `CellularPanel.qml`: the carrier, its state, a mobile data switch (`omamobile-sit data on/off`), the signal and whether calls, texts and mobile data work |
+| Cellular signal | `CellularPanel.qml`: the carrier, its state, a switch for the cellular radio (`omamobile-sit radio on/off`, as the Wi-Fi card's switch does Wi-Fi; mobile data stays on its tile), the signal and whether calls, texts and mobile data work |
 | Clock | `TimePanel.qml`: the day, the date, the time and the time zone |
 
 Omarchy's two panels are loaded unchanged and unseen; only their popups
@@ -159,7 +159,7 @@ existed finds them under "Add tiles" too.
 | Wi-Fi | `Networking.wifiEnabled` (NetworkManager); status shows the SSID. The chevron or a long-press opens the Wi-Fi picker (below) |
 | Bluetooth | `omarchy-bluetooth-power on/off`, the same rfkill path as Omarchy's Bluetooth panel. The chevron or a long-press opens the Bluetooth panel (below) |
 | Mobile data | `omamobile-sit data on/off` (omamobile-modem-sit), which starts or stops `omamobile-sit-data.service` through polkit; on while that unit is active, with the operator's name and technology from `/run/omamobile-sit/state.json` (just the technology when sitd has no name: a bare network code never shows) and "No signal" while unregistered. Its icon is the status bar's signal bars from that file's `signal`, crossed out only with no modem, mobile data off or no network. "No modem" until omamobile-sitd publishes that file, unless `omamobile-modem-start` refused to start the modem this boot and left why in `/run/omamobile/modem-refused` ("Off after a hang or reset", "Off: not provisioned"): then that line is the status, and `journalctl -b -u omamobile-modem` has the rest |
-| Airplane mode | Wi-Fi, Bluetooth and WWAN rfkill switches together; on when all are soft-blocked. Turning it off unblocks only the ones that were on (`~/.local/state/omamobile/airplane-restore`). NFC keeps its own tile, and the modem's radio (`omamobile-sit radio`) is not touched, since turning that back on needs a reboot today |
+| Airplane mode | Wi-Fi, Bluetooth and WWAN rfkill switches together; on when all are soft-blocked. Turning it off unblocks only the ones that were on (`~/.local/state/omamobile/airplane-restore`). NFC keeps its own tile, and the modem's radio (`omamobile-sit radio`) is left to the mobile network card's switch |
 | Hotspot | `nmcli device wifi hotspot con-name Hotspot` (NetworkManager makes the SSID and password; the Wi-Fi client link drops while it runs) and `nmcli connection down Hotspot`. Long-press opens the Wi-Fi picker |
 | Battery saver | power-profiles-daemon's `power-saver` profile, through `omarchy-powerprofiles-set autodetect power-saver/balanced` (remembered per AC or battery) |
 | Dark theme | Swaps between the user's last dark and last light Omarchy theme (`omarchy-theme-set`; defaults Tokyo Night and Catppuccin Latte, choices kept in `~/.local/state/omamobile/theme-{dark,light}`). Long-press opens Omarchy's theme picker |
