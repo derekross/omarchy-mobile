@@ -84,6 +84,20 @@ if [[ ${1:-} != --retry ]] && loaded gs_decon; then
   exit 0
 fi
 
+# Loading gs_decon removes simpledrm, the framebuffer Plymouth draws on, and
+# Plymouth cannot draw on gs-decon (its DRM renderer finds no usable head
+# there), so the boot animation stops wherever it is. omarchy-trace runs
+# 0.6 s, so while plymouthd runs, give it that long first. This sits before
+# the hang marker, so a stall here is not blamed on the driver load.
+# OMAMOBILE_HUSKY_SPLASH_WAIT_MS: 0 turns it off; capped at 2000.
+splash_wait_ms=${OMAMOBILE_HUSKY_SPLASH_WAIT_MS:-700}
+[[ $splash_wait_ms =~ ^[0-9]+$ ]] || splash_wait_ms=700
+splash_wait_ms=$((10#$splash_wait_ms > 2000 ? 2000 : 10#$splash_wait_ms))
+if ((splash_wait_ms > 0)) && command -v plymouth >/dev/null && timeout 2 plymouth --ping 2>/dev/null; then
+  log "plymouthd is running: waiting ${splash_wait_ms} ms for the boot animation before gs_decon takes the panel"
+  sleep "$(printf '%d.%03d' $((splash_wait_ms / 1000)) $((splash_wait_ms % 1000)))"
+fi
+
 mkdir -p "$state"
 printf '%s display\n' "$(date -Is)" > "$marker"
 sync -f "$marker" 2>/dev/null || sync

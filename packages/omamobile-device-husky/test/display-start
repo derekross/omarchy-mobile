@@ -39,6 +39,11 @@ echo "$*" >> "$TEST_LOG"
 FAKE
 printf '#!/bin/bash\necho synced >> "$TEST_LOG"\n' > "$tmp/bin/sync"
 printf '#!/bin/bash\nexit 0\n' > "$tmp/bin/sleep"
+# plymouth: --ping succeeds only while $TEST_ROOT/plymouth-up exists (down by default)
+cat > "$tmp/bin/plymouth" <<'FAKE'
+#!/bin/bash
+[[ $1 == --ping && -e $TEST_ROOT/plymouth-up ]]
+FAKE
 chmod +x "$tmp/bin/"*
 cmdline() { mkdir -p "$OMAMOBILE_HUSKY_ROOT/proc"; echo "console=null panic=10 ${1:+exynos_drm.panel_name=$1 }bootconfig" > "$OMAMOBILE_HUSKY_ROOT/proc/cmdline"; }
 reset() {
@@ -99,3 +104,26 @@ out=$("$script")
 reset; rm -rf "$decon"
 out=$("$script")
 [[ $out == *"no display controller"* && ! -s $TEST_LOG ]] || fail "a DTB without DECON0: $out"
+
+# plymouthd running: wait OMAMOBILE_HUSKY_SPLASH_WAIT_MS (700 by default,
+# capped at 2000, junk falls back to 700) before the marker and gs_decon, so
+# Plymouth's animation finishes on simpledrm; plymouthd not running: no wait.
+mkdir -p "$decon"
+printf '#!/bin/bash\necho "sleep $*" >> "$TEST_LOG"\n' > "$tmp/bin/sleep"
+chmod +x "$tmp/bin/sleep"
+splash() { reset; touch "$OMAMOBILE_HUSKY_ROOT/plymouth-up"; out=$(OMAMOBILE_HUSKY_SPLASH_WAIT_MS=$1 "$script"); }
+splash 700
+[[ $out == *"plymouthd is running: waiting 700 ms"* ]] || fail "no splash wait: $out"
+w=$(grep -n '^sleep 0.700$' "$TEST_LOG" | cut -d: -f1); m=$(grep -n -m1 '^synced$' "$TEST_LOG" | cut -d: -f1)
+[[ -n $w && -n $m && $w -lt $m ]] || fail "the splash wait comes before the marker is written: $(cat "$TEST_LOG")"
+splash 0
+[[ $out != *"plymouthd is running"* ]] && ! grep -q '^sleep 0\.' "$TEST_LOG" || fail "0 still waits"
+splash 9999
+[[ $out == *"waiting 2000 ms"* ]] && grep -q '^sleep 2.000$' "$TEST_LOG" || fail "the wait is not capped at 2000 ms: $out"
+splash abc
+[[ $out == *"waiting 700 ms"* && $out == *"up: display"* ]] || fail "a non-number does not fall back to 700: $out"
+splash 080
+[[ $out == *"waiting 80 ms"* ]] || fail "a leading zero is not read as decimal: $out"
+reset; rm -f "$OMAMOBILE_HUSKY_ROOT/plymouth-up"
+out=$("$script")
+! grep -q '^sleep 0.700$' "$TEST_LOG" && [[ $out == *"up: display"* ]] || fail "plymouthd not running, but it waited"
