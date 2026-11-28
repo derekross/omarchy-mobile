@@ -8265,6 +8265,51 @@ endpoint therefore matches an Android-observed CRTC out-fence for
 the new-mode submission. No independent TE, DSI transfer or
 optical timestamp was captured.
 
+###### Exact D1 CRTC fence signal path
+
+The saved stock D1 bugreport identifies the 4 KiB GKI. The
+factory `vendor_kernel_boot` supplies its matching 4 KiB
+`vs_drm.ko` (SHA-256
+`5f75caef5893c7513c9d928f7542e4931f1c4be96bbd0358bf7e775ec99a6a68`).
+The following addresses are that module's text offsets.
+
+`vs_dc_commit` takes the pending CRTC event from the atomic
+state, moves it to the driver's private CRTC slot and clears
+the state event at `0x41794`–`0x417b8`. It starts the hardware
+trigger at `0x41880`. This is the normal path when the event
+exists and `no_vblank` is clear. The backend ISR decodes the
+output's frame-start, frame-done and TE status separately
+(`0x4349c`, `0x43500`). On output 0 these are bits 0, 1 and
+25/26 respectively in the primary BE status word.
+
+For frame-start, `_dc_handle_frame_start` calls
+`vs_crtc_handle_frm_start` at `0x423c0`. That function takes
+the private pending event and sends it via `drm_send_event_locked`
+at `0x1ea8`. DRM core signals the standard CRTC out-fence carried
+by that event. The direct send uses the software signal time.
+This is the DPU output frame-start indication during normal
+presentation. [Vendor event queue and IRQ handlers](https://github.com/GrapheneOS/kernel_pixel/blob/cbc6305f4ca4f4a63c4e6f476fd0d0aa09fa2122/private/google-modules/display/vsi-drm/verisilicon/9x00/vs_dc_post.c#L1816).
+
+The separate `drm_crtc_handle_vblank` calls use the chosen TE
+edge in synchronized command mode (`0x3e368` or `0x3e3d0`),
+and frame-start in the other mode branch (`0x3e328`). A pending
+event left in the atomic state can be armed on that generic
+vblank queue at `0x40f8`. The normal DPU commit has already
+moved its event away from that queue. The frame-done handler
+at `0x42464` updates transfer state, counters and waiters.
+It does not send the normal CRTC out-fence directly. The flip
+timeout path can send an error fence (`-ETIMEDOUT`, `0xcb8`),
+and the disable path can drain an inactive state event (`0x4730`).
+[Vendor CRTC event paths](https://github.com/GrapheneOS/kernel_pixel/blob/cbc6305f4ca4f4a63c4e6f476fd0d0aa09fa2122/private/google-modules/display/vsi-drm/verisilicon/vs_crtc.c#L1205).
+
+The saved resolution trace has the +21.091 ms standard
+out-fence signal but no matching kernel frame-start, TE or
+frame-done marker. Under the normal path it is a proxy for
+the start of the DPU output transfer for the new-mode frame.
+It does not identify the interrupt or fence status for that
+specific commit, measure transfer completion, or establish
+when pixels appeared on the panel.
+
 After this stock Android session, take and verify a fresh
 guarded nine-partition NV backup before the next Linux
 slot B trial. Keep Android off between the rescue and trial.
