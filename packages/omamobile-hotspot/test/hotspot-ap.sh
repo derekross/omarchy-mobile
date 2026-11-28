@@ -60,7 +60,7 @@ echo 50000 > "$tmp/temp"; touch "$st/route"
 export ST=$st
 ap() { PATH="$tmp/bin:/usr/bin" OMAMOBILE_HOTSPOT_RUN="$tmp/run" OMAMOBILE_HOTSPOT_TEMP="$tmp/temp" OMAMOBILE_HOTSPOT_LEASES="$tmp/leases" \
   OMAMOBILE_HOTSPOT_SYSNET="$tmp/sys/net" OMAMOBILE_HOTSPOT_CONF="$tmp/hotspot.conf" \
-  OMAMOBILE_HOTSPOT_DEVCONF="$tmp/devconf" OMAMOBILE_HOTSPOT_SYSCTL="$tmp/sysctl" \
+  OMAMOBILE_HOTSPOT_DEVCONF="$tmp/devconf" OMAMOBILE_HOTSPOT_SYSCTL="$tmp/sysctl" OMAMOBILE_HOTSPOT_NFT="${NFTBIN-$tmp/bin/nft}" \
   OMAMOBILE_HOTSPOT_HOT_MC=${HOTMC-60000} OMAMOBILE_HOTSPOT_POLL=0.1 bash "$tmp/hotspot-ap" "$@"; }
 eq() { [[ $1 == "$2" ]] || { echo "FAIL: got $1, want $2" >&2; exit 1; }; }
 
@@ -288,11 +288,11 @@ eq "$(cat "$tmp/run/last-stop")" "failed: client isolation could not be applied"
 (( $(grep -c "connection up uuid $U" "$st/log" || true) == 0 )) || { echo "FAIL: profile up without isolation" >&2; exit 1; }
 rm -f "$st/nftfail"; ap down >/dev/null
 # no nft at all: no hotspot
-# (a real /usr/bin/nft, if the test box has one, refuses as a user: the same end)
-mv "$tmp/bin/nft" "$tmp/nft.k"; : > "$st/log"
-ap run >/dev/null 2>&1 && { echo "FAIL: started without nft" >&2; exit 1; }
+# (nft's path points at nothing, so the host's own nft is never run)
+: > "$st/log"
+NFTBIN="$tmp/no-nft" ap run >/dev/null 2>&1 && { echo "FAIL: started without nft" >&2; exit 1; }
 eq "$(cat "$tmp/run/last-stop")" "failed: client isolation could not be applied"
 (( $(grep -c "connection up uuid $U" "$st/log" || true) == 0 )) || { echo "FAIL: profile up without nft" >&2; exit 1; }
-mv "$tmp/nft.k" "$tmp/bin/nft"; ap down >/dev/null
+ap down >/dev/null
 
 echo "hotspot-ap: ok"

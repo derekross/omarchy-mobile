@@ -58,6 +58,7 @@ DEVCONF=${OMAMOBILE_HOTSPOT_DEVCONF:-/usr/share/omamobile/hotspot.conf}
 # a value from the owner's file, else the device's
 conf() { local v=''; [[ -r $CONF ]] && v=$(sed -n "s/^$1=//p" "$CONF" 2>/dev/null | head -n 1); [[ -z $v && -r $DEVCONF ]] && v=$(sed -n "s/^$1=//p" "$DEVCONF" 2>/dev/null | head -n 1); printf '%s' "$v"; }
 SYSCTL=${OMAMOBILE_HOTSPOT_SYSCTL:-/proc/sys/net/ipv4/conf}
+NFT=${OMAMOBILE_HOTSPOT_NFT:-nft}        # the tests point it at a stub, or at nothing
 # SoC millidegrees from stop_temp_mc=: no start at or above it, and two reads in a row end it; 0 or unset = off
 HOT=${OMAMOBILE_HOTSPOT_HOT_MC:-$(conf stop_temp_mc)}
 [[ $HOT =~ ^[0-9]{1,6}$ ]] || HOT=0
@@ -229,16 +230,16 @@ onlink() {
 }
 # 1 = not applied (the caller stops the hotspot: never a hotspot without it)
 iso_sync() {
-  command -v nft >/dev/null 2>&1 || { log "client isolation: nft is missing"; return 1; }
+  command -v "$NFT" >/dev/null 2>&1 || { log "client isolation: nft is missing"; return 1; }
   [[ -e $RUN/iso-state ]] || touch "$RUN/iso-state"     # marked first, so down clears even a half-applied set
-  iso_rules "$(onlink)" | nft -f - || { log "client isolation: nft refused the rules"; return 1; }
+  iso_rules "$(onlink)" | "$NFT" -f - || { log "client isolation: nft refused the rules"; return 1; }
   [[ $(cat "$RUN/iso-state" 2>/dev/null) == on ]] || log "client isolation: on"
   printf 'on\n' > "$RUN/iso-state"
 }
 iso_clear() {
   # by the table itself, not only the state file: a table left by a crash is removed too
-  if command -v nft >/dev/null 2>&1 && nft list table inet "$ITABLE" >/dev/null 2>&1; then
-    nft delete table inet "$ITABLE" >/dev/null 2>&1 || { log "client isolation: could not remove it; will retry"; return 0; }
+  if command -v "$NFT" >/dev/null 2>&1 && "$NFT" list table inet "$ITABLE" >/dev/null 2>&1; then
+    "$NFT" delete table inet "$ITABLE" >/dev/null 2>&1 || { log "client isolation: could not remove it; will retry"; return 0; }
   fi
   rm -f "$RUN/iso-state"
 }
