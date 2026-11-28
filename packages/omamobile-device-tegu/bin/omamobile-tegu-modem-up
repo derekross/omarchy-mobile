@@ -39,9 +39,7 @@
 #    (modem-bringup-started.unclean-<time>) and starts the modem; only a
 #    second unclean end in a row, with that copy still there, holds until a
 #    human has looked (TELEPHONY-PLAN section 2.4);
-#  - sleep with the CP up only where omamobile-modem's sleep policy allows it
-#    (this package's suspend-verified declaration and a kernel with the modem
-#    link's early refusal); otherwise a sleep inhibitor, its own unit, is
+#  - no system suspend once the CP is up: a sleep inhibitor, its own unit, is
 #    taken before any driver loads and lasts until the reboot.
 set -euo pipefail
 # The overrides are for test/modem-up's scratch root only.
@@ -58,7 +56,6 @@ RUN=${OMAMOBILE_MODEM_RUN:-/run/omamobile-modem}
 STOP_WITNESS_VERSION=${OMAMOBILE_MODEM_STOP_WITNESS_VERSION:-/usr/lib/omamobile-vendor/modem/stop-witness-version}
 CP_STATE=${OMAMOBILE_MODEM_CP:-/usr/lib/omamobile-vendor/omamobile-modem-cp}
 CHROOT=${OMAMOBILE_VENDOR_CHROOT:-/usr/lib/omamobile-vendor/omamobile-vendor-chroot}
-SLEEP_POLICY=${OMAMOBILE_MODEM_SLEEP_POLICY:-/usr/lib/omamobile-vendor/omamobile-modem-sleep-policy}
 SYS=${OMAMOBILE_SYS:-/sys}
 DT=${OMAMOBILE_DT:-/proc/device-tree}
 LOG=${OMAMOBILE_MODEM_LOG:-/var/log/omamobile}
@@ -187,23 +184,13 @@ else
   done
 fi
 
-# Sleep with the CP up: omamobile-modem's sleep policy decides, as on the
-# Pixel 7 Pro. It says yes with this package's declaration
-# (/usr/lib/omamobile-modem/suspend-verified) on a kernel whose modem link
-# refuses a sleep early while the link is up (linux-omamobile#232), unless
-# the owner opted out. Otherwise no system suspend while the CP has been up
-# this boot (a suspend with it ONLINE on an older kernel never woke,
-# 2026-10-27): an inhibitor taken before the drivers load and kept until the
-# reboot; systemctl suspend and logind's suspend then refuse. A policy that
-# is missing or can't run is a no.
-if [[ -x $SLEEP_POLICY ]] && "$SLEEP_POLICY" check; then
-  say "the phone may sleep with the modem up: no sleep inhibitor"
-else
-  systemctl is-active -q omamobile-tegu-modem-nosleep ||
-    systemd-run -q --unit=omamobile-tegu-modem-nosleep \
-      systemd-inhibit --what=sleep --who=omamobile-tegu-modem \
-      --why="suspend with the modem up isn't allowed on this boot (omamobile-modem-sleep-policy check)" --mode=block sleep infinity
-fi
+# No system suspend while the CP has been up this boot: a suspend with it
+# ONLINE never woke (2026-10-27). Taken before the drivers load, kept until
+# the reboot; systemctl suspend and logind's suspend then refuse.
+systemctl is-active -q omamobile-tegu-modem-nosleep ||
+  systemd-run -q --unit=omamobile-tegu-modem-nosleep \
+    systemd-inhibit --what=sleep --who=omamobile-tegu-modem \
+    --why="suspend with the modem up isn't qualified on the Pixel 9a" --mode=block sleep infinity
 
 mkdir -p "$(dirname "$LATCH")" "$LOG"
 printf '%s boot %s\n' "$(date -Is)" "$(boot_id)" > "$LATCH"; sync "$LATCH" 2>/dev/null || sync

@@ -10,9 +10,7 @@ license=(MIT)
 depends=(bash systemd kmod bluez-utils omamobile-keyring)
 optdepends=('omamobile-telephony-tegu: attach Phone and Messages to an attended running sitd')
 provides=(omamobile-device omamobile-modem-policy omamobile-sitd-policy)
-# The suspend-verified declaration holds only with sitd's internet bearer
-# reconnect (omamobile-modem-sit 0.3.42), as device-cheetah's does.
-conflicts=(omamobile-device 'omamobile-modem-sit<0.3.42')
+conflicts=(omamobile-device)
 backup=(etc/pacman.d/omamobile-mirrorlist etc/NetworkManager/conf.d/zz-omamobile-wifi-powersave.conf)
 install=omamobile-device-tegu.install
 makedepends=(gcc)
