@@ -95,6 +95,13 @@ function callChip(line, nowMs) {
   return ""
 }
 
+// The screen recording chip: the time since `startedSec` (epoch seconds).
+function recChip(startedSec, nowMs) {
+  var s = Number(startedSec)
+  if (!(s > 0)) return ""
+  return elapsed(Math.max(0, Number(nowMs) - s * 1000))
+}
+
 function elapsed(ms) {
   var t = Math.max(0, Math.floor((Number(ms) || 0) / 1000))
   var h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), s = t % 60
@@ -182,7 +189,7 @@ if (typeof module !== "undefined") {
   module.exports = {
     findDevice: findDevice, connectedNetwork: connectedNetwork, wifiIcon: wifiIcon, networkIcon: networkIcon,
     cellularIcon: cellularIcon, cellGlyph: cellGlyph, cellText: cellText, parseCell: parseCell,
-    callChip: callChip, elapsed: elapsed, batteryIcon: batteryIcon,
+    callChip: callChip, recChip: recChip, elapsed: elapsed, batteryIcon: batteryIcon,
     batteryStyle: batteryStyle, iconShown: iconShown, boltGlyph: boltGlyph, batteryLow: batteryLow,
     BATTERY_STYLES: BATTERY_STYLES, STATUS_ICONS: STATUS_ICONS,
     stampOf: stampOf, parseStamp: parseStamp, unreadCount: unreadCount, unreadStored: unreadStored

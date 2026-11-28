@@ -139,8 +139,31 @@ Item {
   Timer {
     interval: 1000
     repeat: true
-    running: root.callChip !== ""
+    running: root.callChip !== "" || root.recStarted > 0
     onTriggered: root.nowMs = Date.now()
+  }
+
+  // Screen recording (omamobile-screenrecord): its state directory holds
+  // "started" (epoch seconds) while a recording runs. A red chip with the
+  // time shows beside the clock; a tap stops and saves. Read through a
+  // watched file, re-read every 2 s while recording and every 10 s idle
+  // (a file read, no process), in case a watch misses the create/delete.
+  property double recStarted: 0
+  readonly property string recChip: recStarted > 0 ? StatusModel.recChip(recStarted, nowMs) : ""
+  FileView {
+    id: recFile
+    path: (Quickshell.env("XDG_RUNTIME_DIR") || "/tmp") + "/omamobile-screenrecord/started"
+    watchChanges: true
+    printErrors: false
+    onFileChanged: reload()
+    onLoaded: { var n = parseInt(String(text()).trim(), 10); root.recStarted = isNaN(n) ? 0 : n }
+    onLoadFailed: root.recStarted = 0
+  }
+  Timer {
+    interval: root.recStarted > 0 ? 2000 : 10000
+    repeat: true
+    running: true
+    onTriggered: recFile.reload()
   }
 
   // Unread notifications: the files in Omarchy's notification history newer
@@ -427,6 +450,7 @@ Item {
         // its first item ended under the camera cutout. The strip's tap
         // opens the shade.
         Rectangle {
+          id: unreadPill
           objectName: "unreadNotifications"
           visible: root.showUnread && root.unread > 0
           anchors.left: callChipPill.visible ? callChipPill.right : clockText.right
@@ -446,6 +470,39 @@ Item {
             font.family: root.fontFamily
             font.pixelSize: Style.font.body
             font.bold: true
+          }
+        }
+
+        // A screen recording in progress: a red chip with its time, after the
+        // unread count when that shows (else they would draw on one spot); a tap
+        // stops it (the file is saved and a notification offers Open).
+        Rectangle {
+          id: recChipPill
+          objectName: "recChip"
+          visible: root.recChip !== ""
+          z: 2
+          anchors.left: unreadPill.visible ? unreadPill.right : callChipPill.visible ? callChipPill.right : clockText.right
+          anchors.leftMargin: Style.spacing.lg
+          anchors.verticalCenter: parent.verticalCenter
+          height: Math.round(root.barSize * 0.66)
+          width: recRow.implicitWidth + Style.spacing.lg * 2
+          radius: height / 2
+          color: recTap.pressed ? Qt.darker("#d32f2f", 1.2) : "#d32f2f"
+
+          Row {
+            id: recRow
+            anchors.centerIn: parent
+            spacing: Style.spacing.xs
+            Text { anchors.verticalCenter: parent.verticalCenter; textFormat: Text.PlainText; text: String.fromCodePoint(0xF044A); color: "white"; font.family: root.fontFamily; font.pixelSize: Style.font.body }
+            Text { anchors.verticalCenter: parent.verticalCenter; textFormat: Text.PlainText; text: root.recChip; color: "white"; font.family: root.fontFamily; font.pixelSize: Style.font.body; font.bold: true }
+          }
+
+          MouseArea {
+            id: recTap
+            anchors.centerIn: parent
+            width: parent.width
+            height: Math.max(parent.height, root.barSize)
+            onClicked: Quickshell.execDetached(["omamobile-screenrecord", "stop"])
           }
         }
 

@@ -351,6 +351,7 @@ grep -cF '"/.local/state/omarchy/notifications/history"' plugins/omamobile.bar/B
 [ "$(awk '/^        Row \{$/,/^        \}$/' plugins/omamobile.bar/Bar.qml | grep -c 'id: status')" = 1 ] || fail "the bar's right-hand row isn't where this test looks"
 [ "$(awk '/^        Row \{$/,/^        \}$/' plugins/omamobile.bar/Bar.qml | grep -c 'unreadNotifications')" = 0 ] || fail "the unread count is in the bar's right-hand row again (it ends under the camera cutout)"
 awk '/objectName: "unreadNotifications"/,/radius:/' plugins/omamobile.bar/Bar.qml | grep -cF 'anchors.left: callChipPill.visible ? callChipPill.right : clockText.right' >/dev/null || fail "the unread count follows the clock (or the call chip)"
+awk '/objectName: "recChip"/,/radius:/' plugins/omamobile.bar/Bar.qml | grep -cF 'anchors.left: unreadPill.visible ? unreadPill.right : callChipPill.visible ? callChipPill.right : clockText.right' >/dev/null || fail "the recording chip follows the unread count (else both draw on one spot)"
 grep -cF '"/.local/state/omarchy/notifications/history.json"' plugins/omamobile.bar/Bar.qml >/dev/null || fail "the bar counts Omarchy 4.5's history.json"
 # Omarchy 4.0's files and 4.5's live.json and history.json, chosen by what
 # exists: test/notifications-store.sh runs the shade's own commands on both.
@@ -1469,6 +1470,7 @@ OMAMOBILE_POWER_KEY_ANDROID=1 test/keys.sh || fail "omamobile-keys, with the pow
 test/home-command.sh || fail "omamobile-home"
 test/reboot-command.sh || fail "omamobile-reboot"
 bash test/dnd-state.sh || fail "the Do Not Disturb read on Omarchy 4.5 and 4.0"
+bash test/screenrecord.sh || fail "omamobile-screenrecord modes, heat and cleanup"
 
 # Every surface on Back's list, and the order, in Qt.
 rc=0; out=$(python3 -B test/back-surfaces.py 2>&1) || rc=$?
