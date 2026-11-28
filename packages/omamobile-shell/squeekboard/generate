@@ -8,6 +8,11 @@ globe key sending a keysym instead of opening squeekboard's popover.
     squeekboard/generate --check                  each generated file is
                                                   what the generator makes
                                                   of its own upstream part
+    squeekboard/generate --xkb                    write the layouts in XKB
+    squeekboard/generate --check-xkb              each of them is what
+                                                  --xkb makes of squeekboard/xkb/
+    squeekboard/generate --extract XKB_SRC_DIR    write squeekboard/xkb/ from
+                                                  an unpacked xkeyboard-config
 
 UPSTREAM_KEYBOARDS_DIR is data/keyboards/ of squeekboard 1.43.1 (tag
 v1.43.1, https://gitlab.gnome.org/World/Phosh/squeekboard), the version
@@ -32,8 +37,16 @@ terminal row as well) and is left alone. The emoji, number and PIN layouts
 get no row: the emoji list has its own keys, and a PIN pad (the lock
 screen) must not start the microphone.
 
-Needs PyYAML."""
+The layouts squeekboard doesn't have (XKB below) are ours, not upstream's,
+so --check leaves them out: they carry their own header (the xkeyboard-config
+version and the template), their input is in squeekboard/xkb/ (the key order
+xkbcommon compiled from a pinned xkeyboard-config release, with its licence
+notice), and --check-xkb makes them again from that input and compares, never
+reading the machine's /usr/share/X11/xkb. test/all runs both.
 
+Needs PyYAML (--extract also needs libxkbcommon)."""
+
+import hashlib
 import os
 import re
 import sys
@@ -80,8 +93,8 @@ GREEK_HEADER = [
 ]
 
 
-def greek_row(view):
-    return " ".join(ch + GREEK_SUFFIX for ch in GREEK_ACCENT_ROWS[view].split())
+def greek_row(view, rows=GREEK_ACCENT_ROWS, suffix=GREEK_SUFFIX):
+    return " ".join(ch + suffix for ch in rows[view].split())
 SKIP_DIRS = {"emoji", "number", "pin"}
 
 
@@ -127,8 +140,15 @@ def block(lines, name):
     return start, last, indent
 
 
-def generate(upstream, rel):
+def generate(upstream, rel, extra=None):
+    """extra: (rows by view, outline, key suffix, comment, header lines) for
+    a row of letter keys under the action row; Greek's by default."""
     data = yaml.safe_load(upstream)
+    if extra is None and rel in GREEK_FILES:
+        extra = (GREEK_ACCENT_ROWS, GREEK_OUTLINE, GREEK_SUFFIX, GREEK_COMMENT, GREEK_HEADER)
+    greek = extra is not None
+    if greek:
+        rows_x, outline_x, suffix_x, comment_x, header_x = extra
     width = widest_row(data)
     height = round(data["outlines"]["default"]["height"] * 10 / 13)
     lines = upstream.split("\n")
@@ -142,11 +162,13 @@ def generate(upstream, rel):
     for _, outline, _, _, _ in KEYS:
         head = " " * indent + outline + ":"
         new.append(head.ljust(max(column, len(head) + 1)) + "{ width: %s, height: %d }" % (shares[outline], height))
-    greek = rel in GREEK_FILES
     if greek:
         base_h = data["outlines"]["default"]["height"]
-        each = round(width / len(GREEK_ACCENT_ROWS["base"].split()), 3)
-        head = " " * indent + GREEK_OUTLINE + ":"
+        each = round(width / len(rows_x["base"].split()), 3)
+        if rel not in GREEK_FILES:
+            # a few letters: keys as wide as the letter keys, not the row
+            each = min(each, data["outlines"]["default"]["width"])
+        head = " " * indent + outline_x + ":"
         new.append(head.ljust(max(column, len(head) + 1)) + "{ width: %s, height: %d }" % (num(each), round(base_h * 32 / 52)))
     lines[last + 1:last + 1] = new
 
@@ -162,8 +184,8 @@ def generate(upstream, rel):
             last += 1
             i += 1
             vname = lines[i - 1].split(":")[0].strip()
-            if greek and vname in GREEK_ACCENT_ROWS:
-                lines.insert(i + 1, " " * pad + '- "%s"' % greek_row(vname))
+            if greek and vname in rows_x:
+                lines.insert(i + 1, " " * pad + '- "%s"' % greek_row(vname, rows_x, suffix_x))
                 last += 1
                 i += 1
         i += 1
@@ -180,10 +202,10 @@ def generate(upstream, rel):
     if greek:
         start, last, indent = block(lines, "buttons")
         pad = " " * indent
-        new = [pad + GREEK_COMMENT]
-        for view in GREEK_ACCENT_ROWS:
-            for ch in GREEK_ACCENT_ROWS[view].split():
-                new += [pad + ch + GREEK_SUFFIX + ":", pad * 2 + 'outline: "%s"' % GREEK_OUTLINE, pad * 2 + 'text: "%s"' % ch]
+        new = [pad + comment_x]
+        for view in rows_x:
+            for ch in rows_x[view].split():
+                new += [pad + ch + suffix_x + ":", pad * 2 + 'outline: "%s"' % outline_x, pad * 2 + 'text: "%s"' % ch]
         lines[last + 1:last + 1] = new
 
     # the globe key: a keysym for hypr/phone.lua instead of the popover
@@ -205,13 +227,13 @@ def generate(upstream, rel):
         HEADER_END,
     ]
     if greek:
-        header[-1:-1] = GREEK_HEADER
+        header[-1:-1] = header_x
     out = "\n".join(header + lines)
     check = yaml.safe_load(out)
     for vname, rows in check["views"].items():
         want = data["views"][vname]
-        if greek and vname in GREEK_ACCENT_ROWS:
-            want = [greek_row(vname)] + want
+        if greek and vname in rows_x:
+            want = [greek_row(vname, rows_x, suffix_x)] + want
         assert rows[0] == ACTION_ROW and rows[1:] == want, (rel, vname)
     assert [b for b in check["buttons"].values() if b.get("action") == "show_prefs"] == [], rel
     return out
@@ -245,11 +267,222 @@ def strip(generated):
     return "\n".join(out)
 
 
+# Layouts squeekboard doesn't have, from xkeyboard-config's symbols (the
+# default variant), each on a template squeekboard does have: name ->
+# template. The input is squeekboard/xkb/NAME.txt, extracted once with
+# --extract from the pinned release below, so --check-xkb needs neither
+# xkbcommon nor the xkb files installed on the machine.
+XKB = {"at": "de", "kz": "ru"}
+XKB_VERSION = "2.48"
+XKB_URL = "https://www.x.org/releases/individual/data/xkeyboard-config/xkeyboard-config-%s.tar.xz" % XKB_VERSION
+XKB_SHA256 = "b77041324f0109f77161ee43743fe04baa485866af8460d31e476ad3f7648fd5"
+XKB_DIR = os.path.join(HERE, "xkb")
+# What --extract wrote from that release; --check-xkb refuses input that
+# differs (--extract prints the new sums when the release changes).
+XKB_FILES_SHA256 = {
+    "COPYING": "fc03f6535d16b3fe9beece45b84214a37e6ca4b6550c03cadaed7e1b951fb294",
+    "at.txt": "7af268fcda9a45c7a316c1e18bf2caff2cffca8c529b8209c0dd350f9cae23fe",
+    "de.txt": "fb97a7b06280c1086fe3733f09cc04fe17f4099ab39f624fbc19435480aa2f48",
+    "kz.txt": "3bdd99615f1ca966567e6ec67b73875eacd34a9ef6c0df9c3422b5e0350bfd87",
+    "ru.txt": "fdb5aabbffabc43dfc7eb21c2b049d8a10fe2abb7665611a6dcea25d9445f8ef",
+}
+# Letters of a language that its xkb default has on no level 1 or 2 key,
+# which its typists need on the phone: (lower, upper), added to its own row.
+XKB_ADD = {"kz": [("ё", "Ё")]}
+XKB_KEYS = (["TLDE"] + ["AE%02d" % i for i in range(1, 13)] + ["AD%02d" % i for i in range(1, 13)]
+            + ["AC%02d" % i for i in range(1, 12)] + ["BKSL", "LSGT"] + ["AB%02d" % i for i in range(1, 11)])
+XKB_MARK = "# Follows the xkb default, not yet checked by a speaker"
+XKB_OUTLINE = "extra"
+XKB_SUFFIX = "-extra"
+XKB_COMMENT = "# Letters xkb has on keys the template has no place for, one key each"
+
+
+def extract(root):
+    """squeekboard/xkb/NAME.txt for every layout in XKB and its template:
+    levels 1 and 2 of the letter-area keys, as characters (a keysym name
+    where there is none), compiled by xkbcommon from ROOT only, an unpacked
+    xkeyboard-config XKB_VERSION, never the machine's own xkb files."""
+    import ctypes
+    import ctypes.util
+    x = ctypes.CDLL(ctypes.util.find_library("xkbcommon"))
+    x.xkb_context_new.restype = ctypes.c_void_p
+    x.xkb_context_include_path_append.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+    x.xkb_keymap_new_from_string.restype = ctypes.c_void_p
+    x.xkb_keymap_new_from_string.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int, ctypes.c_int]
+    x.xkb_keymap_key_by_name.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+    x.xkb_keymap_key_get_syms_by_level.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32,
+                                                    ctypes.c_uint32, ctypes.POINTER(ctypes.POINTER(ctypes.c_uint32))]
+    x.xkb_keymap_layout_get_name.restype = ctypes.c_char_p
+    x.xkb_keymap_layout_get_name.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+    x.xkb_keysym_to_utf32.restype = ctypes.c_uint32
+    x.xkb_keysym_get_name.argtypes = [ctypes.c_uint32, ctypes.c_char_p, ctypes.c_size_t]
+
+    with open(os.path.join(root, "COPYING"), encoding="utf-8") as f:
+        copying = f.read()
+    os.makedirs(XKB_DIR, exist_ok=True)
+    with open(os.path.join(XKB_DIR, "COPYING"), "w", encoding="utf-8") as f:
+        f.write(copying)
+    for name in sorted(set(XKB) | set(XKB.values())):
+        ctx = x.xkb_context_new(1 | 2)  # no default includes, no environment names
+        assert x.xkb_context_include_path_append(ctx, os.path.abspath(root).encode()) == 1, root
+        # the components themselves: the release tarball has no compiled
+        # rules; "NAME" with no "(variant)" is the default section
+        text = ('xkb_keymap { xkb_keycodes { include "evdev" }; xkb_types { include "complete" };'
+                ' xkb_compat { include "complete" }; xkb_symbols { include "pc+%s" }; };' % name)
+        km = x.xkb_keymap_new_from_string(ctx, text.encode(), 1, 0)
+        assert km, name
+        out = ["# xkeyboard-config %s's symbols for \"%s\", default variant: levels 1 and 2" % (XKB_VERSION, name),
+               "# of the letter-area keys, by squeekboard/generate --extract from",
+               "# %s" % XKB_URL,
+               "# (sha256 %s)." % XKB_SHA256,
+               "# xkeyboard-config's licence notice: COPYING in this directory.",
+               "name: %s" % x.xkb_keymap_layout_get_name(km, 0).decode()]
+        for key in XKB_KEYS:
+            kc = x.xkb_keymap_key_by_name(km, key.encode())
+            if not kc:
+                continue
+            cols = []
+            for level in (0, 1):
+                syms = ctypes.POINTER(ctypes.c_uint32)()
+                n = x.xkb_keymap_key_get_syms_by_level(km, kc, 0, level, ctypes.byref(syms))
+                if n < 1:
+                    cols.append("NoSymbol")
+                    continue
+                ch = x.xkb_keysym_to_utf32(syms[0])
+                if ch > 32 and not chr(ch).isspace():
+                    cols.append(chr(ch))
+                else:
+                    buf = ctypes.create_string_buffer(64)
+                    x.xkb_keysym_get_name(syms[0], buf, 64)
+                    cols.append(buf.value.decode())
+            out.append("%s %s %s" % (key, cols[0], cols[1]))
+        with open(os.path.join(XKB_DIR, name + ".txt"), "w", encoding="utf-8") as f:
+            f.write("\n".join(out) + "\n")
+    print("wrote %d inputs to %s" % (len(set(XKB) | set(XKB.values())), XKB_DIR))
+    for f in sorted(os.listdir(XKB_DIR)):
+        print('    "%s": "%s",' % (f, xkb_sha256(f)))
+
+
+def xkb_sha256(f):
+    with open(os.path.join(XKB_DIR, f), "rb") as fh:
+        return hashlib.sha256(fh.read()).hexdigest()
+
+
+def read_xkb(name):
+    keys, label = {}, name
+    with open(os.path.join(XKB_DIR, name + ".txt"), encoding="utf-8") as f:
+        for line in f:
+            line = line.rstrip("\n")
+            if line.startswith("#") or not line:
+                continue
+            if line.startswith("name: "):
+                label = line[len("name: "):]
+                continue
+            key, low, up = line.split(" ")
+            keys[key] = (low, up)
+    return label, keys
+
+
+def letter(s):
+    return len(s) == 1 and s.isalpha()
+
+
+def xkb_generate(name, wide):
+    """NAME's layout: the template's (its upstream text, taken back out of
+    our generated file), each letter key typing what NAME's xkb symbols put
+    on the same key (level 1 in the base view, level 2 in upper). A template
+    key where NAME has no letter takes the first letter NAME has on a key the
+    template doesn't use; the letters left over get a row of their own under
+    the action row, as Greek's accents do."""
+    template = XKB[name]
+    suffix = "_wide" if wide else ""
+    rel, trel = name + suffix + ".yaml", template + suffix + ".yaml"
+    with open(os.path.join(OUT, trel), encoding="utf-8") as f:
+        upstream = strip(f.read())
+    _, tkeys = read_xkb(template)
+    label, keys = read_xkb(name)
+    where = [{t[level]: k for k, t in tkeys.items() if letter(t[level])} for level in (0, 1)]
+    data = yaml.safe_load(upstream)
+    buttons = data.get("buttons") or {}
+    used, holes = set(), []
+    for token in " ".join(data["views"]["base"]).split():
+        if letter(token):
+            assert token in where[0], (trel, token, "is on no key of the template's xkb")
+            used.add(where[0][token])
+    spare = [k for k in XKB_KEYS if k in keys and k not in used and letter(keys[k][0])]
+    fill = {}
+    for k in XKB_KEYS:
+        if k in used and not letter(keys.get(k, ("",))[0]):
+            assert spare, (rel, k, "a template key with no letter to put on it")
+            fill[k] = spare.pop(0)
+    swap = {}
+    for level, view in ((0, "base"), (1, "upper")):
+        for token in " ".join(data["views"][view]).split():
+            if not letter(token):
+                continue
+            assert token in where[level], (trel, view, token, "is on no key of the template's xkb")
+            k = where[level][token]
+            new = keys[fill.get(k, k)][level]
+            assert letter(new), (rel, view, k, new)
+            if new != token:
+                assert token not in buttons, (trel, token, "has a button of its own")
+            swap[(view, token)] = new
+
+    lines = upstream.split("\n")
+    start, last, indent = block(lines, "views")
+    view_re = re.compile(r"^ {%d}(\S[^:]*):\s*(#.*)?$" % indent)
+    row_re = re.compile(r'^(\s+- ")(.*)(")$')
+    view = None
+    for i in range(start + 1, last + 1):
+        m = view_re.match(lines[i])
+        if m:
+            view = m.group(1).strip()
+            continue
+        m = row_re.match(lines[i])
+        if m and view in ("base", "upper"):
+            row = " ".join(swap.get((view, t), t) for t in m.group(2).split(" "))
+            lines[i] = m.group(1) + row + m.group(3)
+    lines = [("# Language: %s" % label) if l.startswith("# Language: ") else l for l in lines]
+    upstream_new = "\n".join(lines)
+
+    extra = None
+    added = XKB_ADD.get(name, [])
+    if spare or added:
+        pairs = [keys[k] for k in spare] + added
+        rows = {"base": " ".join(p[0] for p in pairs), "upper": " ".join(p[1] for p in pairs)}
+        extra = (rows, XKB_OUTLINE, XKB_SUFFIX, XKB_COMMENT, [])
+    out = generate(upstream_new, rel, extra).split("\n")
+    moved = ", ".join("%s on %s's %s" % (keys[d][0], template, tkeys[k][0]) for k, d in sorted(fill.items()))
+    left = " ".join(keys[k][0] for k in spare)
+    head = [
+        "# SPDX-License-Identifier: GPL-3.0-or-later",
+        "# %s (%s): xkeyboard-config %s's symbols for \"%s\", default variant" % (rel, label, XKB_VERSION, name),
+        "# (squeekboard/xkb/%s.txt, xkeyboard-config's licence in squeekboard/xkb/COPYING)," % name,
+        "# on squeekboard %s's %s as the template (https://gitlab.gnome.org/World/Phosh/squeekboard," % (VERSION, trel),
+        "# tag v%s, GPL-3.0-or-later): each letter key types what xkb has on the" % VERSION,
+        "# same key, level 1 in the base view and level 2 in upper.",
+        "# Template keys moved to another letter: %s." % (moved or "none"),
+        "# Letters in a row of their own under the action row: %s." % (left or "none"),
+    ] + (["# Added to that row, not on levels 1 or 2 in xkb: %s." % " ".join(p[0] for p in added)] if added else []) + [
+        XKB_MARK + ": corrections",
+        "# from people who type it are welcome (docs/KEYBOARD-LAYOUTS.md).",
+        "# With the action row and the globe key of every layout. Made by",
+    ]
+    end = next(i for i, l in enumerate(out) if l.endswith("squeekboard's popover. Made by"))
+    return "\n".join(head + out[end + 1:])
+
+
+def xkb_files():
+    for name in sorted(XKB):
+        for wide in (False, True):
+            yield name + ("_wide" if wide else "") + ".yaml", name, wide
+
+
 def generated_files():
     for dirpath, _, files in os.walk(OUT):
         for f in sorted(files):
             rel = os.path.relpath(os.path.join(dirpath, f), OUT)
-            if wanted(rel):
+            if wanted(rel) and rel not in {r for r, _, _ in xkb_files()}:
                 yield rel
 
 
@@ -265,6 +498,29 @@ def main(argv):
                 bad += 1
         print("%s - %d generated layouts" % ("not ok" if bad else "ok", len(rels)))
         return 1 if bad else 0
+    if argv[1:] == ["--check-xkb"]:
+        bad = 0
+        for f in sorted(set(XKB_FILES_SHA256) | set(os.listdir(XKB_DIR))):
+            if not os.path.exists(os.path.join(XKB_DIR, f)) or xkb_sha256(f) != XKB_FILES_SHA256.get(f):
+                print("not ok - squeekboard/xkb/%s is not the pinned file (XKB_FILES_SHA256)" % f)
+                bad += 1
+        for rel, name, wide in xkb_files():
+            path = os.path.join(OUT, rel)
+            text = open(path, encoding="utf-8").read() if os.path.exists(path) else None
+            if xkb_generate(name, wide) != text:
+                print("not ok - %s is not what squeekboard/generate --xkb makes of squeekboard/xkb/" % rel)
+                bad += 1
+        print("%s - %d layouts from xkb" % ("not ok" if bad else "ok", len(list(xkb_files()))))
+        return 1 if bad else 0
+    if argv[1:] == ["--xkb"]:
+        for rel, name, wide in xkb_files():
+            with open(os.path.join(OUT, rel), "w", encoding="utf-8") as fh:
+                fh.write(xkb_generate(name, wide))
+        print("wrote %d layouts from xkb to %s" % (len(list(xkb_files())), OUT))
+        return 0
+    if len(argv) == 3 and argv[1] == "--extract":
+        extract(argv[2])
+        return 0
     if len(argv) != 2 or argv[1].startswith("-"):
         print(__doc__.split("\n\n")[1], file=sys.stderr)
         return 2

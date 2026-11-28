@@ -1,0 +1,54 @@
+# xkeyboard-config 2.48's symbols for "kz", default variant: levels 1 and 2
+# of the letter-area keys, by squeekboard/generate --extract from
+# https://www.x.org/releases/individual/data/xkeyboard-config/xkeyboard-config-2.48.tar.xz
+# (sha256 b77041324f0109f77161ee43743fe04baa485866af8460d31e476ad3f7648fd5).
+# xkeyboard-config's licence notice: COPYING in this directory.
+name: Kazakh
+TLDE ( )
+AE01 " !
+AE02 ә Ә
+AE03 і І
+AE04 ң Ң
+AE05 ғ Ғ
+AE06 , ;
+AE07 . :
+AE08 ү Ү
+AE09 ұ Ұ
+AE10 қ Қ
+AE11 ө Ө
+AE12 һ Һ
+AD01 й Й
+AD02 ц Ц
+AD03 у У
+AD04 к К
+AD05 е Е
+AD06 н Н
+AD07 г Г
+AD08 ш Ш
+AD09 щ Щ
+AD10 з З
+AD11 х Х
+AD12 ъ Ъ
+AC01 ф Ф
+AC02 ы Ы
+AC03 в В
+AC04 а А
+AC05 п П
+AC06 р Р
+AC07 о О
+AC08 л Л
+AC09 д Д
+AC10 ж Ж
+AC11 э Э
+BKSL \ /
+LSGT < >
+AB01 я Я
+AB02 ч Ч
+AB03 с С
+AB04 м М
+AB05 и И
+AB06 т Т
+AB07 ь Ь
+AB08 б Б
+AB09 ю Ю
+AB10 № ?

@@ -559,6 +559,8 @@ elif [[ $rc != 0 ]]; then
 else
   # every language's layout is what squeekboard/generate makes of upstream's
   python3 -B squeekboard/generate --check >/dev/null || { python3 -B squeekboard/generate --check | grep -v '^ok' >&2; fail "the generated layouts (squeekboard/generate --check)"; }
+  # and the layouts from xkb are what it makes of squeekboard/xkb/ (#413)
+  python3 -B squeekboard/generate --check-xkb >/dev/null || { python3 -B squeekboard/generate --check-xkb | grep -v '^ok' >&2; fail "the layouts from xkb (squeekboard/generate --check-xkb)"; }
 fi
 grep -c 'done < <(find squeekboard/keyboards -type f -name' install >/dev/null || fail "every layout is installed"
 grep -c 'hl.device({ name = osk_device, resolve_binds_by_sym = true })' hypr/phone.lua >/dev/null || fail "squeekboard's binds resolve by keysym"
