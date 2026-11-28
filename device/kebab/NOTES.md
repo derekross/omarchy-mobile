@@ -54,6 +54,28 @@ peripheral, no panel node and the wrong touch controller (S6SY761).
 [tree72]: https://gitlab.postmarketos.org/soc/qualcomm-sm8250/linux
 [tree]: https://gitlab.com/sm8250-mainline/linux
 
+## 2026-11-28: working on the phone without the USB cable (`boot_b`)
+
+For development only; nothing here is in the device package.
+
+- **SSH over Wi-Fi:** sshd listens everywhere (keys only), but ufw allows
+  port 22 on `usb0` only, as `sshd-omamobile.conf` says. On this phone a
+  ufw rule allows it on `wlp1s0` from the home subnet only
+  (`ufw allow in on wlp1s0 from <LAN>/24 to any port 22 proto tcp`).
+- **Name:** Avahi runs and published `kebab-2.local` (a conflict with its
+  own name, seen on both `usb0` and Wi-Fi with the host on the other end
+  of both); `allow-interfaces=wlp1s0` gives `kebab.local`. A router that
+  doesn't pass mDNS between its wired and Wi-Fi sides still can't resolve
+  it, so the host finds the phone by its Wi-Fi MAC in the ARP table.
+- **Screen:** `wayvnc 127.0.0.1 5900` as a user unit (`Restart=always`
+  until Hyprland is up), reached through `ssh -L`, shown with noVNC in a
+  browser through `websockify` on the host (scales to the window;
+  `show_dot=true` draws a pointer, the phone shell hides its own).
+  `wayvnc --websocket` (0.10.2) segfaulted in libneatvnc on the first
+  connection; macOS Screen Sharing would not log in to it.
+- **Seen in passing:** `qcom-iris` fails to load `venus.b19` with -40
+  (ELOOP) though it is a plain 32-byte file; video decode is untested.
+
 ## 2026-11-28: the status bar's clock and the camera hole (`boot_b`)
 
 The 8T's front camera hole is at the top left, under the status bar's
