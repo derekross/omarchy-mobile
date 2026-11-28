@@ -4,6 +4,9 @@
 # the Pixel 9a in a minimal chroot (device/cheetah/FINGERPRINT-RESEARCH.md, section 4;
 # bring-up runbook in FINGERPRINT-PLAN.md).
 #
+#   omamobile-fp-chroot admitted         whether this phone may start (the
+#                                        first-start gate); read-only, the
+#                                        unit's ExecCondition
 #   omamobile-fp-chroot check            preconditions only; changes nothing
 #   omamobile-fp-chroot paths            the device and paths in use; read-only
 #   omamobile-fp-chroot preflight        the safety checks a start runs before
@@ -56,11 +59,18 @@
 #     storageproxyd and cleared once the stack runs. Found at the next boot,
 #     it means that start died on the way (Trusty halted, which also takes
 #     the AoC's sound and sensors with it), so that boot skips fingerprint
-#     once and the one after tries again.
+#     once and the one after tries again;
+#   - the first start: the first storageproxyd on a phone writes Trusty's
+#     secure storage (the RPMB), which can't be undone. Only the phones
+#     marked FIRST_START=auto below do that on their own; on any other the
+#     first start waits for the owner's go (see FIRST_START below);
+#   - the sensor: the hal and bridge stages stop before preflight when the
+#     sensor's device isn't there after its driver's modprobe, so a kernel
+#     without the driver never reaches storageproxyd.
 #
 # The overrides of the device, the state and the partitions' and markers'
 # paths (OMAMOBILE_FP_DEVICE, _STATE, _RUN, _SYSBLOCK, _DEVDIR, _MOUNTS,
-# _BOOT_ID, _UIDIR) are honoured only with
+# _BOOT_ID, _UIDIR, _FIRST_START_GO) are honoured only with
 # OMAMOBILE_FP_TEST=1, which the unit never sets (test/preflight).
 set -euo pipefail
 
@@ -72,14 +82,18 @@ PROPS_EXTRA=${OMAMOBILE_FP_PROPS_EXTRA:-/usr/lib/omamobile-fp/props.conf}
 # The phone, from the device tree (OMAMOBILE_FP_DEVICE overrides): what
 # differs is the Goodix trusted app, the KeyMint HAL (C++ on the 7 Pro, Rust
 # on the 9a) and what Android's init would have set from the bootloader
-# (props-DEVICE.conf, applied after props.conf).
+# (props-DEVICE.conf, applied after props.conf). Each phone is matched by
+# its own board compatible; any other board (or none) is unknown, and the
+# runner exits below, so a phone it doesn't know never gets another
+# phone's settings or its automatic first start.
 fp_device() {
   local c
-  c=$(tr '\0' '\n' < /proc/device-tree/compatible 2>/dev/null || true)
+  c=$(tr '\0' '\n' 2>/dev/null < /proc/device-tree/compatible || true)
   case $c in
+    *google,gs201-cheetah*) echo cheetah ;;
     *google,zumapro-tegu*) echo tegu ;;
     *google,gs201-panther*) echo panther ;;
-    *) echo cheetah ;;
+    *) echo "unknown:${c%%$'\n'*}" ;;
   esac
 }
 # From the board's compatible string; only test/preflight may override it
@@ -95,7 +109,7 @@ case $DEVICE in
     # the 7 Pro's HAL got a bare "on" and the circle after pointer down,
     # and matches with both
     PANEL=1440x3120 PANEL_HZ=60 PANEL_STATE=on LHBM_FIRST=0
-    PANEL_NAME=sdc-s6e3hc4 MAP_STORES=0 ;;
+    PANEL_NAME=sdc-s6e3hc4 MAP_STORES=0 FIRST_START=auto ;;
   tegu)
     TA=g7a.app
     KEYMINT=/vendor/bin/hw/android.hardware.security.keymint-service.rust.trusty
@@ -105,7 +119,7 @@ case $DEVICE in
     # the 9a's HAL parses the rate after the "@" of gs_panel's state line
     # ("On: WxH@Hz") and captures at pointer down, so the circle comes first
     PANEL=1080x2424 PANEL_HZ=120 PANEL_STATE="On: 1080x2424@120" LHBM_FIRST=1
-    PANEL_NAME=google-tg4c MAP_STORES=1 ;;
+    PANEL_NAME=google-tg4c MAP_STORES=1 FIRST_START=auto ;;
   panther)
     # the Pixel 7: the 7 Pro's TA and HALs (its vendor image ships the same
     # files), its own panel (ABL's exynos_drm.panel_name) and touchscreen
@@ -113,11 +127,19 @@ case $DEVICE in
     TA=g7.app
     KEYMINT=/vendor/bin/hw/android.hardware.security.keymint-service.trusty
     PANEL=1080x2400 PANEL_HZ=60 PANEL_STATE=on LHBM_FIRST=0
-    PANEL_NAME=sdc-s6e3fc3-p10 MAP_STORES=0
+    PANEL_NAME=sdc-s6e3fc3-p10 MAP_STORES=0 FIRST_START=auto
     TOUCH_NAME="FocalTech FT3658" ;;
-  *) echo "omamobile-fp: unknown device '$DEVICE' (cheetah, tegu, panther)" >&2; exit 1 ;;
+  *) echo "omamobile-fp: unknown device '${DEVICE#unknown:}' (cheetah, tegu, panther)" >&2; exit 1 ;;
 esac
 PANEL_NAME=${OMAMOBILE_FP_PANEL_NAME:-$PANEL_NAME}
+# The first storage proxy start on a phone writes Trusty's secure storage
+# (the RPMB), which can't be undone. FIRST_START=auto: it starts once
+# Google's files are in (the 7 Pro, the 9a and the 7, whose install guides
+# say fingerprint starts on its own after provisioning). A phone added to
+# the case above without it waits for the owner's go: $FIRST_START_GO,
+# made by hand. Once a start has passed preflight the phone has its record
+# ($STARTED) and later boots need no go.
+FIRST_START=${FIRST_START:-owner}
 PROPS_DEVICE=${OMAMOBILE_FP_PROPS_DEVICE:-/usr/lib/omamobile-fp/props-$DEVICE.conf}
 STATE=/var/lib/omamobile-fp
 [[ ${OMAMOBILE_FP_TEST:-} == 1 ]] && STATE=${OMAMOBILE_FP_STATE:-$STATE}
@@ -127,8 +149,10 @@ SYSBLOCK=/sys/class/block
 DEVDIR=/dev
 MOUNTS=/proc/mounts
 BOOT_ID_FILE=/proc/sys/kernel/random/boot_id
+FIRST_START_GO=/etc/omamobile/fingerprint-first-start
 # test/preflight points these at a fake tree; nothing else may
 if [[ ${OMAMOBILE_FP_TEST:-} == 1 ]]; then
+  FIRST_START_GO=${OMAMOBILE_FP_FIRST_START_GO:-$FIRST_START_GO}
   RUN=${OMAMOBILE_FP_RUN:-$RUN}
   SYSBLOCK=${OMAMOBILE_FP_SYSBLOCK:-$SYSBLOCK}
   DEVDIR=${OMAMOBILE_FP_DEVDIR:-$DEVDIR}
@@ -136,6 +160,8 @@ if [[ ${OMAMOBILE_FP_TEST:-} == 1 ]]; then
   BOOT_ID_FILE=${OMAMOBILE_FP_BOOT_ID:-$BOOT_ID_FILE}
 fi
 PROVENANCE=$STATE/provenance
+# Written by the first start that passes preflight, before storageproxyd.
+STARTED=$STATE/storage-first-start
 # Set before storageproxyd, cleared once the stack runs (see the header).
 PENDING=$STATE/start-pending
 # Set once storageproxyd may have started this boot; /run goes with the
@@ -228,16 +254,24 @@ rpmb_sg() {
   local d
   for d in /sys/class/scsi_generic/sg*; do
     [[ -e $d/device ]] || continue
-    [[ $(basename "$(readlink -f "$d/device")") == *:$RPMB_LUN ]] && { basename "$d"; return; }
+    [[ $(basename "$(readlink -f "$d/device")") == *:$RPMB_LUN ]] && { basename "$d"; return 0; }
   done
+  return 0
 }
 
+# The lookups print what they find, or nothing, and return 0 either way:
+# under set -e, "x=$(lookup)" must not end the runner on a phone without
+# the thing.
 touch_event() {
   local d
   for d in /sys/class/input/event*; do
-    [[ $(cat "$d/device/name" 2>/dev/null) == "$TOUCH_NAME" ]] && { basename "$d"; return; }
+    [[ $(cat "$d/device/name" 2>/dev/null) == "$TOUCH_NAME" ]] && { basename "$d"; return 0; }
   done
+  return 0
 }
+
+# The sensor's kernel side is there (the goodix_fp driver's node).
+sensor_ready() { [[ -c /dev/goodix_fp ]]; }
 
 check() {
   local ok=1 sg
@@ -247,7 +281,7 @@ check() {
     { say "no vendor image in $IMAGE (tools/extract-fingerprint-vendor)"; ok=0; }
   [[ -f $SHIM ]] || { say "no shim at $SHIM (fingerprint/Makefile)"; ok=0; }
   [[ -c /dev/trusty-ipc-dev0 ]] || { say "no /dev/trusty-ipc-dev0 (trusty_ipc loaded?)"; ok=0; }
-  [[ -c /dev/goodix_fp ]] || say "no /dev/goodix_fp: only stages before 'hal' can run"
+  sensor_ready || say "no /dev/goodix_fp: only stages before 'hal' can run"
   # trusty_apploader hands g7.app to Trusty in a dma-buf from this heap
   [[ -c /dev/dma_heap/system ]] ||
     say "no /dev/dma_heap/system (modprobe system_heap): only 'storage' can run"
@@ -265,6 +299,7 @@ check() {
       say "no $STATE/mfg_data.img yet: the first start copies it from mfg_data"
   fi
   [[ -n ${OMAMOBILE_FP_IN_NS:-} || ! -e $MARKER ]] || say "storageproxyd already started this boot: a new start needs a reboot"
+  admitted || say "the first start writes Trusty's secure storage: it waits for the owner's go ($FIRST_START_GO)"
   ((ok)) || exit 1
   say "preconditions met"
 }
@@ -422,13 +457,36 @@ tdp_guard() {
   return 0
 }
 
+# A start has passed preflight on this phone before: its record, or, from
+# runners older than the record, the 7 Pro's provenance or anything a start
+# put in Trusty's storage directory.
+storage_has_run() {
+  [[ -f $STARTED || -f $PROVENANCE ]] ||
+    [[ -n $(find "$STATE/data/vendor/ss" -mindepth 1 -print -quit 2>/dev/null) ]]
+}
+# Whether this phone may start (FIRST_START above). Also the unit's
+# ExecCondition, before its first module load.
+admitted() { [[ $FIRST_START == auto || -f $FIRST_START_GO ]] || storage_has_run; }
+
+not_admitted() {
+  die "the first start writes Trusty's secure storage (the RPMB), which can't be undone, so it waits for the owner's go: create $FIRST_START_GO"
+}
+
 # Everything before storageproxyd. On success the marker is set: from here
 # on this boot's storage proxy counts as started, even if a later step fails.
 preflight() {
+  admitted || not_admitted
   if [[ -e $MARKER ]]; then
     die "secure storage already ran this boot ($(sed "s/ token .*//" "$MARKER" 2>/dev/null || true)): Trusty keeps its storage state until a reboot, and a second storage proxy in the same boot can crash it. Reboot to start fingerprint again"
   fi
-  local boot pending
+  local boot pending first_why=
+  # What admitted the phone's first start, for its record (before provision
+  # writes the 7 Pro's provenance)
+  if [[ ! -f $STARTED ]]; then
+    if storage_has_run; then first_why="started before this record existed"
+    elif [[ -f $FIRST_START_GO ]]; then first_why="the owner's go ($FIRST_START_GO)"
+    else first_why="FIRST_START=$FIRST_START"; fi
+  fi
   boot=$(cat "$BOOT_ID_FILE" 2>/dev/null || echo unknown)
   if [[ -f $PENDING ]]; then
     pending=$(cat "$PENDING" 2>/dev/null || true)
@@ -448,6 +506,8 @@ preflight() {
     die "secure storage already ran this boot (another start got there first). Reboot to start fingerprint again"
   install -d -m 0700 "$STATE"
   echo "$boot $(date -Is 2>/dev/null || date)" > "$PENDING"
+  [[ -z $first_why ]] ||
+    (umask 077; echo "$(date -Is 2>/dev/null || date) boot $boot: $first_why" > "$STARTED")
 }
 
 # Bind $1 onto $2 (created as a file or directory to match), optionally ro.
@@ -647,6 +707,7 @@ wait_prop() { # $1 name, $2 value, $3 timeout s
 declare -A PIDS=()
 
 start() {
+  admitted || not_admitted
   local stage=${1:-bridge} sg
   case $stage in storage|apploader|keys|hal|bridge) ;; *) die "unknown stage $stage" ;; esac
   if [[ -n ${OMAMOBILE_FP_IN_NS:-} ]]; then
@@ -660,11 +721,16 @@ start() {
   if [[ -z ${OMAMOBILE_FP_IN_NS:-} ]]; then
     [[ -n $(rpmb_sg) ]] || modprobe sg || true
     [[ $stage == storage || -c /dev/dma_heap/system ]] || modprobe system_heap || true
-    [[ $stage == hal || $stage == bridge ]] && [[ ! -c /dev/goodix_fp ]] &&
+    [[ $stage == hal || $stage == bridge ]] && ! sensor_ready &&
       { modprobe goodix_fp || true; }
     udevadm settle -t 5 || true
   fi
   check
+  # A kernel without the sensor's driver stops here, before preflight and
+  # so before the storage proxy, not later at the HAL.
+  if [[ -z ${OMAMOBILE_FP_IN_NS:-} && ( $stage == hal || $stage == bridge ) ]] && ! sensor_ready; then
+    die "no /dev/goodix_fp after modprobe goodix_fp: the '$stage' stage needs the sensor (start storage, apploader or keys to run without it)"
+  fi
   sg=$(rpmb_sg)
   [[ $stage == storage || -c /dev/dma_heap/system ]] ||
     die "no /dev/dma_heap/system: trusty_apploader needs it"
@@ -791,14 +857,19 @@ run() {
     "$CHROOT_BIN" "$ROOT" "$@"
 }
 
+# test/all sources the runner for its functions
+[[ ${BASH_SOURCE[0]} == "$0" ]] || return 0
+
 case ${1:-} in
+  admitted) admitted ;;
   check) check ;;
   preflight) preflight ;;
   paths) printf '%s\n' "device=$DEVICE" "state=$STATE" "run=$RUN" "sysblock=$SYSBLOCK" "devdir=$DEVDIR" \
-           "mounts=$MOUNTS" "boot_id=$BOOT_ID_FILE" "uidir=$UIDIR" ;;
+           "mounts=$MOUNTS" "boot_id=$BOOT_ID_FILE" "uidir=$UIDIR" \
+           "first_start=$FIRST_START" "first_start_go=$FIRST_START_GO" ;;
   start) start "${2:-bridge}" ;;
   ns) shift; ns "$@" ;;
   run) shift; run "$@" ;;
-  *) echo "usage: omamobile-fp-chroot check | paths | preflight | start [storage|apploader|keys|hal|bridge] | ns CMD... | run CMD..." >&2
+  *) echo "usage: omamobile-fp-chroot admitted | check | paths | preflight | start [storage|apploader|keys|hal|bridge] | ns CMD... | run CMD..." >&2
      exit 2 ;;
 esac

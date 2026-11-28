@@ -167,6 +167,144 @@ for _ in $(seq 1 20); do [[ -s $nsd/ns.pid ]] && break; sleep 0.1; done
 wait "$nsp"; rm -rf "$nsd"
 echo "ok - ns.pid names the runner, so ns and run can enter its namespace"
 
+# The runner's lookups print nothing and return 0 when they find nothing, so
+# "x=$(lookup)" can't end it under set -e. setup_sys and setup_dev run for
+# the 7 Pro under set -euo pipefail with the mounts stubbed: a lookup that
+# returned 1 there ended the runner after preflight and before the storage
+# proxy (#874 review).
+RUNNER=$PWD/lib/omamobile-fp-chroot
+sd=$(mktemp -d)
+out=$(OMAMOBILE_FP_TEST=1 OMAMOBILE_FP_DEVICE=cheetah OMAMOBILE_FP_RUN=$sd/run \
+  OMAMOBILE_FP_STATE=$sd/state OMAMOBILE_FP_UIDIR=$sd/ui bash -c '
+  set -euo pipefail
+  source "$1"
+  [[ $- == *e* && $(set -o | grep -c "^pipefail[[:space:]]*on") == 1 ]] || { echo "not under set -e and pipefail"; exit 1; }
+  TOUCH_NAME="no such touchscreen"
+  RPMB_LUN=4294967295
+  ev=$(touch_event); [[ -z $ev ]] || { echo "touch_event found $ev"; exit 1; }
+  sg=$(rpmb_sg); [[ -z $sg ]] || { echo "rpmb_sg found $sg"; exit 1; }
+  echo "lookups returned"
+  # a stubbed binderfs mount makes its three nodes, as the kernel does
+  mount() { echo "mount $*"; [[ $2 != binder ]] || touch "$4"/{binder,hwbinder,vndbinder}; }
+  bind() { echo "bind $1 -> ${2#$ROOT}${3:+ $3}"; }
+  mkdir -p "$ROOT/sys" "$ROOT/dev"
+  setup_sys; echo "setup_sys returned"
+  setup_dev sg9; echo "setup_dev returned"' _ "$RUNNER" 2>&1) || { rm -rf "$sd"; fail "the 7 Pro's setup under set -euo pipefail: $out"; }
+for l in "lookups returned" "setup_sys returned" "setup_dev returned" "bind /dev/sg9 -> /dev/sg-rpmb"; do
+  grep -cxF "$l" <<<"$out" >/dev/null || { rm -rf "$sd"; fail "the 7 Pro's setup: no '$l' ($out)"; }
+done
+[[ $(cat "$sd/run/root/sys/devices/platform/exynos-drm/primary-panel/panel_name") == sdc-s6e3hc4 ]] ||
+  { rm -rf "$sd"; fail "setup_sys writes the 7 Pro's panel name"; }
+rm -rf "$sd"
+echo "ok - the lookups return 0 on nothing found; setup_sys and setup_dev run through for the 7 Pro under set -euo pipefail"
+
+# The sensor: the hal and bridge stages stop before preflight (and so before
+# the storage proxy) when the sensor isn't there after the modprobe; the
+# earlier stages don't need it.
+if [[ -e /dev/goodix_fp ]]; then
+  echo "ok - the sensor check # SKIP this host has /dev/goodix_fp"
+else
+  sd=$(mktemp -d)
+  for stage in hal bridge storage; do
+    rc=0
+    out=$(OMAMOBILE_FP_TEST=1 OMAMOBILE_FP_DEVICE=cheetah OMAMOBILE_FP_RUN=$sd/run \
+      OMAMOBILE_FP_STATE=$sd/state OMAMOBILE_FP_UIDIR=$sd/ui bash -c '
+      source "$1"
+      check() { :; }; udevadm() { :; }; rpmb_sg() { echo sg9; }
+      modprobe() { echo "modprobe $*"; return 1; }
+      preflight() { echo PREFLIGHT; exit 0; }
+      start "$2"' _ "$RUNNER" "$stage" 2>&1) || rc=$?
+    if [[ $stage == storage ]]; then
+      [[ $rc == 0 ]] && grep -cx PREFLIGHT <<<"$out" >/dev/null ||
+        { rm -rf "$sd"; fail "the storage stage runs without the sensor ($rc: $out)"; }
+    else
+      [[ $rc != 0 ]] || { rm -rf "$sd"; fail "$stage without the sensor is refused"; }
+      grep -cx 'modprobe goodix_fp' <<<"$out" >/dev/null || { rm -rf "$sd"; fail "$stage loads the driver first ($out)"; }
+      grep -c 'no /dev/goodix_fp after modprobe goodix_fp' <<<"$out" >/dev/null ||
+        { rm -rf "$sd"; fail "$stage says the sensor is missing ($out)"; }
+      grep -cx PREFLIGHT <<<"$out" >/dev/null && { rm -rf "$sd"; fail "$stage without the sensor reached preflight"; }
+    fi
+  done
+  rm -rf "$sd"
+  echo "ok - hal and bridge stop before preflight without the sensor; storage runs without it"
+fi
+
+# The board: each phone by its own compatible; anything else (or no device
+# tree) is unknown, and the runner exits for every subcommand, the unit's
+# ExecCondition included.
+fpd=$(sed -n '/^fp_device() {$/,/^}$/p' "$RUNNER" | sed 's#/proc/device-tree/compatible#"$DT"#')
+[[ -n $fpd ]] || fail "fp_device found"
+dt=$(mktemp)
+for pair in 'google,gs201-cheetah:google,gs201:cheetah' 'google,zumapro-tegu:google,zumapro:tegu' \
+            'google,gs201-panther:google,gs201:panther' 'google,zumapro-comet:google,zumapro:unknown:google,zumapro-comet' \
+            'google,gs201:google,gs201:unknown:google,gs201'; do
+  IFS=: read -r c1 c2 want <<<"$pair"
+  printf '%s\0%s\0' "$c1" "$c2" > "$dt"
+  got=$(DT=$dt bash -c "$fpd"'; fp_device')
+  [[ $got == "$want" ]] || { rm -f "$dt"; fail "fp_device for $c1: '$got', not '$want'"; }
+done
+rm -f "$dt"
+got=$(DT=/nonexistent bash -c "$fpd"'; fp_device')
+[[ $got == unknown: ]] || fail "fp_device without a device tree: '$got'"
+for sub in admitted paths check; do
+  rc=0; out=$(OMAMOBILE_FP_TEST=1 OMAMOBILE_FP_DEVICE=unknown:google,zumapro-comet "$RUNNER" $sub 2>&1) || rc=$?
+  [[ $rc == 1 ]] && grep -c "unknown device 'google,zumapro-comet'" <<<"$out" >/dev/null ||
+    fail "an unknown board: $sub exits ($rc: $out)"
+done
+if [[ ! -r /proc/device-tree/compatible ]]; then
+  rc=0; out=$("$RUNNER" admitted 2>&1) || rc=$?
+  [[ $rc == 1 ]] && grep -c "unknown device" <<<"$out" >/dev/null ||
+    fail "on a board without a device tree, admitted fails closed ($rc: $out)"
+fi
+echo "ok - each phone by its own compatible; an unknown board fails closed"
+
+# The first start: automatic on the phones whose installs start fingerprint
+# on their own; any phone added to the case without FIRST_START=auto waits
+# for the owner's go, before any module load or state.
+[[ $(grep -c 'MAP_STORES=[01] FIRST_START=auto' "$RUNNER") == 3 ]] || fail "only cheetah, tegu and panther are auto"
+grep -cxF 'FIRST_START=${FIRST_START:-owner}' "$RUNNER" >/dev/null || fail "a phone without auto defaults to the owner's go"
+grep -cx 'ExecCondition=/usr/lib/omamobile-fp/omamobile-fp-chroot admitted' vendor/systemd/system/omamobile-fp.service >/dev/null ||
+  fail "the unit checks admitted"
+[[ $(grep -n '^Exec' vendor/systemd/system/omamobile-fp.service | head -1) == *ExecCondition=* ]] ||
+  fail "the ExecCondition comes before the unit's module loads"
+fs=$(mktemp -d)
+(
+  trap 'rm -rf "$fs"' EXIT
+  export OMAMOBILE_FP_TEST=1 OMAMOBILE_FP_STATE=$fs/state OMAMOBILE_FP_RUN=$fs/run
+  export OMAMOBILE_FP_UIDIR=$fs/ui OMAMOBILE_FP_FIRST_START_GO=$fs/go
+  for d in cheetah tegu panther; do
+    OMAMOBILE_FP_DEVICE=$d "$RUNNER" admitted || fail "$d keeps its automatic first start"
+    grep -cx 'first_start=auto' <<<"$(OMAMOBILE_FP_DEVICE=$d "$RUNNER" paths)" >/dev/null || fail "$d: FIRST_START=auto"
+  done
+  # a new port: the 7 Pro's entry without auto
+  np=$fs/newport
+  sed 's/^\(    PANEL_NAME=sdc-s6e3hc4 MAP_STORES=0\) FIRST_START=auto ;;$/\1 ;;/' "$RUNNER" > "$np"; chmod +x "$np"
+  [[ $(diff "$RUNNER" "$np" | grep -c '^[<>]') == 2 ]] || fail "the new-port copy differs in one line"
+  export OMAMOBILE_FP_DEVICE=cheetah
+  grep -cx 'first_start=owner' <<<"$("$np" paths)" >/dev/null || fail "a new port: FIRST_START=owner"
+  "$np" admitted && fail "a new port's first start needs the owner's go"
+  for action in preflight 'start storage' 'start bridge'; do
+    "$np" $action > "$fs/out" 2>&1 && fail "a new port's first $action needs the go"
+    grep -c "waits for the owner's go: create $fs/go" "$fs/out" >/dev/null || { cat "$fs/out"; fail "says why ($action)"; }
+  done
+  [[ ! -e $fs/state && ! -e $fs/run && ! -e $fs/ui ]] || fail "a refused first start leaves no state"
+  : > "$fs/go"
+  "$np" admitted || fail "the owner's go admits the first start"
+  rm -f "$fs/go"
+  mkdir -p "$fs/state"; echo record > "$fs/state/storage-first-start"
+  "$np" admitted || fail "the first-start record admits later boots"
+  rm -f "$fs/state/storage-first-start"; echo record > "$fs/state/provenance"
+  "$np" admitted || fail "an older runner's provenance counts as the first start"
+  rm -f "$fs/state/provenance"; mkdir -p "$fs/state/data/vendor/ss/persist"
+  "$np" admitted || fail "an older runner's secure storage counts as the first start"
+  # the go's path is overridable only in the test mode
+  bd=$fs/board
+  sed 's/^DEVICE=\$(fp_device)$/DEVICE=cheetah/' "$RUNNER" > "$bd"; chmod +x "$bd"
+  grep -cx 'first_start_go=/etc/omamobile/fingerprint-first-start' <<<"$(OMAMOBILE_FP_TEST=0 "$bd" paths)" >/dev/null ||
+    fail "the go's path override needs OMAMOBILE_FP_TEST=1"
+)
+echo "ok - first start: automatic on cheetah, tegu and panther; any other phone waits for the owner's go"
+
 if [[ ! -f prebuilt/omamobile-fp-shim.so ]]; then
   echo "ok - the rest # SKIP no bionic prebuilts in this checkout (built on the computer)"
   exit 0
