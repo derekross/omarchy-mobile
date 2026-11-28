@@ -170,6 +170,61 @@ probes fine (`spa-acp-tool`: "Profile HiFi supported"); a clean restart of
 the PipeWire units, and the next normal boot, chose HiFi. Seen twice today;
 to watch on a fresh install's first boot.
 
+## 2026-11-28: sensors and auto-rotate (`boot_b`, by hand on the phone)
+
+Accelerometer, proximity and magnetometer work through the sensor DSP
+(SLPI) and SSC; Omamobile's auto-rotate turns the screen and touch with the
+phone, and the rotation tile works. **Set up by hand on the phone, not
+persistent yet:** the steps below are lost on a reboot until the device
+package and the kernel build carry them.
+
+- **The blocker: SMEM item 130.** OnePlus's own kernel fills a sensor
+  hardware table (which chip is fitted per sensor type, bus, IRQ,
+  orientation, chip parameters) into SMEM item 130 from an
+  `oplus,sensor-devinfo` device tree node, and the SLPI's drivers read it.
+  The bootloader allocates the item (4768 bytes: the two-source
+  `sensor_info_old` layout) and leaves it zeroed; zeroed, the DSP registers
+  no physical sensor (`ssccli`: "No 'accel' sensor available") even with
+  everything else in place. `device/kebab/kernel/oplus-sensor-devinfo/` is
+  that driver's parsing, ported to mainline as an out-of-tree module (same
+  binding, so the board's node goes in unchanged). Tested by loading it
+  with the node applied as a DT overlay, then restarting the SLPI.
+- **hexagonrpcd** (`packages/hexagonrpcd`) serves
+  `/usr/share/qcom/sm8250/OnePlus/kebab` (its own guess from the device
+  tree), filled read-only from the phone: `sensors/config` from `odm_a`'s
+  `/etc/sensor/config` (the 8T's configs are on `odm`, not `vendor`),
+  `sensors/sns_reg.conf` from `vendor_a`'s `/etc/sensors/sns_reg_config`,
+  `sensors/registry` and `sensors/sns_reg_version` from `persist`
+  (`debugfs rdump`, read-only), `dsp/sdsp` from `dsp_a`, and `socinfo/`
+  written by hand: `hw_platform` `MTP`, `platform_subtype` `Unknown`,
+  `platform_subtype_id` `0`, `platform_version` `65536` (SMEM's hardware
+  platform 8, subtype 0), `soc_id` and `revision` from
+  `/sys/devices/soc0`. The configs select on `hw_platform` `MTP`.
+- **Order:** fill SMEM, then restart the SLPI (`echo stop`/`start` on
+  `remoteproc0`; `/dev/fastrpc-sdsp` is gone while it is stopped), then
+  start `hexagonrpcd-sdsp`. hexagonrpcd exits after its first attach and
+  comes back through `Restart=always`. Whether a normal boot needs the
+  SLPI restart is not tested yet.
+- **iio-sensor-proxy and libssc** from Arch Linux ARM already have SSC.
+  Its udev rules tag `/dev/fastrpc-sdsp` with `ssc-light ssc-compass` only;
+  `/etc/udev/rules.d/81-omamobile-kebab-sensors.rules` adds `ssc-accel
+  ssc-proximity` and `ACCEL_MOUNT_MATRIX` `-1, 0, 0; 0, -1, 0; 0, 0, -1`
+  (the DSP reports Android's axes): upright reads `normal`.
+- **Auto-rotate:** `omamobile-autorotate` from `packages/omamobile-sensors`,
+  installed by hand (that package conflicts with iio-sensor-proxy: it
+  carries the Pixels' own proxy). Its accelerometer claim is allowed only
+  from the logged-in session (polkit), so it works as the user service and
+  not from an SSH shell.
+- **Not working:** the light sensor (no `ambient_light` sensor in SSC; the
+  8T's is under the display, behind a OnePlus sensor type). The
+  magnetometer reads but is uncalibrated. Each rotation shows a short
+  flash; no modeset (every commit is a page flip) and no dark frame in a
+  60 fps recording of the lock screen, so not explained yet.
+- **Remaining for a persistent setup:** the node in `dts/omamobile.dtsi`
+  and the module in `tools/build-kebab-kernel`; staging the files in
+  `omamobile-kebab-firmware`; the udev rule and the packages in the device
+  package; auto-rotate without the Pixels' proxy.
+
 ## 2026-11-28: boot splash (`boot_b`)
 
 The boot shows Omarchy's logo instead of kernel messages.

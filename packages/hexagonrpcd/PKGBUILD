@@ -1,0 +1,59 @@
+# SPDX-License-Identifier: 0BSD
+#
+# hexagonrpcd 0.4.0, the FastRPC file server for Qualcomm Hexagon DSPs.
+# Arch Linux ARM doesn't package it. On sm8250 phones the sensor DSP (SLPI)
+# reads its sensor configuration and registry through it, and without it
+# libssc (and so iio-sensor-proxy) finds no sensors. Derived from Alpine's
+# community/hexagonrpcd (Dylan Van Assche).
+#  - 0001: upstream's c4109b45 (after 0.4.0), the systemd units
+#    (hexagonrpcd-sdsp.service and the two ADSP ones, each conditional on
+#    its /dev/fastrpc-* node). Drop it with the next release.
+#  - 0002: serve sensors/sns_reg_version beside the registry. Without it the
+#    sensors PD rebuilds the registry, cannot write it back (the file
+#    service is read-only) and registers no physical sensors. See the patch
+#    header; upstream's open #31 does the same but drops the entries.
+#  - The units run as the fastrpc user; sysusers and the udev rule giving
+#    it the /dev/fastrpc-* nodes are ours (Alpine's 10-fastrpc.rules).
+#  - Without -R the daemon serves /usr/share/qcom/{soc}/{vendor}/{codename},
+#    guessed from the device tree; a device package fills that directory.
+
+pkgname=hexagonrpcd
+pkgver=0.4.0
+pkgrel=1
+pkgdesc='FastRPC file server for the Qualcomm Hexagon DSPs (sensor registry and configuration)'
+arch=(aarch64)
+url='https://github.com/linux-msm/hexagonrpc'
+license=(GPL-3.0-or-later)
+depends=(glibc)
+makedepends=(meson ninja)
+source=("$pkgname-$pkgver.tar.gz::https://github.com/linux-msm/hexagonrpc/archive/refs/tags/v$pkgver.tar.gz"
+        0001-data-add-systemd-system-services.patch
+        0002-rpcd-builder-serve-sns-reg-version.patch
+        hexagonrpcd.sysusers
+        10-fastrpc.rules)
+sha256sums=('fe742549a2672902d59a90dafd741a9a0acbeca059e07ff5130e2b525a66574f'
+            'ccbb0851a275172642eadc1d8e1e0be2c448e4fdeb6eb141f2ede7647511b59f'
+            '329038a25d1f8e5bcdf82cb9c24b48d35ebd7ec86d1c9fd0bcaebcf60305994d'
+            'e533319279aea8a32bafc73b40fd659d7d14f595dd397fabb2d0ebf78e2bd973'
+            '4e735e091ce3f7eabe198b8249a5d40f9f37a87a78a07c335dd10a3361c7b812')
+
+prepare() {
+  cd "hexagonrpc-$pkgver"
+  patch -Np1 -F0 -i ../0001-data-add-systemd-system-services.patch
+  patch -Np1 -F0 -i ../0002-rpcd-builder-serve-sns-reg-version.patch
+}
+
+build() {
+  arch-meson "hexagonrpc-$pkgver" build
+  meson compile -C build
+}
+
+check() {
+  meson test -C build
+}
+
+package() {
+  meson install -C build --destdir "$pkgdir"
+  install -Dm644 hexagonrpcd.sysusers "$pkgdir/usr/lib/sysusers.d/hexagonrpcd.conf"
+  install -Dm644 10-fastrpc.rules -t "$pkgdir/usr/lib/udev/rules.d/"
+}
