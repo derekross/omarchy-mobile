@@ -8310,6 +8310,61 @@ It does not identify the interrupt or fence status for that
 specific commit, measure transfer completion, or establish
 when pixels appeared on the panel.
 
+###### Passive stock D1 frame-start and out-fence capture
+
+The factory 4 KiB `vs_drm.ko` registers
+`vs_drm/disp_frame_start` and `vs_drm/disp_frame_irqs`.
+It also has kernel atrace markers in a separate event
+group. The `frame_tx[output]=1` marker at `0x423ac`
+precedes the frame-start handler at `0x423c0`. The same
+handler brackets `drm_send_event_locked` with
+`vs_crtc_send_vblank_event_locked` markers. Both marker
+paths call `__traceiter_tracing_mark_write`, which the
+factory `gs-drm-connector.ko` exports in the `dpu` trace
+system. Request `dpu/tracing_mark_write` explicitly.
+`ftrace/print` alone does not subscribe to this event.
+
+The factory GKI image contains `dma_fence_init` and
+`dma_fence_signaled`. Perfetto v58.3 has typed entries
+for both `dma_fence` events and `dpu/tracing_mark_write`.
+The recorded stock Perfetto sessions did not request
+those three events. The userspace `gfx` sessions set
+`atrace_userspace_only: true`, so automatic kernel
+category expansion was off. The earlier `vs_drm` and
+generic DRM event failures apply to the names requested
+in those sessions. In v58.3, an unknown event entry
+can mean that the event is absent or that the producer
+cannot read or parse its format. The saved shell denial
+on `available_events` does not identify the access of
+`traced_probes` to these formats.
+[Perfetto event registry](https://github.com/google/perfetto/blob/v58.3/src/traced/probes/ftrace/event_info.cc#L1555).
+[Perfetto event selection](https://github.com/google/perfetto/blob/v58.3/src/traced/probes/ftrace/ftrace_config_muxer.cc#L581).
+
+A later passive preflight on stock A can request
+`dpu/tracing_mark_write`, `dma_fence/dma_fence_init` and
+`dma_fence/dma_fence_signaled` using stock Perfetto.
+Also request `vs_drm/disp_frame_start` and
+`vs_drm/disp_frame_irqs` as optional source evidence.
+Check the setup stats and require actual DPU and CRTC
+fence records during ordinary updates before asking for
+another resolution switch. For the switch capture, keep
+userspace `gfx` and FrameTimeline in the same session.
+Look for the display's `frame_tx` rise, followed by the
+event-send bracket on the same CPU and in the same
+execution context. Inside that bracket, match the CRTC
+driver and timeline and the fence's `context` and `seqno`
+to its init record. Compare the signal with the Composer
+fence timestamp and the matching FrameTimeline token.
+IRQ-status evidence can further distinguish interrupt
+delivery from a poll that services pending hardware status.
+
+This route uses existing tracepoints and the existing
+Composer client. The saved artifacts qualify the trace
+format and call path, while stock producer access and
+emission remain untested. If either side is unavailable,
+the saved userspace trace still gives a fence timestamp
+without a matching kernel frame-start witness.
+
 After this stock Android session, take and verify a fresh
 guarded nine-partition NV backup before the next Linux
 slot B trial. Keep Android off between the rescue and trial.
