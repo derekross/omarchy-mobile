@@ -1,10 +1,25 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Grizzly M1 bring-up plan
 
-The test phone has November D1 on stock A. Earlier B trials reached
-authenticated USB SSH in RAM rescue. Two RAM-root trials also reached
-systemd with zero SCSI disks. The [v72 UFS diagnostic](#attended-v72-slot-b-trial)
-verified read-only GPT discovery and a 4 KiB read through `boot_b`.
+## Where it stands
+
+- **Boot and recovery.** The Grizzly test phone is back on November D1 stock A.
+  Slot B reached [Omarchy systemd and authenticated USB SSH from a read-only
+  RAM root](#attended-usb-ssh-handoff-trial). Stock A is the recovery path.
+- **Storage.** The [v72 UFS trial](#attended-v72-slot-b-trial) verified
+  read-only GPT discovery and a 4 KiB read through `boot_b`. The
+  [v73 trial](#attended-v73-slot-b-trial) verified the guarded partition
+  range. The [stock D1 RAM rescue](#stock-d1-read-only-ram-rescue) can
+  back up all nine NV partitions. Persistent installation is pending.
+- **Display.** Stock D1 identified the CGYDA panel. The
+  [mainline PHY scaffold](#slot-b-mainline-dsi0-phy-vote-fixture) acquired
+  wrapper → BE → DSI0 and released it in reverse. First native output
+  still needs verified APB and external reset readiness and a working
+  compressed display pipeline. PHY TX and DSI0 host reads stay disabled.
+- **Next check.** Try passive [stock Perfetto capture](#stock-cgyda-compression-and-mainline-dsi2-reuse)
+  on A. Take a fresh verified nine-partition backup after that stock
+  session before the next Linux trial.
+
 See the [D1 recovery and trial record](NOTES.md#november-d1-recovery-and-first-light-checks)
 and the [kernel provenance and fixtures](bringup/README.md). Coordinate with
 the October-build Grizzly in [#26](https://github.com/derekross/omamobile/issues/26).
@@ -127,6 +142,26 @@ whether it predated a stock boot.
 | [Stock D1 DSI0 clock and reset trace](#attended-stock-d1-dsi0-clock-and-reset-trace) | The Mac left stock D1 A at 17:08:28 UTC on 2026-11-26. Android stayed off between the rescue and the trace boot at 17:15:58 UTC. | All nine hashes passed at 17:14:41 UTC. The stock A return requires a fresh copy before the next power or CPM trial. |
 | [Stock D1 DSI0 PHY init trace](#attended-stock-d1-dsi0-phy-init-trace) | The Mac left stock D1 A at 20:30:01 UTC on 2026-11-26. Android stayed off between the rescue and the trace boot at 20:38:41 UTC. | All nine hashes passed at 20:37:24 UTC. The stock A return requires a fresh copy before the next power or CPM trial. |
 | [Stock D1 DSI0 genpd worker trace](#attended-stock-d1-dsi0-genpd-worker-trace) | The Mac left stock D1 A at 06:07:15 UTC on 2026-11-27. Android stayed off between the rescue and the single trace boot at 06:13:36 UTC. | All nine hashes passed at 06:12:23 UTC. The stock A return requires a fresh copy before the next power or CPM trial. |
+| [Stock D1 PHY reset trace](#attended-stock-d1-phy-reset-trace) | After the stock D1 DSI0 genpd worker trace on 2026-11-27. | The guarded rescue verified all nine partitions. |
+| [Stock D1 UIC trace](#attended-stock-d1-uic-trace-result) | After the stock D1 PHY reset trace on 2026-11-27. | The guarded rescue retry verified all nine partitions. |
+| [Combined UIC and PHY reset trace](#attended-combined-uic-and-phy-reset-result) | After the stock D1 UIC trace on 2026-11-27. | The guarded rescue verified all nine partitions. |
+| [PHY runtime PM trace](#attended-phy-runtime-pm-result) | After the combined UIC and PHY reset trace on 2026-11-27. | The guarded rescue verified all nine partitions. |
+| [Stock CGYDA connector discovery](#attended-stock-cgyda-connector-discovery) | After the PHY runtime PM trace on 2026-11-27. | The guarded rescue retry verified all nine partitions. |
+| [CGYDA GPIO and VDDD trace](#attended-cgyda-gpio-and-vddd-trace) | After the CGYDA connector discovery on 2026-11-27. | The guarded rescue verified all nine partitions. |
+| [Stock D1 DRM aggregate snapshot](#attended-stock-d1-drm-aggregate-snapshot) | After the CGYDA GPIO and VDDD trace on 2026-11-27. | The guarded rescue verified all nine partitions. |
+| [DSI0 discovery with DP encoder excluded](#attended-dsi0-discovery-with-dp-encoder-excluded) | After the stock D1 DRM aggregate snapshot on 2026-11-27. | The guarded rescue verified all nine partitions. |
+| [Stock D1 genpd device and sibling trace](#attended-stock-d1-genpd-device-and-sibling-trace) | After the DSI0 discovery with DP encoder excluded on 2026-11-27. | The guarded rescue verified all nine partitions. |
+| [Stock D1 wrapper vote and display runtime PM trace](#attended-stock-d1-wrapper-vote-and-display-runtime-pm-trace) | After the stock D1 genpd device and sibling trace on 2026-11-27. | The guarded rescue retry verified all nine partitions. |
+| [Mainline DSI0 PHY vote fixture](#slot-b-mainline-dsi0-phy-vote-fixture) | After the stock D1 wrapper vote and display runtime PM trace on 2026-11-27. | The guarded rescue verified all nine partitions. |
+| [DSI0 sibling MBFS vote trial](#attended-dsi0-sibling-mbfs-vote-trial) | After the mainline DSI0 PHY vote fixture on 2026-11-27. | The guarded rescue verified all nine partitions. |
+| [DSI0 selector 3 gate trial](#attended-dsi0-selector-3-gate-result) | After the DSI0 sibling MBFS vote trial on 2026-11-27. | The guarded rescue verified all nine partitions. |
+| [Stock D1 DC customer-ID trace](#attended-stock-d1-dc-customer-id-result) | After the DSI0 selector 3 gate trial on 2026-11-27. | The guarded rescue retry verified all nine partitions. |
+| [Stock D1 DP-off firmware vote trace](#attended-stock-d1-dp-off-firmware-vote-trace) | After the stock D1 DC customer-ID trace on 2026-11-27. | The guarded rescue verified all nine partitions. |
+
+For the 15 entries after the genpd worker trace, each verified copy
+preceded the linked B trial and Android stayed off between rescue
+and trial. The table uses the recorded predecessor and date when
+exact UTC times are unavailable in the linked trial record.
 
 [Maintainer decision on backup freshness](https://github.com/derekross/omamobile/pull/1002#issuecomment-7171826035).
 Take a fresh read-only backup of all nine partitions after the latest
@@ -8028,6 +8063,9 @@ disabled in Grizzly diagnostics until that prerequisite
 is met. Keep the PHY TX and host read holds in place.
 
 The next stock check needs the Pixel running D1 on A.
+After that stock Android session, take and verify a fresh guarded
+nine-partition NV backup before the next Linux slot B trial.
+Keep Android off between the backup rescue and that trial.
 Query the stock Perfetto service over ADB and check
 whether it can collect the driver's existing
 `vs_drm/disp_set_mode` and `vs_drm/disp_frame_done`
