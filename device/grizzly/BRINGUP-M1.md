@@ -8489,8 +8489,39 @@ fence. If the signal is nested inside the display
 IRQ, that is evidence of ISR delivery. The IRQ
 covers several display status bits and the trace
 lacks the DPU frame-start marker, so it cannot
-independently identify the asserted bit. This
-candidate was verified in the factory files only.
+independently identify the asserted bit.
+
+###### Stock D1 atrace fence and display IRQ correlation
+
+Ran a 15-second `atrace -z -b 16384 -t 15 gfx sync irq`
+capture while scrolling on production D1 stock A.
+The trace retained all 1,942,002 entries, including
+DMA-fence init and signal records and balanced IRQ
+entry and exit records. No resolution switch was
+performed or recorded.
+
+The internal display signaled 869 `vs-drm` fences on
+`CRTC:32-Out_ctrl0`, context 1. Matched the Composer
+`PresentDisplay` → `wait_present` timestamp payloads
+to 845 unique signal records. The trace clock-sync
+marker anchored the search, and a constant offset
+calibrated on the first 100 unambiguous matches left
+a maximum 5.849 µs timestamp residual. Of the
+845 matches, 844 also had the same fence init key.
+159 Composer timestamps had no unique match within
+the 10 µs window, with no ambiguous matches.
+
+Of the 845 matched signals, 834 fell between entry
+and handled exit of IRQ 439
+(`f600000.dc9x00:dpu_be@80000`) on the same CPU.
+For example, context 1 sequence 27714 signaled
+28 µs after entry and 4 µs before exit on CPU 0.
+The other 11 matched signals ran in `dpu_kthread0`
+outside a recorded IRQ handler, with task-context
+flags. This identifies two execution contexts for
+the observed fence signals. The trace contains no
+DPU frame-start marker or status bits, so the IRQ
+bracket does not identify the asserted status bit.
 
 After this stock Android session, take and verify a fresh
 guarded nine-partition NV backup before the next Linux
