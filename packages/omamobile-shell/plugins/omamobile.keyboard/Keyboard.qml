@@ -202,7 +202,18 @@ Item {
     shownByHand = KeyboardModel.shownByHandAfter(shownByHand, oskOpen)
     checkHome()
   }
-  onHomeOnScreenChanged: checkHome()
+  // Any keyboard still up as the home screen comes up goes too
+  // (KeyboardModel.js has why): the application under it may have kept its
+  // text field.
+  property bool wasHome: false
+  onHomeOnScreenChanged: {
+    if (KeyboardModel.hideAsHomeComesUp(wasHome, homeOnScreen, oskOpen)) {
+      console.log("omamobile.keyboard: home screen up, hiding the keyboard")
+      setVisible(false)
+    }
+    wasHome = homeOnScreen
+    checkHome()
+  }
 
   Process {
     id: oskWatch

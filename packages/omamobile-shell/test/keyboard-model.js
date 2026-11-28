@@ -14,7 +14,11 @@ function plugin() {
   p.check = () => { if (M.shouldHide(p.shownByHand, p.oskOpen, p.home)) p.setVisible(false) }
   p.setVisible = (v) => { p.shownByHand = v; p.calls.push(v) }
   p.report = (v) => { p.oskOpen = v; p.shownByHand = M.shownByHandAfter(p.shownByHand, v); p.check() }
-  p.goHome = (h) => { p.home = h; p.check() }
+  p.goHome = (h) => {
+    if (M.hideAsHomeComesUp(p.home, h, p.oskOpen)) p.setVisible(false)
+    p.home = h
+    p.check()
+  }
   return p
 }
 
@@ -41,11 +45,27 @@ test("the order doesn't matter: shown by hand just after home came up", () => {
   assert.deepStrictEqual(p.calls, [true, false])
 })
 
-test("a keyboard squeekboard showed for a text field is left to squeekboard", () => {
+test("a keyboard up for a text field is put away too as the home screen comes up", () => {
   const p = plugin()
-  p.report(true)              // a field took focus
+  p.report(true)              // a field took focus, and its application keeps it
   p.goHome(true)
+  assert.deepStrictEqual(p.calls, [false])
+})
+
+test("one that comes up on the home screen, for the drawer's search field, stays", () => {
+  const p = plugin()
+  p.goHome(true)
+  p.report(true)
   assert.deepStrictEqual(p.calls, [])
+  p.goHome(true)              // still home: nothing came up
+  assert.deepStrictEqual(p.calls, [])
+})
+
+test("the home screen coming up is the moment: not staying home, not leaving it", () => {
+  assert.strictEqual(M.hideAsHomeComesUp(false, true, true), true)
+  assert.strictEqual(M.hideAsHomeComesUp(true, true, true), false)
+  assert.strictEqual(M.hideAsHomeComesUp(true, false, true), false)
+  assert.strictEqual(M.hideAsHomeComesUp(false, true, false), false)
 })
 
 test("hiding ends 'shown by hand': a later automatic keyboard on home stays", () => {

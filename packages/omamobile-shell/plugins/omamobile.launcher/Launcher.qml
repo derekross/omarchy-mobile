@@ -472,8 +472,8 @@ Item {
 
   // Over an app, where the dock is hidden: a thin bar-coloured strip with a
   // pill, as on iOS. Swipe up on it to go home (the empty workspace, where
-  // the dock is back); swipe up and hold (or a long swipe) for recent apps,
-  // as on Android.
+  // the dock is back); swipe up and hold for recent apps, as on iOS and
+  // Android.
   //
   // It reserves its height (an exclusive zone), as Android's gesture-nav
   // inset does, so windows end above it: with no zone, the pill covered the
@@ -1179,15 +1179,21 @@ Item {
     }
   }
 
-  // Where a home swipe starts. Swipe up and let go: home. Swipe up and hold
-  // still for a moment (or swipe far up): recent apps, while the finger is
-  // still down, as Android's gesture navigation does. Double-tap: show or
-  // hide the on-screen keyboard. Hold still: ask the agent by voice
-  // (omamobile.voice) until the finger lets go. strip names the surface in
-  // the log: "pill" over an app, "keyboard" under the keyboard.
+  // Where a home swipe starts. Swipe up and let go: home, however far the
+  // finger went. Swipe up and hold still for a moment: recent apps, while
+  // the finger is still down, as iOS's and Android's gesture navigation do.
+  // Up to 0.2.133 a swipe further than 120 px opened recent apps too, and an
+  // ordinary swipe is longer than that, so going home took a deliberately
+  // short flick. Double-tap: show or hide the on-screen keyboard. Hold still:
+  // ask the agent by voice (omamobile.voice) until the finger lets go. strip
+  // names the surface in the log: "pill" over an app, "keyboard" under the
+  // keyboard.
   component HomeSwipe: Item {
     id: swipeArea
     property string strip: "pill"
+    // A resting finger still shifts a little: the hold's wait starts again
+    // only when the finger has moved on by more than this.
+    readonly property int holdSlop: 8
     // Items over the strip whose taps are their own: a tap there is never
     // half of a double tap, and a hold there isn't the pill's. None since
     // 0.2.61 (the pill is the whole bar), kept for keys a layout may add.
@@ -1236,21 +1242,22 @@ Item {
       xAxis.enabled: false
       property real swipeY: 0
       property bool recents: false
+      // Where the finger was when the hold's wait last began
+      property real restY: 0
       onActiveTranslationChanged: {
         swipeY = activeTranslation.y
         // Over the open drawer a swipe only closes it: recent apps from
         // there left the drawer half open over the next app.
         if (recents || root.opened) return
-        if (swipeY < -120) {
-          recents = true
+        if (swipeY >= -24) {
           hold.stop()
-          root.showRecents()
-        } else if (swipeY < -24) {
+        } else if (!hold.running || Math.abs(swipeY - restY) > swipeArea.holdSlop) {
+          restY = swipeY
           hold.restart()
         }
       }
       onActiveChanged: {
-        if (active) { swipeY = 0; recents = false; return }
+        if (active) { swipeY = 0; restY = 0; recents = false; return }
         hold.stop()
         console.log("omamobile-home-indicator: swipe", Math.round(swipeY), recents ? "recents" : "", "(" + swipeArea.strip + ")")
         if (!recents && swipeY < -24 && root.opened) {

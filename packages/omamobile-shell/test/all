@@ -226,11 +226,14 @@ if [[ $rc == 77 ]]; then
 elif [[ $rc != 0 ]]; then
   printf '%s\n' "$out" | grep -vE '^(PASS|QDEBUG)' >&2; fail "the home pill under touch (test/pill-touch)"
 else
-  pass "the home pill under touch: a double tap toggles the keyboard, a tap does nothing, swipes go home, the hide key, the reserved strip, the search pill, the hold for voice"
+  pass "the home pill under touch: a double tap toggles the keyboard, a tap does nothing, swipes of any length go home, a swipe held still opens recent apps, the hide key, the reserved strip, the search pill, the hold for voice"
 fi
 grep -c '} else if (!recents && swipeY < -24) root.goHome()' "$l" >/dev/null || fail "a short swipe goes home"
 grep -c 'if (recents || root.opened) return' "$l" >/dev/null || fail "over the drawer a swipe opens no recent apps"
-grep -c 'if (swipeY < -120) {' "$l" >/dev/null || fail "a long swipe opens recent apps"
+# A swipe goes home however long it is; only a finger held still opens recent
+# apps (up to 0.2.133 a swipe past 120 px did too, and an ordinary one is longer).
+grep -c 'swipeY < -120' "$l" >/dev/null && fail "a long swipe goes home, not to recent apps"
+grep -c '} else if (!hold.running || Math.abs(swipeY - restY) > swipeArea.holdSlop) {' "$l" >/dev/null || fail "the hold waits for a finger at rest, whatever small shifts it makes"
 # Drawer: pull down to close, and a pull is not also a tap on an app.
 grep -c 'if (LauncherModel.drawerEndsOpen(root.progress, speed, true)) root.settleTo(true, speed)' "$l" >/dev/null || fail "pulling the drawer down closes it"
 grep -c 'onClicked: if (!root.pullMoved) cell.tapped()' "$l" >/dev/null || fail "a pull doesn't launch the app under it"
@@ -523,19 +526,23 @@ grep -c '"sm.puri.OSK0", "SetVisible", "b", visible ? "true" : "false"' plugins/
 pass "on-screen keyboard watcher and calls"
 
 # A keyboard shown by hand (the pill's double tap) is put away when the home
-# screen comes up; one squeekboard showed for a text field is left alone.
+# screen comes up, and so is any keyboard still up at that moment (its
+# application may have kept its text field).
 k=plugins/omamobile.keyboard/Keyboard.qml
 grep -c 'import "KeyboardModel.js" as KeyboardModel' "$k" >/dev/null || fail "the keyboard plugin imports its model"
 grep -c 'readonly property bool homeOnScreen: KeyboardModel.homeOnScreen(Hyprland.focusedWorkspace)' "$k" >/dev/null || fail "the keyboard plugin follows the home screen"
 grep -c 'if (!KeyboardModel.shouldHide(shownByHand, oskOpen, homeOnScreen)) return' "$k" >/dev/null || fail "the keyboard plugin hides by the model's rule"
-grep -c 'onHomeOnScreenChanged: checkHome()' "$k" >/dev/null && grep -c 'shownByHand = KeyboardModel.shownByHandAfter(shownByHand, oskOpen)' "$k" >/dev/null \
+grep -A8 'onHomeOnScreenChanged: {' "$k" | grep -c 'checkHome()' >/dev/null && grep -c 'shownByHand = KeyboardModel.shownByHandAfter(shownByHand, oskOpen)' "$k" >/dev/null \
   || fail "the rule is checked when the home screen or the keyboard changes"
+grep -A3 'onHomeOnScreenChanged: {' "$k" | grep -c 'if (KeyboardModel.hideAsHomeComesUp(wasHome, homeOnScreen, oskOpen)) {' >/dev/null \
+  && grep -A8 'onHomeOnScreenChanged: {' "$k" | grep -c 'wasHome = homeOnScreen' >/dev/null \
+  || fail "a keyboard still up as the home screen comes up is put away"
 grep -A3 'function setVisible(visible) {' "$k" | grep -c 'shownByHand = visible' >/dev/null || fail "showing by hand is remembered"
 grep -c 'var show = KeyboardModel.toggleTarget(oskOpen, lastRequest, Date.now() - lastRequestAt)' "$k" >/dev/null || fail "a second double tap hides the keyboard, even before the first show is reported"
 if command -v node >/dev/null; then
   node test/keyboard-model.js >/dev/null || { node test/keyboard-model.js; fail "keyboard model"; }
 fi
-pass "a keyboard shown by hand goes away on the home screen"
+pass "a keyboard shown by hand, or still up for an app, goes away as the home screen comes up"
 
 # The keyboard in the Omarchy theme and its action row (Mic, Paste, Emoji,
 # Hide): the stylesheet from a sample theme, the layouts as

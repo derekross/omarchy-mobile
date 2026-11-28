@@ -378,8 +378,9 @@ The home surface, after Omalauncher: one bar along the bottom of the screen.
 * **Home pill (over an app, where the dock is hidden).** A light bar with a
   dark outline, centred in a 44 px bar-coloured strip along the bottom edge
   (`omamobile-home-strip`, bottom layer). Swipe up from anywhere along it to
-  go home; swipe up and hold, or further, for recent apps; double-tap it for
-  the keyboard.
+  go home, however far; swipe up and hold still for recent apps, as on iOS
+  and Android (up to 0.2.133 a swipe past 120 px opened recent apps too, and
+  an ordinary swipe is longer than that); double-tap it for the keyboard.
 
   The strip reserves its height (an exclusive zone), as Android's gesture-nav
   inset does, so windows end above it and nothing of the app is under the
