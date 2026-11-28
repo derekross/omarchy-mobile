@@ -8714,6 +8714,89 @@ dedicated output-0 frame-start leaf. The GIC
 parent and backend handler are shared. No mode
 change, reboot, or flash was used for this check.
 
+###### Mainline route for the DPU frame-start fence
+
+The Grizzly scaffold at `66e7799dfff3` has the
+Malibu SGIA driver and the wrapper → BE → DSI0
+genpd chain. It has no display SGIA or DC9x00
+consumer in the Grizzly tree. The disabled PHY
+node is independent of the DPU interrupt route.
+
+| Mainline component | D1 mapping and prerequisite |
+| --- | --- |
+| Outer level SGIA | `0x0f46e080`, GIC SPI `0xe5` level high. Use the existing `google,malibu-level-sgia` binding and wrapper genpd index 8, MBFS `dpu.v` (`0x08`). |
+| Inner level SGIA | `0x0f46e020`, outer SGIA input 0, same wrapper genpd. Its one-cell interrupt specifier for output-0 frame-start is 4. |
+| DC9x00 output-0 consumer | Resolve the named frame-start IRQ from the inner domain. Hold BE genpd index 9, MBFS `DpuBe.v` (`0x200`), and qualify the BE clock, reset and MMIO path before requesting or unmasking it. Linux assigns the IRQ number at boot. |
+
+The SGIA driver dispatches each pending enabled
+input through its own IRQ domain. For level IRQs
+it relies on the peripheral to clear the source.
+The BE handler must check and acknowledge the
+qualified output-0 frame-start status at the DC,
+using the D1 bit-0 semantics, before returning.
+The existing SGIA probe also pins its runtime PM
+reference while it owns its chained handler.
+Enabling both routers with the current driver
+would keep the wrapper on even with the CRTC idle.
+That conflicts with using the PHY fixture to
+verify reverse release of all three display votes.
+Keep the routers and the DC consumer disabled in
+that fixture. A separate fixture using these genpd
+indices must leave the manual wrapper vote disabled.
+
+The tree's `verisilicon,dc` driver is a separate
+controller implementation. It reads
+`VSDC_TOP_IRQ_ACK` and routes VSYNC through
+`drm_crtc_handle_vblank`; its atomic flush arms a
+generic vblank event. DC9x00 needs its own
+register and interrupt implementation. The
+VeriSilicon name does not qualify the
+existing driver's registers or clock model.
+
+For a real atomic commit, DRM creates the CRTC
+out-fence for `OUT_FENCE_PTR` and attaches it to
+the pending CRTC event. The DC9x00 commit path
+must associate that event with the actual output
+update. The D1 pattern moves ownership from the
+atomic state to a per-CRTC pending slot before
+the hardware trigger. Mainline needs to serialize
+outstanding flips or otherwise tie each interrupt
+to a committed buffer, and prevent stale status
+from satisfying the new event. The frame-start
+ISR then takes and clears that one pending event
+under `drm_device.event_lock` and delivers it once.
+DRM completes the event and signals its attached
+fence, so a second driver-owned fence is unnecessary.
+Delivering the full event also completes the atomic
+commit's `flip_done` for framebuffer cleanup and for
+commits without a userspace out-fence.
+Keep the power and IRQ references valid until
+completion. Mask and synchronize before tearing
+down power or event state, and drain a failed
+pending flip with an error fence on timeout.
+
+TE for generic vblank and frame-start completion
+are separate on D1. If the driver reports
+frame-start as its DRM vblank, it can use the
+vblank helpers once it guarantees the reported
+event is from the new hardware update. If it
+keeps TE for vblank, use the frame-start event
+delivery path with appropriate DRM event metadata
+and a monotonic fence timestamp. The core's
+`drm_crtc_send_vblank_event` uses the latest
+processed vblank timestamp, so blindly calling
+it in the frame-start handler would reuse the TE
+time. A synthetic vblank does not verify scanout.
+
+This mapping leaves DSI0 host and PHY TX reads
+disabled. Initial IRQ-only work can verify router
+binding without a DSI read. Delivery still needs
+a qualified interrupt source.
+A real frame-start fence further requires the
+qualified DC9x00 scanout programming, DMA/IOMMU,
+and an enabled output path. No mainline register
+access, boot or flash was performed.
+
 After this stock Android session, take and verify a fresh
 guarded nine-partition NV backup before the next Linux
 slot B trial. Keep Android off between the rescue and trial.
