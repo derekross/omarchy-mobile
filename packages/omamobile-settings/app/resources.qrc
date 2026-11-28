@@ -8,6 +8,9 @@
     <file>icons/battery.svg</file>
     <file>icons/display.svg</file>
     <file>catalog.json</file>
+    <file>credits.json</file>
+    <file>CreditsPage.qml</file>
+    <file>DisclaimerPage.qml</file>
     <file>icons/system.svg</file>
     <file>SettingsStyle.qml</file>
   <file>SettingsButton.qml</file>

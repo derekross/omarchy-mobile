@@ -2,6 +2,9 @@
 // Copyright (c) 2026 Marsel Nenaj
 #include "backend.h"
 #include "deviceinfocontroller.h"
+#include <QQuickItem>
+#include <QQuickWindow>
+#include <functional>
 #include "actionrunner.h"
 #include "home_guard.h"
 #include <QtTest>
@@ -154,6 +157,12 @@ private slots:
         backend.activate("about");
         QCOMPARE(backend.page(), QString("about"));
         QVERIFY(!backend.searching());
+        backend.search("credits");
+        backend.activate("credits");
+        QCOMPARE(backend.page(), QString("credits"));
+        backend.search("disclaimer");
+        backend.activate("disclaimer");
+        QCOMPARE(backend.page(), QString("disclaimer"));
     }
     void backGoesUpOneLevelAndTheTopLevelGoesHome() {
         QTemporaryDir dir;
@@ -294,6 +303,115 @@ private slots:
         QVERIFY(backend.navigate("about"));
         QTRY_COMPARE(info.info()["model"].toString(), QString("Mobile device"));
 
+    }
+    void creditsFileFormat() {
+        QString why;
+        QCOMPARE(Backend::parseCredits(R"({"people":[{"login":"ab-1"},{"login":"C"}]})", &why).size(), 2);
+        for (const char *bad : {"", "[]", R"({"people":[]})", R"({"people":[{"name":"A"}]})",
+                R"({"people":[{"name":"A","login":"x"}]})", R"({"people":[{"login":"x","email":"a@b.c"}]})",
+                R"({"people":[{"login":"bad login"}]})", R"({"people":[{"login":"x"},{"login":"X"}]})"}) {
+            why.clear();
+            QVERIFY2(Backend::parseCredits(bad, &why).isEmpty(), bad);
+            QVERIFY2(!why.isEmpty(), bad);
+        }
+    }
+    void bundledCreditsAndCreditsPage() {
+        Backend backend;
+        backend.setBackendDir(stubs("off"));
+        backend.setHomeCommand({});
+        const auto people = backend.credits();
+        QVERIFY(people.size() > 5);
+        for (const auto &p : people) {
+            QVERIFY(!p.toMap()["login"].toString().isEmpty());
+            QVERIFY(!p.toMap().contains("name"));
+        }
+        QVERIFY(backend.catalogProblems().isEmpty());
+        QVERIFY(backend.navigate("about"));
+        QVERIFY(backend.navigate("credits"));
+        QCOMPARE(backend.title(), QString("Credits"));
+        backend.back();
+        QCOMPARE(backend.page(), QString("about"));
+        QVERIFY(backend.navigate("disclaimer"));
+        QCOMPARE(backend.title(), QString("Disclaimer"));
+        backend.back();
+        QCOMPARE(backend.page(), QString("about"));
+        // The real window: the Credits page lists everyone, the About page has the row and the disclaimer.
+        DeviceInfoController info(true);
+        QQmlApplicationEngine engine;
+        engine.rootContext()->setContextProperty("backend", &backend);
+        engine.rootContext()->setContextProperty("deviceInfo", &info);
+        engine.load(QUrl("qrc:/Main.qml"));
+        QCOMPARE(engine.rootObjects().size(), 1);
+        auto *window = engine.rootObjects().first();
+        QTRY_VERIFY(window->findChild<QObject *>("creditsRow"));
+        QVERIFY(window->findChild<QObject *>("disclaimer"));
+        {
+            // Two columns, in order, and the kernel alone across both.
+            // Repeater delegates are visual children, not QObject children, so walk the item tree.
+            std::function<QQuickItem *(QQuickItem *, const QString &)> find = [&](QQuickItem *at, const QString &name) -> QQuickItem * {
+                if (at->objectName() == name) return at;
+                for (auto *child : at->childItems()) if (auto *hit = find(child, name)) return hit;
+                return nullptr;
+            };
+            auto *root = qobject_cast<QQuickWindow *>(window)->contentItem();
+            const auto item = [&](const char *key) { return find(root, QString("fact-") + key); };
+            QTRY_VERIFY(item("kernel") && item("kernel")->width() > 0);
+            const char *keys[] = {"manufacturer", "memory", "architecture", "omarchyVersion", "shellVersion", "settingsVersion"};
+            for (int i = 0; i < 6; ++i) {
+                QVERIFY2(item(keys[i]), keys[i]);
+                QCOMPARE(item(keys[i])->x() > 1, i % 2 == 1);
+                if (i > 1) QVERIFY(item(keys[i])->y() > item(keys[i - 2])->y());
+                if (i % 2) QCOMPARE(item(keys[i])->y(), item(keys[i - 1])->y());
+            }
+            QVERIFY(item("kernel")->x() < 1);
+            QVERIFY(item("kernel")->y() > item("shellVersion")->y());
+            QVERIFY(item("kernel")->width() > item("memory")->x() + item("memory")->width() - 2);
+        }
+        QVERIFY(backend.navigate("credits"));
+        QTRY_VERIFY(window->findChild<QObject *>("creditsList"));
+        QCOMPARE(window->findChild<QObject *>("creditsList")->property("count").toInt(), int(people.size()));
+        QVERIFY(window->findChild<QObject *>("creditsList")->property("atYBeginning").toBool());
+        {
+            // The intro is whole and above the list, not clipped in the list's header.
+            auto *intro = window->findChild<QQuickItem *>("creditsIntro");
+            auto *list = window->findChild<QQuickItem *>("creditsList");
+            QVERIFY(intro && list);
+            QTRY_VERIFY(intro->height() > 0 && list->height() > 0);
+            QVERIFY(intro->y() >= 0);
+            QCOMPARE(intro->parentItem(), list->parentItem());
+            QVERIFY(list->y() >= intro->y() + intro->height());
+            QCOMPARE(intro->height(), intro->implicitHeight());
+            QVERIFY(intro->mapToScene(QPointF(0, 0)).y() >= 0);
+            QVERIFY(intro->property("lineCount").toInt() > 1);
+        }
+        QVERIFY(QMetaObject::invokeMethod(window, "goBack"));
+        QCOMPARE(backend.page(), QString("about"));
+        QTRY_VERIFY(window->findChild<QObject *>("creditsRow"));
+        QVERIFY(!window->findChild<QObject *>("creditsList") || !window->findChild<QObject *>("creditsList")->property("visible").toBool());
+        // The About row opens the Disclaimer page; its four sections keep the sourced wording.
+        QVERIFY(QMetaObject::invokeMethod(window->findChild<QObject *>("disclaimer"), "clicked"));
+        QCOMPARE(backend.page(), QString("disclaimer"));
+        QTRY_VERIFY(window->findChild<QObject *>("disclaimerPage"));
+        {
+            std::function<QString(QQuickItem *)> text = [&](QQuickItem *at) {
+                QString all = at->property("text").toString() + "\n";
+                for (auto *child : at->childItems()) all += text(child);
+                return all;
+            };
+            std::function<int(QQuickItem *)> sections = [&](QQuickItem *at) {
+                int n = at->objectName().startsWith("disclaimer-") ? 1 : 0;
+                for (auto *child : at->childItems()) n += sections(child);
+                return n;
+            };
+            auto *root = qobject_cast<QQuickWindow *>(window)->contentItem();
+            QTRY_COMPARE(sections(root), 4);
+            const QString all = text(root);
+            QVERIFY(all.contains("It isn't an official Omarchy or Basecamp product."));
+            QVERIFY(all.contains("On the Pixel 7 Pro the installer writes only slot B"));
+            QVERIFY(all.contains("without warranty of any kind"));
+        }
+        QVERIFY(QMetaObject::invokeMethod(window, "goBack"));
+        QCOMPARE(backend.page(), QString("about"));
     }
 private:
     // Stand-ins for backends/charge.sh, so no test reads the backend installed on the host: "on" answers like a

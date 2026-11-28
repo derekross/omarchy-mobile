@@ -45,6 +45,20 @@ leaves a search, then goes up one page. At the top level Escape shows the home
 screen through the shell's `omamobile-home` and Settings stays open; it used to
 close the app. Without that command nothing happens.
 
+The About page shows the device facts in two columns (the kernel version on a
+line of its own), a Credits row, a Disclaimer row and a one-line note. The
+Disclaimer page (`app/DisclaimerPage.qml`) states the project's status, that
+support differs per phone (docs/DEVICES.md), what installing erases, and the MIT
+licence's no-warranty line; each part restates LICENSE, README.md,
+docs/INSTALL.md or docs/DEVICES.md, so change it there first. Credits opens a
+page listing the people who work on Omamobile by GitHub login only (no names,
+no emails), read from `app/credits.json`, which `tools/gen-credits.py` writes
+from GitHub's contributor lists of derekross/omamobile and the family's other
+repositories (`FAMILY_REPOS` in the script) and the authors of merged pull
+requests to derekross/linux-omamobile. To refresh it, run `tools/gen-credits.py`
+(needs an authenticated `gh`) and commit the file;
+`test/credits.py` checks its format. Credits and Disclaimer are also found by search.
+
 Build with `bin/build`, test with `test/all`, and stage with `install DESTDIR`.
 Checked-in application sources live in `app/`; `src/` remains makepkg’s
 extracted-source directory.

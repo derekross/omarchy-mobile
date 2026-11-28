@@ -6,6 +6,7 @@ build_dir=${OMAMOBILE_SETTINGS_TEST_BUILD_DIR:-"$source_dir/build/tests"}
 "$source_dir/bin/build"
 "$source_dir/test/display-backend.sh"
 "$source_dir/test/charge-backend.sh"
+python3 -I "$source_dir/test/credits.py"
 mkdir -p "$build_dir"
 fixture=$(mktemp -d)
 trap 'rm -rf -- "$fixture"' EXIT HUP INT TERM

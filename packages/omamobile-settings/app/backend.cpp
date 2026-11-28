@@ -132,6 +132,33 @@ void Backend::activate(const QString &id) {
         if (row["id"].toString() == id) { navigate(row["page"].toString()); return; }
     }
 }
+QVariantList Backend::parseCredits(const QByteArray &json, QString *problem) {
+    const auto fail = [problem](const QString &why) { if (problem) *problem = why; return QVariantList(); };
+    QJsonParseError error;
+    const auto doc = QJsonDocument::fromJson(json, &error);
+    if (error.error != QJsonParseError::NoError || !doc.isObject()) return fail("not a JSON object");
+    const auto people = doc.object()["people"];
+    if (!people.isArray() || people.toArray().isEmpty()) return fail("people must be a non-empty array");
+    static const QRegularExpression loginPattern("^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$");
+    QVariantList out;
+    QSet<QString> seen;
+    for (const auto &value : people.toArray()) {
+        const auto person = value.toObject();
+        for (auto key = person.begin(); key != person.end(); ++key)
+            if (key.key() != "login") return fail("unknown key " + key.key());
+        const auto login = person["login"].toString();
+        if (!loginPattern.match(login).hasMatch()) return fail("bad login");
+        if (seen.contains(login.toLower())) return fail("duplicate login");
+        seen.insert(login.toLower());
+        out.append(QVariantMap{{"login", login}});
+    }
+    return out;
+}
+QVariantList Backend::credits() const {
+    QFile file(":/credits.json");
+    if (!file.open(QIODevice::ReadOnly)) return {};
+    return parseCredits(file.read(1 << 20));
+}
 QStringList Backend::catalogProblems() const {
     QStringList problems;
     if (!m_catalog.contains("root")) problems.append("Missing root page");
