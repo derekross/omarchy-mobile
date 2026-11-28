@@ -54,6 +54,40 @@ peripheral, no panel node and the wrong touch controller (S6SY761).
 [tree72]: https://gitlab.postmarketos.org/soc/qualcomm-sm8250/linux
 [tree]: https://gitlab.com/sm8250-mainline/linux
 
+## 2026-11-28: building the boot image from the repository
+
+The boot image no longer needs hand steps:
+
+```
+tools/build-kebab-kernel                                   # OUT=out/kebab/kernel
+DEVICE=kebab KERNEL_OUT=out/kebab/kernel \
+  SPLASH_BGRA_GZ=<frame> bin/omamobile initramfs           # see the splash note below
+KERNEL_OUT=out/kebab/kernel tools/build-kebab-images       # images/boot.img
+```
+
+- `tools/build-kebab-kernel` lays its output out as a kernel build
+  directory: `include/config/kernel.release`,
+  `arch/arm64/boot/Image.gz`, the DTB under `arch/arm64/boot/dts/qcom/`,
+  and `modules-<release>.tar.zst` packed as `bin/omamobile modules` packs
+  it, which `tools/build-rootfs` takes as `KERNEL_OUT`.
+- `INITRAMFS_MODULES` is gone from `device.conf`: the 7.2.0 kernel builds
+  the USB gadget in, so the initramfs carries no modules.
+- `tools/build-kebab-images` packs header v2 (DTB section at 0x01f00000,
+  gzip kernel) from `device.conf`'s offsets and `CMDLINE` with the pinned
+  `mkbootimg.py`, fetching only it (and the module it imports) from
+  `tools/toolchain.lock` and checking both SHA-256s.
+- **The splash frame:** `bin/omamobile initramfs` renders it itself on a
+  host with Omarchy's Plymouth theme and ImageMagick; elsewhere pass
+  `SPLASH_BGRA_GZ`, rendered with the same command from
+  `usr/share/plymouth/themes/omarchy/logo.png` in the published
+  `omarchy-settings` package. Rendered both ways (on the phone, and from
+  the package on the build host) the frame is byte-identical.
+
+The image built this way (`7.2.0-omamobile-push1-00084-g3c5440e9dd3c`,
+initramfs from `bin/omamobile initramfs` with only the builder's one SSH
+key) was `fastboot boot`ed: no failed units, Hyprland once, audio on the
+HiFi profile.
+
 ## 2026-11-28: the phone's own firmware, installed at boot
 
 `omamobile-device-kebab` 0.1.5 adds `omamobile-kebab-firmware` (a script

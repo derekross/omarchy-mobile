@@ -29,7 +29,7 @@ docker run --rm \
     export DEBIAN_FRONTEND=noninteractive
     apt-get update -qq
     apt-get install -y -qq --no-install-recommends build-essential bc bison flex git ca-certificates \
-      libssl-dev libelf-dev libdw-dev lz4 xz-utils kmod cpio rsync python3 perl >/dev/null
+      libssl-dev libelf-dev libdw-dev lz4 zstd xz-utils kmod cpio rsync python3 perl >/dev/null
     if [ ! -d /src/linux/.git ]; then
       git init -q /src/linux
       git -C /src/linux remote add gh https://github.com/torvalds/linux.git
@@ -62,12 +62,23 @@ docker run --rm \
       [ "$got" = "$want" ] || echo "CHANGED: $o=$want is $o=$got"
     done | tee /obj/dropped-options.txt
     make ARCH=arm64 O=/obj -j"$JOBS" Image.gz qcom/sm8250-oneplus-kebab.dtb modules
-    cp /obj/arch/arm64/boot/Image.gz /out/
-    cp /obj/arch/arm64/boot/dts/qcom/sm8250-oneplus-kebab.dtb /out/
+    # OUT is laid out as a kernel build directory (KERNEL_OUT) for
+    # bin/omamobile initramfs, tools/build-kebab-images and tools/build-rootfs:
+    # the release, Image.gz, the DTB and modules-<release>.tar.zst
+    rel=$(make -s ARCH=arm64 O=/obj kernelrelease)
+    mkdir -p /out/include/config /out/arch/arm64/boot/dts/qcom
+    echo "$rel" > /out/include/config/kernel.release
+    echo "$rel" > /out/kernelrelease
+    cp /obj/arch/arm64/boot/Image.gz /out/arch/arm64/boot/
+    cp /obj/arch/arm64/boot/dts/qcom/sm8250-oneplus-kebab.dtb /out/arch/arm64/boot/dts/qcom/
     cp /obj/.config /out/config
     cp /obj/dropped-options.txt /out/
-    rm -rf /out/modroot
+    rm -rf /out/modroot "/out/modules-$rel.tar.zst"
     make ARCH=arm64 O=/obj INSTALL_MOD_PATH=/out/modroot INSTALL_MOD_STRIP=1 modules_install >/dev/null
-    make -s ARCH=arm64 O=/obj kernelrelease > /out/kernelrelease
+    rm -f "/out/modroot/lib/modules/$rel/build" "/out/modroot/lib/modules/$rel/source"
+    # as bin/omamobile modules packs it: paths relative to /usr/lib/modules
+    tar -C /out/modroot/lib/modules --owner=0 --group=0 --numeric-owner -cf - "$rel" |
+      zstd -q -19 -T0 -o "/out/modules-$rel.tar.zst"
+    rm -rf /out/modroot
     ls -lh /out
   '
