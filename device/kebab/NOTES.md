@@ -170,7 +170,7 @@ probes fine (`spa-acp-tool`: "Profile HiFi supported"); a clean restart of
 the PipeWire units, and the next normal boot, chose HiFi. Seen twice today;
 to watch on a fresh install's first boot.
 
-## 2026-11-28: sensors and auto-rotate (`fastboot boot` of `boot_b`'s image with the new DTB, Arch root on `userdata`)
+## 2026-11-28: sensors and auto-rotate (`boot_b`, Arch root on `userdata`)
 
 Accelerometer, proximity and magnetometer work through the sensor DSP
 (SLPI) and SSC; Omamobile's auto-rotate turns the screen and touch with the
@@ -229,8 +229,10 @@ the driver, 17 per boot.
   magnetometer reads but is uncalibrated. Each rotation shows a short
   flash; no modeset (every commit is a page flip) and no dark frame in a
   60 fps recording of the lock screen, so not explained yet.
-- **Still open:** `boot_b` is the old image until flashed; the light
-  sensor; the rotation flash.
+- **`boot_b`** now holds that image (the splash image with only the new
+  DTB; sha256 `5f6605ea…`, flashed 2026-11-28). A normal boot from it:
+  the same result, no failed units.
+- **Still open:** the light sensor; the rotation flash.
 
 ## 2026-11-28: boot splash (`boot_b`)
 
