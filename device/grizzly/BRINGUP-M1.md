@@ -8797,6 +8797,50 @@ qualified DC9x00 scanout programming, DMA/IOMMU,
 and an enabled output path. No mainline register
 access, boot or flash was performed.
 
+###### Offline DC9x00 frame-start IRQ scaffold
+
+The [kernel branch at `700a6187f630`](https://github.com/adrienlacombe/linux-omarchy-mobile/commit/700a6187f630c81bc48ce200f4dee3b495609faa)
+adds the display SGIA pair with
+the existing level-SGIA binding and a DC9x00 node
+that names input 4 as `frame-start`. Both SGIAs
+use wrapper genpd 8 and the DC uses BE genpd 9.
+All three nodes are disabled in the default DTB.
+
+The opt-in `CONFIG_DRM_GOOGLE_MALIBU_DC9X00` driver
+resolves the named IRQ and reserves it with
+`IRQF_NO_AUTOEN`. It has no path to enable the IRQ.
+Its placeholder handler returns `IRQ_NONE` and
+has no register accesses. The scaffold cannot
+register a CRTC or signal a fence. The existing
+DSI0 PHY guard remains in effect and the DTB still
+has no DSI0 host node.
+
+The ARM64 Image linked with the new driver.
+The driver object and Grizzly DTB built with
+`W=1`. DTB inspection confirmed the route,
+power domains, and disabled statuses. An
+offline overlay check enabled only the three
+new nodes. Strict checkpatch passed on each
+source diff. The binding YAML parsed. Full
+schema validation was unavailable in the
+offline builder.
+
+For a future attended slot B binding check, put
+only `dpu_sgia`, `dpu_be_sgia` and `dc9x00` in a
+separate opt-in overlay and select the new driver.
+Use the normal genpd provider and leave the
+manual display vote diagnostics off. The expected
+result is the SGIA chain binding and a message
+that the named frame-start IRQ is reserved and
+masked, with no IRQ delivery test or DC MMIO. Stop
+on a supplier, power-domain or IRQ request error.
+The SGIA driver keeps the wrapper powered while
+bound, so the existing PHY vote-release fixture
+keeps its separate overlay. Leave any binding
+trial for a fresh verified NV backup, the timed
+return, and an explicit stock A recovery plan.
+Runtime SGIA binding remains untested.
+
 After this stock Android session, take and verify a fresh
 guarded nine-partition NV backup before the next Linux
 slot B trial. Keep Android off between the rescue and trial.
