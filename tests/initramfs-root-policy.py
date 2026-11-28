@@ -155,10 +155,16 @@ mount() { echo mount >> "$LOG"; return 1; }
     script = script.replace('/proc/cmdline', str(p / 'cmdline'))
     script = script.replace('/etc/omamobile-root-label', str(p / 'absent-label'))
     script = script.replace('/etc/omamobile-root-mode', str(p / 'absent-mode'))
+    waitfile.write_text('5\n')
+    script = script.replace('/etc/omamobile-userdata-wait', str(waitfile))
     # A legacy unlabelled root retains repair/growth/mount ordering, even if
     # repair returns 4. Tightening that policy requires the descriptor opt-in.
+    # With a wait packed and userdata there at once, the init neither sleeps
+    # nor runs the guard's extra pass.
     spies = '''
 say() { :; }
+sleep() { echo slept >> "$LOG"; }
+ufs_ro_pass() { echo pass >> "$LOG"; }
 dumpe2fs() { echo UNEXPECTED_HEADER; return 1; }
 mkdir() { :; }
 e2fsck() { echo fsck >> "$LOG"; return 4; }
@@ -170,4 +176,4 @@ mount() { echo mount >> "$LOG"; return 1; }
                             env={**os.environ, 'LOG': str(log)}, capture_output=True, text=True)
     assert result.returncode == 1 and not result.stdout
     assert log.read_text().splitlines() == ['fsck', 'grow', 'mount']
-    print('ok - unlabelled legacy roots retain their existing handover path')
+    print('ok - unlabelled legacy roots retain their existing handover path, with no wait or extra pass')
