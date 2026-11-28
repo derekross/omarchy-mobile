@@ -178,6 +178,21 @@ function batteryLow(percent, charging) {
   return percent >= 0 && percent <= 10 && charging !== true
 }
 
+// A device's camera-hole insets from bar-cutout.json ({"left": n,
+// "right": n}, logical px). Anything unreadable or not a positive number is
+// left out, so the bar keeps its stock inset on that side.
+function parseCutout(text) {
+  var v
+  try { v = JSON.parse(String(text || "")) } catch (e) { return {} }
+  var out = {}
+  if (!v || typeof v !== "object") return out
+  ;["left", "right"].forEach(function(side) {
+    var n = Number(v[side])
+    if (typeof v[side] === "number" && isFinite(n) && n > 0) out[side] = n
+  })
+  return out
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
     findDevice: findDevice, connectedNetwork: connectedNetwork, wifiIcon: wifiIcon, networkIcon: networkIcon,
@@ -185,6 +200,7 @@ if (typeof module !== "undefined") {
     callChip: callChip, elapsed: elapsed, batteryIcon: batteryIcon,
     batteryStyle: batteryStyle, iconShown: iconShown, boltGlyph: boltGlyph, batteryLow: batteryLow,
     BATTERY_STYLES: BATTERY_STYLES, STATUS_ICONS: STATUS_ICONS,
-    stampOf: stampOf, parseStamp: parseStamp, unreadCount: unreadCount, unreadStored: unreadStored
+    stampOf: stampOf, parseStamp: parseStamp, unreadCount: unreadCount, unreadStored: unreadStored,
+    parseCutout: parseCutout
   }
 }

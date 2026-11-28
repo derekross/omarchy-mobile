@@ -345,6 +345,8 @@ qs=plugins/omamobile.quicksettings/QuickSettings.qml
 grep -cF '"else qs ipc -p \"$1\" call notifications dismissAll; qs ipc -p \"$1\" call notifications clear; fi; exit 0"' "$qs" >/dev/null || fail "Clear all dismisses the toasts, then clears the history"
 grep -cF 'Quickshell.execDetached(["omarchy-menu", "summon", "root"])' "$qs" >/dev/null || fail "the gear opens Omarchy's root menu"
 grep -cF '"/.local/state/omarchy/notifications"' "$qs" >/dev/null || fail "the shade reads Omarchy's notification files"
+grep -cF 'anchors.leftMargin: root.insetLeft' plugins/omamobile.bar/Bar.qml >/dev/null || fail "the clock keeps clear of a corner camera hole (bar.cutoutLeft, bar-cutout.json)"
+grep -cF 'return Math.max(Style.spacing.huge, isFinite(value) ? value : 0)' plugins/omamobile.bar/Bar.qml >/dev/null || fail "a cutout inset never goes below the stock inset"
 grep -cF '"/.local/state/omarchy/notifications/history"' plugins/omamobile.bar/Bar.qml >/dev/null || fail "the bar counts Omarchy's notification history"
 # The count sits beside the clock, not in the right-hand row: that row grows
 # leftwards with every glyph and its first item ended under the camera cutout.
