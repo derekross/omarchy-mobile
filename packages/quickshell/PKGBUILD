@@ -1,0 +1,100 @@
+# SPDX-License-Identifier: 0BSD
+#
+# Omamobile build of Quickshell, the toolkit Omarchy's shell runs on.
+#
+# Derived from Omarchy's quickshell PKGBUILD, 0.3.2.r7.g2b4501a-13
+# (https://github.com/omacom/omarchy-pkgs, pkgbuilds/quickshell at
+# a1ec4fcf3da6), with its load_qtquick_611.patch and hook unchanged.
+# Omamobile changes:
+#  - 0001-pipewire-object-errors-are-not-fatal.patch and
+#    0002-pipewire-skip-binding-during-registry-teardown.patch, the open
+#    upstream pull requests quickshell-mirror/quickshell#1478 and #1460 for
+#    quickshell-mirror/quickshell#1468: an error on one PipeWire object (a
+#    Bluetooth sink whose transport failed) tore the whole registry down, and
+#    the teardown re-entered QML, which bound nodes through the null registry:
+#    SIGSEGV. On a Pixel 9a the shell crashed six times in three days, each
+#    time seconds after "spa.bluez5: Failure in Bluetooth audio transport",
+#    and a crash under the lock screen left the session locked with nothing
+#    drawn (#990). Drop both once upstream releases a fix.
+#  - pkgrel 13.1: above Omarchy's 13, and [omamobile] comes before [omarchy].
+pkgname=quickshell
+pkgver=0.3.2.r7.g2b4501a
+pkgrel=13.1
+pkgdesc='Flexible toolkit for making desktop shells with QtQuick'
+arch=(aarch64)
+url='https://github.com/quickshell-mirror/quickshell'
+license=(LGPL-3.0-only)
+depends=(
+  cpptrace
+  glibc
+  hicolor-icon-theme
+  jemalloc
+  libdrm
+  libgcc
+  libglvnd
+  libpipewire
+  libstdc++
+  libxcb
+  mesa
+  pam
+  polkit
+  qt6-base
+  qt6-declarative
+  qt6-svg
+  qt6-wayland
+  wayland
+)
+makedepends=(
+  cli11
+  cmake
+  git
+  ninja
+  qt6-shadertools
+  spirv-tools
+  vulkan-headers
+  wayland-protocols
+)
+provides=("$pkgname")
+conflicts=(quickshell-git)
+# master past v0.3.2; the upstream watch writes the tag's commit here when
+# the next release lands.
+_commit=2b4501a282689792b62e94f3fb30d8f512324fe6
+_archive="$pkgname"
+source=("$_archive::git+$url.git#commit=$_commit"
+        load_qtquick_611.patch
+        quickshell-check.hook
+        0001-pipewire-object-errors-are-not-fatal.patch
+        0002-pipewire-skip-binding-during-registry-teardown.patch)
+sha256sums=('SKIP'
+            '23b65d205d825f11a1cd8501acbc6e50250d09a6ce607e2ff8b3cf5d438bd0ce'
+            '8543e21aeaaa5441b73a679160e7601a957f16c433e8d6bd9257e80bd0e94083'
+            '4232479a83ab2afd956e1643ca5188b798efdc56f34710887f4f9764df9d174c'
+            '8d7fc1f5b59d2a96b53d9c850e9a2948385445f711b70c7308c0ee1bfaf21aed')
+
+prepare() {
+  cd "$_archive"
+  patch -Np1 --fuzz=0 -i "$srcdir/load_qtquick_611.patch"
+  # A Bluetooth audio device's error no longer tears the PipeWire registry
+  # down (quickshell-mirror#1478), and a teardown can't bind through a null
+  # registry (quickshell-mirror#1460): the SIGSEGV of quickshell-mirror#1468.
+  patch -Np1 --fuzz=0 -i "$srcdir/0001-pipewire-object-errors-are-not-fatal.patch"
+  patch -Np1 --fuzz=0 -i "$srcdir/0002-pipewire-skip-binding-during-registry-teardown.patch"
+}
+
+build() {
+  cd "$_archive"
+  cmake -G Ninja -B build -W no-dev \
+    -D CMAKE_BUILD_TYPE=RelWithDebInfo \
+    -D DISTRIBUTOR='Omarchy' \
+    -D CRASH_REPORTER=Off \
+    -D CMAKE_INSTALL_PREFIX=/usr \
+    -D INSTALL_QML_PREFIX=lib/qt6/qml
+  cmake --build build
+}
+
+package() {
+  install -Dm644 quickshell-check.hook -t "$pkgdir/usr/share/libalpm/hooks"
+  cd "$_archive"
+  DESTDIR="$pkgdir" cmake --install build
+  install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+}

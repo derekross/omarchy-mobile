@@ -71,7 +71,7 @@ cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 ROOT=$PWD
 source tools/lib/alarm.sh
 
-SLOW=(mesa hyprland libcamera)
+SLOW=(mesa hyprland quickshell libcamera)
 # Packed from a staged kernel build: built only when named (see above)
 NAMED_ONLY=(linux-omamobile)
 repo=out/repo/aarch64
@@ -104,13 +104,14 @@ done
 
 # Default order: dependencies of our own packages first (check() of a later
 # package can then install an earlier one from the repository being built).
-# Mesa, Hyprland and libcamera come right after the keyring: Hyprland reaches
-# most of the others through omarchy (omamobile-omarchy, omamobile-shell),
-# and omacam needs libcamera. Built last, a rebuild for a library's new
+# Mesa, Hyprland, quickshell and libcamera come right after the keyring:
+# Hyprland reaches most of the others through omarchy (omamobile-omarchy,
+# omamobile-shell), Omarchy's shell runs on quickshell, which needs Mesa, and
+# omacam needs libcamera. Built last, a rebuild for a library's new
 # soname came too late: the packages before it installed the old build from
 # out/repo, which no longer resolved, and the run stopped before reaching it
 # (hyprgraphics 0.7.0, 2026-11-27, #1124).
-ORDER=(omamobile-keyring mesa hyprland libcamera libfprint neard omacam omamobile-apps omamobile-device-cheetah omamobile-device-felix omamobile-device-lynx omamobile-device-raven omamobile-device-panther omamobile-audio
+ORDER=(omamobile-keyring mesa hyprland quickshell libcamera libfprint neard omacam omamobile-apps omamobile-device-cheetah omamobile-device-felix omamobile-device-lynx omamobile-device-raven omamobile-device-panther omamobile-audio
        omamobile-sensors omamobile-gnss omamobile-fingerprint omamobile-mirror omamobile-omarchy omamobile-owl-widgets omamobile-shell
        omamobile-modem omamobile-modem-sit omamobile-mmd omamobile-speaker-tuning omamobile-waydroid
        omamobile-firstboot omamobile-boot-update linux-omamobile)
