@@ -3,7 +3,8 @@
 # Patch 0034 against the real omarchy-hyprland-session-lock-stranded
 # (OMARCHY_PKG_ROOT, an extracted omarchy package), with real processes: a
 # lock is stranded when the only other quickshell processes are the caller's
-# own crash processes (its children, one a zombie) or Voxtype's overlay, and undetermined
+# own crash processes (its children, one a zombie), a zombie of another
+# process, or Voxtype's overlay, and undetermined
 # while another shell runs. pgrep is a fake that lists only this test's
 # processes, so the shell running this test isn't counted.
 set -euo pipefail
@@ -43,6 +44,12 @@ wait_comm "$child" qs
 sleep 0.5
 zombie=$(ps -o pid=,stat= --ppid "$own" | awk '$2 ~ /^Z/ {print $1}')
 [[ -n $zombie ]] || fail "a zombie child for the test"
+# A zombie whose parent is some other process, so only the zombie rule
+# skips it, not the descendant rule
+bash -c '"$1" & exec sleep 60' _ "$t/procs/qs-dead" & foreign=$!; pids+=("$foreign")
+sleep 0.5
+foreign_zombie=$(ps -o pid=,stat= --ppid "$foreign" | awk '$2 ~ /^Z/ {print $1}')
+[[ -n $foreign_zombie ]] || fail "a zombie of another process for the test"
 # Voxtype's overlay, and another live shell
 "$t/procs/qs" -p /usr/share/voxtype/quickshell & voxtype=$!; pids+=("$voxtype")
 "$t/procs/qs" -p /usr/share/omarchy/shell & other=$!; pids+=("$other")
@@ -53,7 +60,9 @@ list "$own"
 [[ $(LOCKED=0 run "$own") == 1 ]] || fail "unlocked: 1"
 list "$own" "$child" "$zombie"
 [[ $(run "$own") == 0 ]] || fail "the shell's own crash processes are no other locker"
-list "$own" "$child" "$zombie" "$voxtype"
+list "$own" "$foreign_zombie"
+[[ $(run "$own") == 0 ]] || fail "a zombie of another process is no other locker"
+list "$own" "$child" "$zombie" "$foreign_zombie" "$voxtype"
 [[ $(run "$own") == 0 ]] || fail "Voxtype's overlay is no other locker"
 list "$own" "$child" "$zombie" "$voxtype" "$other"
 [[ $(run "$own") == 2 ]] || fail "another live shell leaves it undetermined"
