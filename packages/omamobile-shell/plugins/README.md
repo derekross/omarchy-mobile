@@ -95,6 +95,7 @@ Settings live on the `bar` object in `shell.json`:
 | `statusIcons` | all shown | `{"bluetooth","wifi","cell","dnd","unread"}`: `false` hides one (Wi-Fi covers Ethernet too) |
 | `quickSettings` | `"omamobile.quicksettings"` | Plugin id the bar opens |
 | `cardsOnTap` | `false` | A tap on an item opens its card (below); a pull opens quick settings |
+| `cutoutLeft`, `cutoutRight` | the device's, else the stock inset | Logical px kept clear at each end of the strip for a camera hole in a corner. A device package sets its phone's in `/usr/share/omamobile/shell/bar-cutout.json` (`{"left": 56}`); never less than the stock inset |
 
 The charging bolt has no setting: while charging it shows in every battery
 style. Low battery (10 % and under, not charging) takes the urgent colour.

@@ -71,6 +71,25 @@ Item {
   readonly property bool showUnread: StatusModel.iconShown(barConfig, "unread")
   readonly property string quickSettingsId: String(setting("quickSettings", "omamobile.quicksettings"))
 
+  // A camera hole in a corner of the panel (OnePlus 8T: top left) sits where
+  // the clock or the battery would. bar.cutoutLeft and bar.cutoutRight keep
+  // that many logical px clear at each end of the strip; a device package
+  // sets its phone's in /usr/share/omamobile/shell/bar-cutout.json
+  // ({"left": n, "right": n}) and shell.json wins over it. Never less than
+  // the stock inset.
+  property var deviceCutout: ({})
+  FileView {
+    path: (Quickshell.env("OMAMOBILE_SHELL_SHARE") || "/usr/share/omamobile/shell") + "/bar-cutout.json"
+    printErrors: false
+    onLoaded: root.deviceCutout = StatusModel.parseCutout(text())
+  }
+  function cutout(name, side) {
+    var value = Number(setting(name, deviceCutout[side]))
+    return Math.max(Style.spacing.huge, isFinite(value) ? value : 0)
+  }
+  readonly property real insetLeft: cutout("cutoutLeft", "left")
+  readonly property real insetRight: cutout("cutoutRight", "right")
+
   // A full bar may read the notification service's do-not-disturb state
   // through the host's narrow proxy.
   readonly property var notifications: shell && typeof shell.firstPartyServiceFor === "function"
@@ -343,8 +362,8 @@ Item {
       Item {
         z: 1
         anchors.fill: parent
-        anchors.leftMargin: Style.spacing.huge
-        anchors.rightMargin: Style.spacing.huge
+        anchors.leftMargin: root.insetLeft
+        anchors.rightMargin: root.insetRight
 
         Text {
           id: clockText
