@@ -1,0 +1,13 @@
+// SPDX-License-Identifier: MIT
+// The Settings app's Security & privacy page: the active local user may start omamobile-firewall@on.service and
+// omamobile-firewall@off.service, which run "/usr/lib/omamobile-settings/firewall on|off" as root, after proving they
+// are the owner: both directions ask for the admin PIN through the shell's polkit prompt (kept for polkit's few
+// minutes), so no other process in the session can switch the firewall on its own. Nothing else is allowed here.
+polkit.addRule(function(action, subject) {
+  if (action.id == "org.freedesktop.systemd1.manage-units" &&
+      subject.local && subject.active &&
+      /^omamobile-firewall@(on|off)\.service$/.test(action.lookup("unit")) &&
+      action.lookup("verb") == "start") {
+    return polkit.Result.AUTH_ADMIN_KEEP;
+  }
+});

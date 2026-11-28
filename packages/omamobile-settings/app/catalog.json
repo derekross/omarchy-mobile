@@ -18,6 +18,20 @@
         "requires": "charge"
       },
       {
+        "id": "connected",
+        "title": "Connected devices",
+        "detail": "NFC",
+        "icon": "nfc",
+        "page": "connected"
+      },
+      {
+        "id": "security",
+        "title": "Security & privacy",
+        "detail": "Firewall, SSH, microphone and camera access",
+        "icon": "pin",
+        "page": "security"
+      },
+      {
         "id": "about",
         "title": "About this device",
         "detail": "System, software and storage",
@@ -36,6 +50,26 @@
   },
   "battery": {
     "title": "Battery",
+    "rows": []
+  },
+  "security": {
+    "title": "Security & privacy",
+    "rows": []
+  },
+  "connected": {
+    "title": "Connected devices",
+    "rows": [
+      {
+        "id": "nfc",
+        "title": "NFC",
+        "detail": "On or off, and a sound when a tag is found",
+        "icon": "nfc",
+        "page": "nfc"
+      }
+    ]
+  },
+  "nfc": {
+    "title": "NFC",
     "rows": []
   }
 }
