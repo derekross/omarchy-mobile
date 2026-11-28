@@ -1,0 +1,2 @@
+# SPDX-License-Identifier: MIT
+ACTION=="add", SUBSYSTEM=="bluetooth", ENV{DEVTYPE}=="host", KERNEL=="hci[0-9]*", TAG+="systemd", ENV{SYSTEMD_WANTS}+="omamobile-bt-addr@%k.service"

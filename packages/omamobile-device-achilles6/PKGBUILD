@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: MIT
+# Maintainer: TMartin <tmartin.41985@gmail.com>
+pkgname=omamobile-device-achilles6
+pkgver=$(cat "${startdir:-.}/version")
+pkgrel=1
+pkgdesc="Omamobile support for the Lenovo Tab M10 FHD Plus (achilles6): storage guard, USB networking, and Wi-Fi bring-up"
+arch=(aarch64)
+url="https://github.com/derekross/omamobile"
+license=(MIT)
+depends=('bluez-utils' bash systemd omamobile-keyring)
+provides=(omamobile-device)
+conflicts=(omamobile-device)
+backup=(etc/pacman.d/omamobile-mirrorlist etc/NetworkManager/conf.d/zz-omamobile-wifi-powersave.conf)
+install=omamobile-device-achilles6.install
+makedepends=('bluez-utils' gcc)
+
+build() {
+  "$startdir/build" "$srcdir/build"
+}
+
+check() {
+  "$startdir/test/all"
+}
+
+package() {
+  "$startdir/install" "$pkgdir" "$srcdir/build"
+}

@@ -1,0 +1,39 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Program a deterministic locally-administered public BD_ADDR on the MediaTek
+# CONSYS Bluetooth controller (btmtk_wmt reports no programmed device address
+# at boot, leaving hciN unconfigured until public-addr is set).
+set -euo pipefail
+
+hci=${1:?Usage: omamobile-bt-addr hciN}
+index=${hci#hci}
+[[ $index =~ ^[0-9]+$ ]] || { echo "not a controller: $hci" >&2; exit 1; }
+
+# Fixed application UUID so the derived BD_ADDR is stable per device without
+# exposing the private /etc/machine-id over Bluetooth.
+BT_ADDR_APP_ID=a1f5c3e0-9b42-4d7a-8e61-3c2d9f7b4a10
+
+seed=$(systemd-id128 machine-id --app-specific="$BT_ADDR_APP_ID")
+[[ ${#seed} -ge 10 ]] || { echo "omamobile-bt-addr: invalid machine-id derivation" >&2; exit 1; }
+
+# Byte 0 = 0x02 (unicast, locally administered)
+addr=$(printf "02:%s:%s:%s:%s:%s" "${seed:0:2}" "${seed:2:2}" "${seed:4:2}" "${seed:6:2}" "${seed:8:2}" | tr "a-f" "A-F")
+
+for _ in {1..40}; do
+  cfg=$(btmgmt --index "$index" config </dev/null 2>/dev/null || true)
+  if [[ $cfg == *"missing options: public-address"* ]]; then
+    btmgmt --index "$index" public-addr "$addr" </dev/null >/dev/null
+    break
+  fi
+  info=$(btmgmt --index "$index" info </dev/null 2>/dev/null || true)
+  [[ $info == *"current settings:"* ]] && break
+  sleep 0.5
+done
+
+for _ in {1..40}; do
+  info=$(btmgmt --index "$index" info </dev/null 2>/dev/null || true)
+  [[ $info == *"current settings:"* ]] && break
+  sleep 0.25
+done
+
+btmgmt --index "$index" power on </dev/null >/dev/null 2>&1 || true
