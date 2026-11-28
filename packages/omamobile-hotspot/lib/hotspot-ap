@@ -201,8 +201,8 @@ uplinks() { ip -4 route show default 2>/dev/null | awk -v ap="$AP" '/ linkdown/ 
 
 # ---- client isolation (see the header)
 ITABLE=omamobile_hotspot_iso
-# private, shared (100.64/10), loopback, link-local, "this network", multicast, reserved and broadcast (224/3)
-PRIV4='0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 224.0.0.0/3'
+# private, shared (100.64/10), loopback, link-local, "this network", benchmarking (198.18/15), multicast, reserved and broadcast (224/3)
+PRIV4='0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 198.18.0.0/15, 224.0.0.0/3'
 # the whole table in one nft transaction (add+delete+define), so there is never a moment without it; $1 = the phone's
 # on-link subnets for the drop set ('' = none)
 iso_rules() {

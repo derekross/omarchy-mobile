@@ -262,7 +262,7 @@ rm -f "$st"/nft.* "$tmp/run/iso-state"; echo 0 > "$st/upstart"; : > "$st/log"; a
 a=$(grep -n 'nft-applied omamobile_hotspot_iso' "$st/log" | sed -n 1p | cut -d: -f1); b=$(grep -n "connection up uuid $U" "$st/log" | sed -n 1p | cut -d: -f1)
 (( a < b )) || { echo "FAIL: isolation after the profile went up" >&2; exit 1; }
 (( $(grep -c 'nft-applied omamobile_hotspot_iso' "$st/log") >= 2 )) || { echo "FAIL: isolation not reapplied each poll" >&2; exit 1; }
-for r in 'iifname "ap0" ip daddr { 0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 224.0.0.0/3 } drop' \
+for r in 'iifname "ap0" ip daddr { 0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 198.18.0.0/15, 224.0.0.0/3 } drop' \
   'iifname "ap0" oifname "ap0" drop' 'oifname "ap0" ct state != { established, related } drop' 'iifname "ap0" meta nfproto ipv6 drop' \
   'iifname "ap0" udp dport 67 accept' 'th dport 53 fib daddr . iif type local accept' '^    iifname "ap0" drop$' \
   '^add table inet omamobile_hotspot_iso$' '^delete table inet omamobile_hotspot_iso$'; do
@@ -279,7 +279,7 @@ touch "$st/onlink"; rm -f "$st"/nft.*; echo 0 > "$st/upstart"; ap run >/dev/null
 grep -c -- ', 198\.51\.100\.0/24[,} ]' "$I" >/dev/null || { echo "FAIL: the uplink's on-link subnet not in the drop set" >&2; exit 1; }
 grep -c -- ', 203\.0\.113\.9[,} ]' "$I" >/dev/null || { echo "FAIL: an on-link host route not in the drop set" >&2; exit 1; }
 (( $(grep -c -- '10\.42\.0\.0/24' "$I" || true) == 0 )) || { echo "FAIL: ap0's own subnet in the drop set" >&2; exit 1; }
-grep -c -- 'iifname "ap0" ip daddr { 0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 224.0.0.0/3, 198.51.100.0/24, 203.0.113.9 } drop' "$I" >/dev/null || { echo "FAIL: on-link drop set malformed" >&2; exit 1; }
+grep -c -- 'iifname "ap0" ip daddr { 0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 198.18.0.0/15, 224.0.0.0/3, 198.51.100.0/24, 203.0.113.9 } drop' "$I" >/dev/null || { echo "FAIL: on-link drop set malformed" >&2; exit 1; }
 ap down >/dev/null; rm -f "$st/onlink"
 # nft refuses: no hotspot
 touch "$st/nftfail"; : > "$st/log"
