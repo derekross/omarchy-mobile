@@ -8387,6 +8387,51 @@ The saved userspace trace remains usable for Composer
 and FrameTimeline timing. No new resolution switch was
 performed.
 
+###### Stock D1 vblank timing and tracing policy
+
+The saved setup packet and the `traced_probes` SELinux
+audit establish the production access limit for the
+tested tracefs route. `traced_probes` was denied reads
+of tracefs `format` files labeled
+`debugfs_tracing_debug`. The audit lacks the event
+paths. A separate denial for the shell on
+`available_events` rules out using the shell to
+enumerate the same tracefs surface. The saved factory
+extracts do not include the compiled D1 SELinux
+policy, so the audit cannot identify every allowed
+event or rule out an unobserved vendor export.
+
+The existing Composer client provides a second
+timestamp through its userspace `gfx` markers. The
+exact D1 Composer ELF issues a relative one-vblank
+`DRM_IOCTL_WAIT_VBLANK` on the selected CRTC at
+`0xcfaa0`–`0xcfab4`. On success it converts the
+kernel reply's seconds and microseconds to
+nanoseconds at `0xcfd50`–`0xcfd70` and emits
+`hwvsync_timestamp` at `0xcfde0`. The software
+clock fallback skips that marker. Use the payload
+timestamp rather than the later marker emission time.
+`HW_VSYNC_ON` denotes enable state, and
+`dispatch_frame_start_fence` brackets a userspace
+callback passing an fd.
+
+The saved resolution switch has two post-call vblank
+samples within 100 ms, at approximately +4.394
+and +29.409 ms.
+They bracket the new-mode CRTC out-fence at +21.091 ms.
+The worker's traced wait intervals end at +4.410 ms
+and resume at +22.218 ms. The gap in samples does not
+show whether a vblank occurred at the new-mode fence.
+The trace's clock snapshots put MONOTONIC and BOOTTIME
+within a microsecond for this comparison. The driver's
+generic DRM vblank can use a selected TE edge in
+synchronized command mode, or frame-start in the
+other branch. That timestamp carries no DPU status
+bits or join key for the private CRTC event. It
+provides useful vblank timing alongside the fence.
+An independent DPU frame-start correlation on stock A
+remains unverified.
+
 After this stock Android session, take and verify a fresh
 guarded nine-partition NV backup before the next Linux
 slot B trial. Keep Android off between the rescue and trial.
