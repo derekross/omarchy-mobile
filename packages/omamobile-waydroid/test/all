@@ -83,6 +83,60 @@ if CONFIG_FILE=$t/config LXC_CONF=lib/lxc-omamobile.conf RENDER_RDEV=226:129 lib
   fail "check passes when the render node is not the allowed one"
 fi
 grep -q '^MISS  render node 226:129 is not allowed' "$t/binder.log" || fail "check does not name the render node that is not allowed"
+# The render node against a fake /sys (SYSFS_ROOT): the check's verdict and
+# lines, and render_driver() in bin/omamobile-waydroid, which decides whether
+# "omamobile-waydroid mesa" patches the vendor Mesa.
+# fake_sys DIR DRIVER [adreno]: renderD128 (226:128) bound to DRIVER, and with
+# "adreno" an Adreno GPU bound to the adreno platform driver
+fake_sys() {
+  local s=$1 drv=$2
+  mkdir -p "$s/bus/platform/drivers/$drv" "$s/devices/platform/gpu" "$s/class/drm/renderD128"
+  ln -s "../../../bus/platform/drivers/$drv" "$s/devices/platform/gpu/driver"
+  ln -s ../../../devices/platform/gpu "$s/class/drm/renderD128/device"
+  echo 226:128 > "$s/class/drm/renderD128/dev"
+  if [[ ${3:-} == adreno ]]; then
+    mkdir -p "$s/bus/platform/drivers/adreno"
+    ln -s ../../../../devices/platform/gpu "$s/bus/platform/drivers/adreno/2c00000.gpu"
+  fi
+}
+eval "$(sed -n '/^render_driver() {$/,/^}$/p' bin/omamobile-waydroid)"
+declare -F render_driver >/dev/null || fail "render_driver() not found in bin/omamobile-waydroid"
+# render_case NAME DRIVER [adreno] EXPECTED_RC EXPECTED_LINES
+render_case() {
+  local name=$1 drv=$2 adreno= rc=0
+  shift 2
+  [[ $1 == adreno ]] && { adreno=adreno; shift; }
+  local want_rc=$1 want=$2 s=$t/sys-$name
+  fake_sys "$s" "$drv" $adreno
+  SYSFS_ROOT=$s CONFIG_FILE=$t/config LXC_CONF=lib/lxc-omamobile.conf lib/omamobile-waydroid-check > "$t/$name.log" || rc=$?
+  [[ $rc == "$want_rc" ]] || { cat "$t/$name.log"; fail "render $name: exit $rc, expected $want_rc"; }
+  [[ $(grep -E 'render|/dev/dri' "$t/$name.log") == "$want" ]] \
+    || fail "render $name: got
+$(grep -E 'render|/dev/dri' "$t/$name.log")
+expected
+$want"
+  [[ $(SYSFS_ROOT=$s render_driver) == "$drv" ]] || fail "render $name: render_driver() says '$(SYSFS_ROOT=$s render_driver)', not $drv"
+}
+# panthor (the Pixels): the lines and the verdict as before the msm branch
+render_case panthor panthor 0 "ok    /dev/dri/renderD128 is panthor
+ok    render node 226:128 is allowed in lxc-omamobile.conf"
+# msm_dpu (the OnePlus 7T Pro) with an Adreno bound
+render_case msm-adreno msm_dpu adreno 0 "ok    /dev/dri/renderD128 is msm_dpu with an Adreno bound (freedreno)
+ok    render node 226:128 is allowed in lxc-omamobile.conf"
+# msm_dpu with no Adreno bound: the node has no GPU behind it
+render_case msm-no-adreno msm_dpu 1 "MISS  /dev/dri/renderD128 is msm_dpu but no Adreno GPU is bound
+ok    render node 226:128 is allowed in lxc-omamobile.conf"
+# any other driver: refused as before
+render_case other vc4 1 "MISS  no panthor render node (GPU-PLAN.md)"
+# a panthor node is still found behind another driver's first node
+s=$t/sys-second
+fake_sys "$s" msm_dpu adreno
+mkdir -p "$s/bus/platform/drivers/panthor" "$s/devices/platform/mali" "$s/class/drm/renderD129"
+ln -s ../../../bus/platform/drivers/panthor "$s/devices/platform/mali/driver"
+ln -s ../../../devices/platform/mali "$s/class/drm/renderD129/device"
+echo 226:129 > "$s/class/drm/renderD129/dev"
+SYSFS_ROOT=$s CONFIG_FILE=$t/config lib/omamobile-waydroid-check | grep -cx 'ok    /dev/dri/renderD129 is panthor' >/dev/null \
+  || fail "check does not prefer a panthor node over the first one"
 grep -v '^CONFIG_NETFILTER_XTABLES_LEGACY=' "$t/config" > "$t/bad"
 if CONFIG_FILE=$t/bad lib/omamobile-waydroid-check > "$t/bad.log"; then fail "check accepts a config without legacy xtables"; fi
 grep -q '^MISS  NETFILTER_XTABLES_LEGACY=unset' "$t/bad.log" || fail "check does not name the missing option"

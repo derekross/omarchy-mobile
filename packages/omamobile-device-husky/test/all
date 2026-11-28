@@ -306,3 +306,153 @@ ps="$tmp/root/etc/NetworkManager/conf.d/zz-omamobile-wifi-powersave.conf"
 grep -qx '\[connection\]' "$ps" || fail "the Wi-Fi power save file needs a [connection] header"
 grep -qx 'wifi.powersave=3' "$ps" || fail "Wi-Fi power save is on by default (3 = enable)"
 pass "Wi-Fi power save is on by default"
+# The thermal guard: run against a fake sysfs (never the real one).
+bash -n bin/omamobile-husky-thermal || fail "the thermal guard parses"
+for f in usr/bin/omamobile-husky-thermal usr/share/omamobile/thermal.conf \
+         usr/lib/systemd/system/omamobile-husky-thermal.service \
+         usr/share/omamobile/power-profile-off; do
+  [[ -f $tmp/root/$f ]] || fail "install stages $f"
+done
+[[ ! -e $tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-husky-thermal.service ]] \
+  || fail "the thermal guard is not enabled by the package (an owner runs systemctl enable --now)"
+grep -qx 'WantedBy=multi-user.target' vendor/systemd/system/omamobile-husky-thermal.service \
+  || fail "the thermal guard can be enabled"
+unit=vendor/systemd/system/omamobile-husky-thermal.service
+grep -qx 'ExecStopPost=/usr/bin/omamobile-husky-thermal --restore' "$unit" || fail "stopping the guard restores the caps"
+mkdir -p "$tmp/bin"
+
+fs=$tmp/sys
+mkzone() { local z=$fs/class/thermal/thermal_zone$1; mkdir -p "$z"; echo "$2" > "$z/type"; echo 50000 > "$z/temp"; }
+mkzone 0 big-thermal; mkzone 1 mid-thermal; mkzone 2 little-thermal; mkzone 4 max170xx_battery
+echo 99000 > "$fs/class/thermal/thermal_zone4/temp"
+mkcap() { mkdir -p "$1"; echo "$3" > "$1/$2"; echo "$4" > "$1/$5"; }
+cpu=$fs/devices/system/cpu/cpufreq
+mkcap "$cpu/policy0" scaling_max_freq 1328000 "324000 610000 1328000 1704000" scaling_available_frequencies
+mkcap "$cpu/policy4" scaling_max_freq 1945000 "402000 1418000 1945000" scaling_available_frequencies
+mkcap "$cpu/policy8" scaling_max_freq 2294000 "500000 1557000 2049000 2294000" scaling_available_frequencies
+gpu=$fs/class/devfreq/1f000000.gpu
+mkcap "$gpu" max_freq 890000000 "150000000 467000000 890000000" available_frequencies
+# a fake /proc/stat, 8 CPUs: each tick adds 1000 jiffies per CPU, $load
+# percent of them busy (or ${cload[N]} for cpuN), half the rest as iowait
+mkdir -p "$tmp/proc"; declare -a ju=(0 0 0 0 0 0 0 0) ji=(0 0 0 0 0 0 0 0) jw=(0 0 0 0 0 0 0 0) cload=(); load=0
+stat() {
+  local c l
+  { echo "cpu  0 0 0 0 0 0 0 0 0 0"
+    for c in 0 1 2 3 4 5 6 7; do
+      l=${cload[c]:-$load}
+      ju[c]=$((ju[c] + l * 10)); ji[c]=$((ji[c] + (1000 - l * 10) / 2)); jw[c]=$((jw[c] + (1000 - l * 10) / 2))
+      echo "cpu$c ${ju[c]} 0 0 ${ji[c]} ${jw[c]} 0 0 0 0 0"
+    done; } > "$tmp/proc/stat"
+}
+stat
+run() { stat 2>/dev/null || true; OMAMOBILE_PROC=$tmp/proc OMAMOBILE_SYSFS=$fs OMAMOBILE_THERMAL_CONF=${tconf:-thermal.conf} OMAMOBILE_THERMAL_STATE=$tmp/run OMAMOBILE_THERMAL_WAIT=2 bin/omamobile-husky-thermal "$@"; }
+temp() { echo "$1" > "$fs/class/thermal/thermal_zone$2/temp"; }
+caps() { echo "$(<"$cpu/policy0/scaling_max_freq") $(<"$cpu/policy4/scaling_max_freq") $(<"$cpu/policy8/scaling_max_freq") $(<"$gpu/max_freq")"; }
+run --tick 2>/dev/null && fail "missing zones fail the guard"
+mkzone 3 gpu-thermal
+temp 55000 0; run --tick || fail "a tick runs"
+[[ $(caps) == "1704000 1945000 2294000 890000000" ]] || fail "55 C idle steps up to the hardware max: $(caps)"
+temp 57000 2; run --tick; run --tick
+[[ $(caps) == "1704000 1945000 2294000 890000000" ]] || fail "56-57 C holds: $(caps)"
+temp 58000 1; run --tick
+[[ $(caps) == "1328000 1418000 2049000 467000000" ]] || fail "58 C steps every cap down one level: $(caps)"
+temp 60000 3; run --tick
+[[ $(caps) == "324000 402000 500000 150000000" ]] || fail "60 C floors everything: $(caps)"
+load=40; temp 57000 3; temp 56000 1; run --tick
+[[ $(caps) == "324000 402000 500000 150000000" ]] || fail "56-57 C and busy holds the floor: $(caps)"
+load=0
+temp 55000 3; temp 55000 1; temp 54000 2; temp 55000 0; run --tick
+[[ $(caps) == "610000 1418000 1557000 467000000" ]] || fail "55 C idle releases the hold, one level up: $(caps)"
+load=20; temp 57000 0; run --tick
+[[ $(caps) == "1328000 1945000 2049000 890000000" ]] || fail "56-57 C and idle (20 %, under idle_busy) climbs one level: $(caps)"
+load=0
+for _ in 1 2 3 4; do run --tick; done
+[[ $(caps) == "1704000 1945000 2294000 890000000" ]] || fail "the caps climb back to the hardware max: $(caps)"
+# 58-59 C held for more ticks than any device has levels: one level above
+# the lowest, never the lowest (that is only for 60 C)
+temp 58000 0; temp 59000 2; for _ in 1 2 3 4 5 6; do run --tick; done
+[[ $(caps) == "610000 1418000 1557000 467000000" ]] || fail "58-59 C stops one level above the lowest: $(caps)"
+temp 55000 0; temp 54000 2; for _ in 1 2 3 4; do run --tick; done
+[[ $(caps) == "1704000 1945000 2294000 890000000" ]] || fail "back to the hardware max after the 58-59 C hold: $(caps)"
+# a failing zone is skipped, not treated as hot
+mv "$fs/class/thermal/thermal_zone1/temp" "$tmp/z1"; mkdir "$fs/class/thermal/thermal_zone1/temp"
+run --tick 2>"$tmp/err" || fail "a failing zone does not fail the tick"
+[[ $(caps) == "1704000 1945000 2294000 890000000" ]] || fail "a failing zone read does not floor: $(caps)"
+grep -q 'cannot read' "$tmp/err" || fail "a failing zone is logged"
+temp 60000 3; run --tick 2>/dev/null
+[[ $(caps) == "324000 402000 500000 150000000" ]] || fail "the other zones still throttle: $(caps)"
+for z in 0 2 3; do mv "$fs/class/thermal/thermal_zone$z/temp" "$tmp/z$z"; mkdir "$fs/class/thermal/thermal_zone$z/temp"; done
+run --tick 2>/dev/null; [[ $(caps) == "324000 402000 500000 150000000" ]] || fail "all zones failing holds the caps: $(caps)"
+for z in 0 1 2 3; do rmdir "$fs/class/thermal/thermal_zone$z/temp"; mv "$tmp/z$z" "$fs/class/thermal/thermal_zone$z/temp"; temp 50000 $z; done
+for _ in 1 2 3 4 5; do run --tick; done
+run --restore || fail "restore runs"
+[[ $(caps) == "1328000 1945000 2294000 890000000" ]] || fail "stop puts the caps found at start back: $(caps)"
+run --restore || fail "a second restore is a no-op"
+# an unsorted OPP list is sorted once at start
+echo "1945000 402000 1418000" > "$cpu/policy4/scaling_available_frequencies"; temp 58000 0; run --tick
+[[ $(<"$cpu/policy4/scaling_max_freq") == 1418000 ]] || fail "an unsorted OPP list steps to the next lower level"
+run --restore; temp 50000 0
+temp 60000 0; rm "$cpu/policy4/scaling_max_freq"
+run --tick 2>/dev/null && fail "a missing policy fails the guard"
+echo 1945000 > "$cpu/policy4/scaling_max_freq"
+# a missing GPU cap (works as root too, unlike chmod)
+mv "$gpu/max_freq" "$tmp/gpumax"; run --tick 2>/dev/null || fail "a missing GPU cap is left alone"
+mv "$tmp/gpumax" "$gpu/max_freq"; run --restore; temp 50000 0
+for bad in 'step_down=58000\nfloor=60000\nstep_up=58000\ninterval=2' 'step_down=58000\nfloor=60000;rm\nstep_up=56000\ninterval=2' \
+           'step_down=58000\nfloor=60000\nstep_up=56000\ninterval=2\nidle_busy=0' 'step_down=58000\nfloor=60000\nstep_up=56000\ninterval=2\nidle_busy=101'; do
+  printf "$bad\n" > "$tmp/bad.conf"
+  tconf=$tmp/bad.conf run --tick 2>/dev/null && fail "a bad conf is refused: $bad"
+done
+pass "the thermal guard: 55 C climbs to the max, 58 C steps down, 60 C floors, 56-57 C holds, a failing zone is skipped, OPPs sorted, restore puts the caps back"
+# The phone case (2026-11-19 night): started over the old stopgap's caps
+# (1328000/1418000/1557000), idle at 56-57 C with a 58 C reading now and
+# then. Ten minutes (300 ticks) must end at the hardware max, and a reading
+# below 60 C never floors.
+sfs=$fs scpu=$cpu sgpu=$gpu; fs=$tmp/sys-phone; cpu=$fs/devices/system/cpu/cpufreq; gpu=$fs/class/devfreq/1f000000.gpu
+mkzone 0 big-thermal; mkzone 1 mid-thermal; mkzone 2 little-thermal; mkzone 3 gpu-thermal
+mkcap "$cpu/policy0" scaling_max_freq 1328000 "324000 610000 820000 955000 1098000 1197000 1328000 1425000 1548000 1704000" scaling_available_frequencies
+mkcap "$cpu/policy4" scaling_max_freq 1418000 "402000 578000 697000 712000 910000 1065000 1221000 1328000 1418000 1572000 1836000 1945000" scaling_available_frequencies
+mkcap "$cpu/policy8" scaling_max_freq 1557000 "500000 880000 1164000 1298000 1557000 1745000 1885000 2049000 2147000 2294000" scaling_available_frequencies
+mkcap "$gpu" max_freq 890000000 "150000000 302000000 337000000 376000000 419000000 467000000 521000000 580000000 649000000 723000000 807000000 850000000 890000000" available_frequencies
+rm -rf "$tmp/run"; load=5
+for ((t = 0; t < 300; t++)); do
+  temp 55000 0; temp 56000 1; temp 55000 2; temp 56000 3
+  (( t % 3 )) || temp 57000 1
+  (( t % 20 == 7 && t < 290 )) && temp 58000 3
+  run --tick 2>/dev/null || fail "a phone tick runs"
+  [[ $(<"$cpu/policy0/scaling_max_freq") != 324000 ]] || fail "58 C floored policy0 at tick $t: $(caps)"
+done
+[[ $(caps) == "1704000 1945000 2294000 890000000" ]] || fail "idle at 56-57 C over the stopgap's caps ends at the hardware max: $(caps)"
+run --restore || fail "restore runs"
+[[ $(caps) == "1328000 1418000 1557000 890000000" ]] || fail "stop puts the stopgap's caps back: $(caps)"
+rm -rf "$tmp/run"; fs=$sfs cpu=$scpu gpu=$sgpu; load=0
+pass "the phone case: idle at 56-57 C over the stopgap's caps, 58 C now and then, ends at the hardware max and never floors below 60 C"
+
+
+hot() { for z in 0 1 2 3; do temp "$1" $z; done; }
+grep -q 'squeeze\|user.slice\|cpuset' bin/omamobile-husky-thermal thermal.conf && fail "no squeeze in the first version"
+# the loop: TERM runs restore
+rm -rf "$tmp/run"; hot 60000
+OMAMOBILE_PROC=$tmp/proc OMAMOBILE_SYSFS=$fs OMAMOBILE_THERMAL_CONF=thermal.conf OMAMOBILE_THERMAL_STATE=$tmp/run OMAMOBILE_THERMAL_WAIT=2 \
+  exec -a omamobile-husky-thermal bin/omamobile-husky-thermal 2>/dev/null & pid=$!
+trap 'kill "$pid" 2>/dev/null; rm -rf "$tmp"' EXIT
+# wait (bounded) for a finished tick, so TERM lands between ticks
+for _ in $(seq 100); do [[ -e $tmp/run/ticked ]] && break; sleep 0.1; done
+[[ -e $tmp/run/ticked && -s $tmp/run/levels ]] || { kill "$pid" 2>/dev/null || true; fail "the loop ran a tick"; }
+kill -0 "$pid" 2>/dev/null || fail "the loop is still running after a tick"
+kill -TERM "$pid" 2>/dev/null || fail "TERM reaches the loop"
+rc=0; wait "$pid" || rc=$?
+(( rc == 0 )) || fail "TERM exits cleanly (rc $rc)"
+[[ ! -e $tmp/run/orig && ! -e $tmp/run/stat && $(caps) == "1328000 1945000 2294000 890000000" ]] || fail "TERM restores the caps: $(caps)"
+trap 'rm -rf "$tmp"' EXIT
+# a cluster offline at start (its policy cannot be read) is taken on once it reads
+rm -rf "$tmp/run"; hot 58000
+mv "$cpu/policy4/scaling_available_frequencies" "$tmp/opp4"; mkdir "$cpu/policy4/scaling_available_frequencies"
+run --tick 2>/dev/null || fail "a tick runs with a cluster offline"
+[[ $(<"$cpu/policy4/scaling_max_freq") == 1945000 ]] || fail "an offline cluster is left alone"
+rmdir "$cpu/policy4/scaling_available_frequencies"; mv "$tmp/opp4" "$cpu/policy4/scaling_available_frequencies"
+run --tick 2>/dev/null
+[[ $(<"$cpu/policy4/scaling_max_freq") == 1418000 ]] || fail "a cluster that reads again is taken on and stepped: $(<"$cpu/policy4/scaling_max_freq")"
+run --restore; hot 50000
+grep -qx 'Environment=LC_ALL=C' "$unit" || fail "the unit forces LC_ALL=C"
+pass "the thermal loop: not enabled by the package, no squeeze, TERM restores the caps, an offline cluster is taken on when it reads"

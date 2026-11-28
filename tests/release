@@ -21,7 +21,9 @@
 # (INSTALL.md and make-bundle's provision tools allowed, nothing else), and
 # the upload stage running the real tools/release-upload --dry-run on a
 # signed fixture bundle (throwaway key; ssh, rsync and curl are stubs that
-# must not be called).
+# must not be called), and the identifiers stage failing closed on a missing,
+# unreadable, corrupt, truncated or incomplete release initramfs while
+# scanning a valid real-shaped one.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 fail() { printf 'not ok - %s\n' "$1" >&2; [[ ! -f ${t:-}/log ]] || cat "$t/log" >&2; exit 1; }
@@ -781,3 +783,187 @@ echo tampered >> "$R/$B/install"
 if urun --version "$V" upload; then fail "a bundle changed after signing is refused"; fi
 grep -q "release-upload --dry-run refuses" "$t/log" || fail "says release-upload refused the bundle"
 pass "the upload stage runs the real release-upload --dry-run on the bundle and prints the --full --latest upload"
+
+# --- identifiers: fail closed when the release initramfs cannot be unpacked ---
+for tool in mke2fs debugfs zstd lz4 cpio; do
+  command -v "$tool" >/dev/null || { pass "# skip identifiers: no $tool"; exit 0; }
+done
+V2=2026.11.06
+B2=out/bundle/omamobile-testdev-$V2
+rname2=omamobile-rootfs-testdev-$V2-aarch64.img.zst
+mkdir -p "$R/$B2" "$R/out/release/$V2" "$RELEASE_KERNEL_OUT" "$t/id-root/etc"
+printf 'readme\n' > "$R/$B2/README.txt"
+printf 'omamobile\n' > "$t/id-root/etc/hostname"
+mke2fs -q -t ext4 -d "$t/id-root" "$t/id-root.img" 1M >/dev/null 2>&1
+zstd -q -f "$t/id-root.img" -o "$R/out/$rname2"
+printf 'device: testdev\n' > "$R/out/${rname2%.img.zst}.MANIFEST"
+st2=$R/out/release/$V2/state
+ir=$RELEASE_KERNEL_OUT/initramfs.cpio.lz4
+reset_id_state() {
+  printf 'bundle=%s\nrootfs=out/%s\n' "$B2" "$rname2" > "$st2"
+}
+assert_id_fail() {
+  local what=$1 needle=$2
+  reset_id_state
+  if run --version "$V2" identifiers; then fail "$what"; fi
+  grep -Fq "$needle" "$t/log" || fail "$what: expected '$needle'"
+  if grep -Fq "no MAC address, serial, IMEI" "$t/log"; then fail "$what: must not print clean note"; fi
+  if grep -q '^identifiers_done=' "$st2"; then fail "$what: must not record identifiers_done"; fi
+}
+# shellcheck source=../tools/lib/initramfs-pack.sh
+source tools/lib/initramfs-pack.sh
+# Real-shaped archive: /init, nested dirs, absolute and relative symlinks,
+# read-only directories (empty and with a child), and a mode-0000 regular file
+# (mode patched in the newc header after packing, since unprivileged cpio -o
+# cannot open a mode-0000 file on disk).
+mkdir -p "$t/id-valid/etc/sub" "$t/id-valid/etc/ro" "$t/id-valid/var/empty" "$t/id-valid/bin"
+printf '#!/bin/sh\nexec /bin/sh\n' > "$t/id-valid/init"
+chmod 755 "$t/id-valid/init"
+printf 'clean\n' > "$t/id-valid/etc/sub/note.txt"
+ln -s note.txt "$t/id-valid/etc/sub/link"
+ln -s /bin/busybox "$t/id-valid/bin/sh"
+printf 'ro-child\n' > "$t/id-valid/etc/ro/child.txt"
+chmod 0555 "$t/id-valid/var/empty" "$t/id-valid/etc/ro"
+printf 'zero-mode-clean\n' > "$t/id-valid/etc/zero.txt"
+initramfs_pack "$t/id-valid" "$t/id-valid-raw.cpio.lz4"
+lz4 -dc "$t/id-valid-raw.cpio.lz4" > "$t/id-valid.cpio"
+python3 -I - "$t/id-valid.cpio" "$t/id-junk.cpio" <<'PY'
+import sys
+data = bytearray(open(sys.argv[1], "rb").read())
+pos = 0
+note_pos = None
+while pos + 110 <= len(data):
+    assert data[pos:pos+6] == b"070701"
+    ns = int(data[pos+94:pos+102], 16)
+    fs = int(data[pos+54:pos+62], 16)
+    name = bytes(data[pos+110:pos+110+ns-1])
+    if name in (b"./etc/zero.txt", b"etc/zero.txt"):
+        data[pos+14:pos+22] = b"00008000"
+    elif name in (b"./etc/sub/note.txt", b"etc/sub/note.txt"):
+        note_pos = pos
+    pos = (((pos + 110 + ns + 3) & ~3) + fs + 3) & ~3
+    if name == b"TRAILER!!!":
+        break
+assert note_pos is not None
+open(sys.argv[1], "wb").write(data)
+data[note_pos:note_pos+6] = b"XXXXXX"
+open(sys.argv[2], "wb").write(data)
+PY
+lz4 -l -9 -q -f "$t/id-valid.cpio" "$t/id-valid.cpio.lz4"
+
+rm -f "$ir"
+assert_id_fail "missing initramfs fails identifiers" "missing release initramfs: $ir"
+
+mkdir "$ir"
+assert_id_fail "directory at initramfs path fails identifiers" "unreadable release initramfs: $ir"
+rmdir "$ir"
+
+cp "$t/id-valid.cpio.lz4" "$ir"
+chmod 000 "$ir"
+if ((EUID != 0)) && [[ ! -r $ir ]]; then
+  assert_id_fail "unreadable initramfs fails identifiers" "unreadable release initramfs: $ir"
+fi
+chmod 644 "$ir"
+
+printf 'not an lz4 stream\n' > "$ir"
+assert_id_fail "corrupt initramfs fails identifiers" "could not decompress release initramfs: $ir"
+
+head -c 64 "$t/id-valid.cpio.lz4" > "$ir"
+assert_id_fail "truncated initramfs fails identifiers" "could not decompress release initramfs: $ir"
+
+{ cat "$t/id-valid.cpio.lz4"; printf 'trailing garbage'; } > "$ir"
+assert_id_fail "trailing corruption after valid lz4 fails identifiers" "could not decompress release initramfs: $ir"
+
+printf 'not a cpio archive\n' | lz4 -l -9 -q > "$ir"
+assert_id_fail "corrupt cpio payload fails identifiers" "could not extract release initramfs: $ir"
+grep -Fq "cpio:" "$t/log" || fail "corrupt cpio payload prints cpio diagnostic"
+
+head -c 128 "$t/id-valid.cpio" | lz4 -l -9 -q > "$ir"
+assert_id_fail "truncated cpio payload fails identifiers" "could not extract release initramfs: $ir"
+grep -Fq "cpio:" "$t/log" || fail "truncated cpio payload prints cpio diagnostic"
+
+: | lz4 -l -9 -q > "$ir"
+assert_id_fail "empty lz4 stream fails identifiers" "could not extract release initramfs: $ir"
+
+lz4 -l -9 -q -f "$t/id-junk.cpio" "$ir"
+assert_id_fail "cpio junk-skip warning fails identifiers" "release initramfs $ir extracted with cpio warning or unexpected output"
+grep -Fq "cpio: warning: skipped" "$t/log" || fail "junk-skip case prints cpio warning"
+
+{ cat "$t/id-valid.cpio"; printf 'trailing'; } | lz4 -l -9 -q > "$ir"
+assert_id_fail "trailing bytes after cpio TRAILER fail identifiers" "release initramfs $ir: cpio read "
+grep -Fq "bytes (bytes after the archive's end, or an unpadded stream)" "$t/log" || fail "trailing bytes case explains the size mismatch"
+grep -Eq '^[0-9]+ blocks?$' "$t/log" || fail "trailing bytes case prints cpio block count"
+
+mkdir -p "$t/id-dot"
+initramfs_pack "$t/id-dot" "$ir"
+assert_id_fail "dot-only initramfs fails identifiers" "release initramfs $ir unpacked without /init"
+
+mkdir -p "$t/id-noinit/etc"
+printf 'only config\n' > "$t/id-noinit/etc/only.txt"
+initramfs_pack "$t/id-noinit" "$ir"
+assert_id_fail "no-init initramfs fails identifiers" "release initramfs $ir unpacked without /init"
+
+mkdir -p "$t/id-linkinit"
+ln -s /bin/sh "$t/id-linkinit/init"
+initramfs_pack "$t/id-linkinit" "$ir"
+assert_id_fail "symlink /init fails identifiers" "release initramfs $ir unpacked without /init"
+
+# Valid single-block archive (exercises singular "1 block" cpio output)
+mkdir -p "$t/id-oneblock"
+printf '#!/bin/sh\n' > "$t/id-oneblock/init"
+chmod 755 "$t/id-oneblock/init"
+initramfs_pack "$t/id-oneblock" "$ir"
+reset_id_state
+run --version "$V2" identifiers || fail "valid 1-block initramfs passes identifiers"
+
+cp "$t/id-valid.cpio.lz4" "$ir"
+reset_id_state
+run --version "$V2" identifiers || fail "valid real-shaped initramfs passes identifiers"
+grep -Fq "no MAC address, serial, IMEI" "$t/log" || fail "valid initramfs prints clean note"
+grep -q '^identifiers_done=clean ' "$st2" || fail "valid initramfs records identifiers_done"
+
+# Failed reruns must clear an earlier identifiers_done (even before checking
+# the identifiers file) so verify and tag both refuse, while --dry-run leaves
+# the existing record intact and a fresh release creates no empty state file.
+if run --version 2026.11.07 identifiers; then fail "identifiers before bundle/rootfs fails"; fi
+[[ ! -e $R/out/release/2026.11.07/state ]] || fail "identifiers on a fresh release must not create an empty state file"
+printf 'test_install_done=passed\n' >> "$st2"
+run --dry-run --version "$V2" identifiers || fail "dry-run identifiers succeeds"
+grep -Fq "would list " "$t/log" || fail "dry-run identifiers runs in dry-run mode"
+grep -q '^identifiers_done=clean ' "$st2" || fail "dry-run identifiers must not clear identifiers_done"
+if (RELEASE_IDENTIFIERS=$t/no-such-ids run --version "$V2" identifiers); then fail "rerun with missing identifiers file fails"; fi
+grep -Fq "no $t/no-such-ids" "$t/log" || fail "rerun reports missing identifiers file"
+if grep -q '^identifiers_done=' "$st2"; then fail "rerun with missing identifiers file must clear earlier identifiers_done"; fi
+if run --dry-run --version "$V2" verify; then fail "verify --dry-run refuses after missing-ids rerun"; fi
+grep -Fq "stage identifiers has not passed" "$t/log" || fail "verify --dry-run explains identifiers has not passed after missing-ids rerun"
+# Re-establish clean pass before notes exist, then fail rerun after notes are
+# written (listed identifier in notes): tag must refuse with "stage identifiers
+# has not passed", not slip past its notes-not-yet-scanned check.
+run --version "$V2" identifiers || fail "valid initramfs passes identifiers before notes"
+grep -q '^identifiers_done=clean .*notes not yet scanned' "$st2" || fail "records notes not yet scanned"
+printf 'promote_done=x\nkernel_release=%s\nkernel_tag=kernel-%s\n' "$krel" "$V2" >> "$st2"
+printf '# Omamobile %s\nkernel-%s %s\nserial-ABC123\n' "$V2" "$V2" "$krel" > "$R/docs/release-notes/$V2.md"
+if run --dry-run --version "$V2" tag; then fail "tag refuses notes not yet scanned before rerun"; fi
+grep -Fq "ran before docs/release-notes/$V2.md existed" "$t/log" || fail "tag reports notes not yet scanned"
+if run --version "$V2" identifiers; then fail "identifiers rerun fails on listed identifier in notes"; fi
+grep -Fq "identifiers found (above)" "$t/log" || fail "identifiers rerun reports finding in notes"
+if grep -q '^identifiers_done=' "$st2"; then fail "failed rerun on notes must clear earlier identifiers_done"; fi
+if run --dry-run --version "$V2" tag; then fail "tag --dry-run refuses after failed identifiers rerun"; fi
+grep -Fq "stage identifiers has not passed" "$t/log" || fail "tag --dry-run explains identifiers has not passed"
+rm -f "$R/docs/release-notes/$V2.md"
+
+mkdir -p "$t/id-bad/etc"
+printf '#!/bin/sh\n' > "$t/id-bad/init"
+chmod 755 "$t/id-bad/init"
+printf 'device serial-ABC123 here\n' > "$t/id-bad/etc/id.txt"
+initramfs_pack "$t/id-bad" "$t/id-bad.cpio.lz4"
+cp "$t/id-bad.cpio.lz4" "$ir"
+assert_id_fail "listed identifier in initramfs fails identifiers" "identifiers found (above)"
+grep -Fq "listed identifier: serial-ABC123" "$t/log" || fail "reports listed identifier found in initramfs"
+
+# Appended second cpio archive holding a listed identifier must fail closed
+{ cat "$t/id-valid.cpio"; lz4 -dc "$t/id-bad.cpio.lz4"; } | lz4 -l -9 -q > "$ir"
+assert_id_fail "appended cpio archive fails identifiers" "release initramfs $ir: cpio read "
+grep -Fq "bytes (bytes after the archive's end, or an unpadded stream)" "$t/log" || fail "appended archive case explains the size mismatch"
+grep -Eq '^[0-9]+ blocks?$' "$t/log" || fail "appended archive case prints cpio block count"
+pass "the identifiers stage fails closed on a missing, unreadable, corrupt, truncated, partial or incomplete initramfs, clears stale state on rerun, and scans a valid one"

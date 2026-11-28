@@ -3,6 +3,53 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-1205. An empty flag file a device package ships for another open PR's
+  unit is reviewed with that PR's `Condition*=` line, and the merge order is
+  written both ways.** #946's `power-profile-off` is read only by #1045's
+  `ConditionPathExists=!`; merged first it waits, merged second it leaves
+  husky one boot window with two writers of the same CPU limits. *Check:* `git
+  grep -n '<flag path>' origin/main <each open head>` for every reader, name
+  the default each reader takes without the file, and say in both reviews what
+  each order leaves on the device in between. Extends L-911 and L-639. *From:*
+  #946 with #1045, round 69, 2026-11-26.
+- **L-1204. When a device PR turns a guarded part on in its descriptor, the
+  guard's package is checked in the device package's `depends`, not only in
+  `ROOTFS_PACKAGES`, and the first owners are asked what their image had.**
+  #1005 enabled panther's speaker amplifiers by `DTB_OVERLAYS` and added
+  `omamobile-audio` (whose blacklist keeps the amplifier driver behind speaker
+  protection) only to `ROOTFS_PACKAGES` and `optdepends`, while main's
+  descriptor had no `ROOTFS_PACKAGES`, so no installed Pixel 7 had the guard.
+  *Check:* for each overlay a device PR adds to `DTB_OVERLAYS`, name the
+  module it lets autoload and `git grep -n 'blacklist <module>' origin/main --
+  packages`; the package that ships that line must be in the device package's
+  `depends=`. Extends L-442 and L-1125. *From:* #1005, round 69.
+- **L-1203. A shared default that a module parameter overrides at use time is
+  tested on the reference phone by writing the parameter, not by a kernel
+  push.** #120's whole change is the default of a 0644 `int0_mask` read at
+  every stream start; the 7 Pro kernel already had the code under it, so the
+  PR's behaviour on that phone was one `echo` away, while the review had
+  carried "needs a 7 Pro kernel with this commit" for 28 days. *Check:* when a
+  shared-driver commit changes only a `module_param` default, find where the
+  value is read (`grep -n '<param>'`), confirm the running kernel has the rest
+  of the code (`git merge-base --is-ancestor`), and write the phone test as
+  the parameter write, with the restore value. Extends L-858 and L-840.
+  *From:* kernel #120, round 69.
+- **L-1202. A brcmfmac condition widened from "the 4389 family" is checked
+  against every board's endpoint id, not only the reference phone's.** Kernel
+  #309's "chips on MSI are unchanged" missed the 9a's BCM4383
+  (`pci14e4,4449`), which the family helper doesn't include. *Check:* `git
+  grep -n 'pci14e4' github/omamobile -- arch/arm64/boot/dts/exynos/google/`
+  and map each id through `brcm_hw_ids.h` to the helper the new condition
+  uses. Extends L-464 and L-206. *From:* kernel #309, round 69, 2026-11-26.
+- **L-1201. A charger-driver PR written for one phone is grepped for its board
+  gate before its evidence is read, because the MAX77759 cell binds on four
+  boards, the reference phone first.** Kernel #298's CHGIN debounce and wakeup
+  source are in `max77759_init_irqhandler()` with no table lookup. *Check:*
+  `git grep -n '"maxim,max77759"' github/omamobile -- arch/` for the boards,
+  then for each new handler or PM call, the line that tests the board's data
+  (`chg->info`, the per-board table) above it; none means a reference-phone
+  change under §6.2. Extends L-997 and L-206. *From:* kernel #298, round 69,
+  2026-11-26.
 - **L-1163. An opt-in overlay that adds a node instead of only switching one
   on is read against CONTRIBUTING §6.1, and a reserved-memory node is checked
   for what it moves on every phone that boots the board without the overlay.**
@@ -362,31 +409,3 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   list; additions go to `rootfs/packages.omarchy-skip` or get a line saying
   why not. Extends L-233 and L-584. *From:* #665 with #670 (commit review),
   round 52, 2026-11-11.
-- **L-758. A fix for a base-system requirement that a new upstream version
-  enforces is checked for what delivers it to each phone before the pin
-  moves.** #437 fixed `/run`'s mode in the initramfs, which reaches a phone
-  only with new boot images and a reboot, and only the 7 Pro's device package
-  carries boot files; #670 then moved every phone to Omarchy 4.5, whose sudo
-  migration exits 1 on `/run` 1777 (issue #447). *Check:* for each such
-  requirement, name what delivers the fix to a release-installed phone and to
-  each device without packaged boot files; prefer a fix inside the transaction
-  (tmpfiles.d, the update's preflight). Extends L-500, L-442 and L-415.
-  *From:* #670 with #437 and #673 (commit review), round 52, 2026-11-11.
-- **L-732. A table keyed on the bootloader's scanout size is checked for a second board of that size on the same SoC, open PRs included.** Kernel #181 picks gs201's modes by 1080x2400, which is also the Pixel 7a's size (kernel #202). *Check:* list the panel sizes of every board on the SoC, merged and open, before accepting size as a key. Extends L-464 and L-104. *From:* kernel #181 with kernel #202, round 51, 2026-11-11.
-- **L-731. An opt-in shell feature is checked for the surfaces it maps with the option off.** #612's setting gates the dock tap, but its two full-screen Top-layer windows are `visible: true` on every phone. *Check:* grep the diff for `PanelWindow` and read each `visible:`; with the option off, `hyprctl layers` matches main's. Extends L-608 and L-491. *From:* #612, round 51, 2026-11-11.
-- **L-730. An unchanged open PR is re-read each round against what the base gained under it: new compatibles in its driver's match table, and merged code that touches its open points.** Kernel #232's sleep callbacks bound one SoC until the base gave `pcie-gs201-cp` the Pixel 9a's compatible; #556's "screen state runs on every phone" was a caution until main got the 9a's own start-up "screen on" and a modem unit that can start at boot. Neither diff had changed. *Check:* `git log <old base>..<base> -- <each touched file>`, `git grep -n compatible <base>:<file>`, and grep main for what each open point names. Extends L-423, L-206 and L-608. *From:* kernel #232, #556, round 51, 2026-11-11.
-- **L-705. A switch named after one feature that flips a shared daemon's
-  profile is read for what else the profile governs.** #629's "keyboard
-  haptics: off" set feedbackd's `silent` profile, which drops sound and
-  vibration for every event, and omatel rings calls through feedbackd.
-  *Check:* `git grep -n feedbackd origin/main -- 'packages/*/PKGBUILD'
-  packages/omamobile-shell`, and the app repositories, for the other consumers
-  before accepting a profile change. Extends L-462. *From:* #629, round 50.
-- **L-704. A new file directly under `device/<codename>/` is checked against
-  the names the build tools read by convention.** #565 added
-  `device/bluejay/kernel.config` as the record of one build; `bin/omamobile
-  kernel` merges that file into every non-release build, so its fixed
-  `CONFIG_LOCALVERSION` would have named every Bluejay kernel after the tested
-  one, defeating the helpers' `uname -r` pin. *Check:* `git grep -n
-  'device/\$DEVICE/' bin tools` for the file's name, and grep any fragment for
-  `LOCALVERSION`. Extends L-149 and L-337. *From:* #565, round 50.

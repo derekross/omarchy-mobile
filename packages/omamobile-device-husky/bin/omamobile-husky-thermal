@@ -1,0 +1,228 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Keep husky's SoC cool: cap the CPU clusters (cpufreq scaling_max_freq) and
+# the GPU (devfreq max_freq) one level at a time from the hottest SoC thermal
+# zone, with the hysteresis in /usr/share/omamobile/thermal.conf. Thermal
+# trips are never written. The caps found at start are saved in /run and put
+# back on stop. Between step_up and step_down the caps hold while the CPUs
+# are busy and climb while they are idle (/proc/stat, idle_busy).
+#   omamobile-husky-thermal            run the loop (the unit)
+#   omamobile-husky-thermal --tick     one step
+#   omamobile-husky-thermal --restore  put the saved caps and CPUs back
+set -uo pipefail
+export LC_ALL=C
+conf=${OMAMOBILE_THERMAL_CONF:-/usr/share/omamobile/thermal.conf}
+sys=${OMAMOBILE_SYSFS:-/sys}
+state=${OMAMOBILE_THERMAL_STATE:-/run/omamobile-husky-thermal}
+proc=${OMAMOBILE_PROC:-/proc}
+wait_zones=${OMAMOBILE_THERMAL_WAIT:-60} # half seconds
+log() { echo "omamobile-husky-thermal: $*" >&2; }
+restore() {
+  local path value rc=0
+  rm -f "$state/stat"
+  [[ -f $state/orig ]] || return 0
+  while read -r path value; do
+    [[ $value =~ ^[0-9]+$ ]] || continue
+    # a device that is gone for now keeps the saved caps for a retry
+    [[ -e $path ]] || { log "$path missing, keeping the saved caps"; rc=1; continue; }
+    echo "$value" > "$path" || { log "could not restore $path"; rc=1; }
+  done < "$state/orig"
+  (( rc )) || rm -f "$state/orig" "$state/levels"
+  return $rc
+}
+
+case ${1:-} in
+  --restore) restore; exit ;;
+  ''|--tick) ;;
+  *) log "usage: $0 [--tick | --restore]"; exit 2 ;;
+esac
+
+step_down= floor= step_up= interval= gpu_devfreq= idle_busy=35
+while IFS='=' read -r key value; do
+  case $key in
+    step_down|floor|step_up|interval|gpu_devfreq|idle_busy) printf -v "$key" '%s' "$value" ;;
+  esac
+done < <(grep -v '^[[:space:]]*#' "$conf")
+for v in step_down floor step_up interval idle_busy; do
+  [[ ${!v} =~ ^[0-9]+$ ]] || { log "$v in $conf must be a number"; exit 1; }
+done
+(( step_up < step_down && step_down <= floor && floor <= 95000 && step_up >= 40000 && interval >= 1 )) \
+  || { log "need 40 C <= step_up < step_down <= floor <= 95 C"; exit 1; }
+(( idle_busy >= 1 && idle_busy <= 100 )) || { log "need 1 <= idle_busy <= 100"; exit 1; }
+[[ -z $gpu_devfreq || $gpu_devfreq =~ ^[A-Za-z0-9._-]+$ ]] || { log "bad gpu_devfreq"; exit 1; }
+
+temps=()
+discover() {
+  local z type
+  temps=()
+  for z in "$sys"/class/thermal/thermal_zone*; do
+    [[ -r $z/type ]] && read -r type < "$z/type" || continue
+    case $type in big-thermal|mid-thermal|little-thermal|gpu-thermal) temps+=("$z/temp") ;; esac
+  done
+}
+
+# gs101_acpm_tmu is a module and cpufreq can come late: wait for both.
+for ((i = 0; i < wait_zones; i++)); do
+  discover
+  (( ${#temps[@]} == 4 )) && [[ -e $sys/devices/system/cpu/cpufreq/policy8/scaling_max_freq ]] && break
+  sleep 0.5
+done
+(( ${#temps[@]} == 4 )) || { log "the SoC thermal zones did not appear (found ${#temps[@]} of 4)"; exit 1; }
+
+# Each device: its cap file and its levels, sorted ascending once here.
+caps=() levels=()
+add_dev() {
+  local l
+  l=$(tr -s ' \n' '\n' < "$2" | grep -E '^[0-9]+$' | sort -n | tr '\n' ' ')
+  [[ -n $l ]] || return 1
+  caps+=("$1"); levels+=("$l")
+}
+# A policy whose cores are all offline reads -EBUSY: it is taken on once it
+# reads. policy0 holds cpu0 and must be live.
+inactive=()
+for p in 0 4 8; do
+  d=$sys/devices/system/cpu/cpufreq/policy$p
+  [[ -e $d/scaling_max_freq && -e $d/scaling_available_frequencies ]] || { log "policy$p is missing"; exit 1; }
+  add_dev "$d/scaling_max_freq" "$d/scaling_available_frequencies" 2>/dev/null && continue
+  (( p == 0 )) && { log "policy0 cannot be read"; exit 1; }
+  log "policy$p cannot be read (its cores are offline?), taken on once it reads"; inactive+=("$p")
+done
+pick_up() {
+  local p rest=()
+  for p in "${inactive[@]}"; do
+    d=$sys/devices/system/cpu/cpufreq/policy$p
+    if add_dev "$d/scaling_max_freq" "$d/scaling_available_frequencies" 2>/dev/null; then log "policy$p reads, taken on"
+    else rest+=("$p"); fi
+  done
+  inactive=("${rest[@]}")
+}
+if [[ -n $gpu_devfreq ]]; then
+  g=$sys/class/devfreq/$gpu_devfreq
+  if [[ -f $g/max_freq && -w $g/max_freq && -r $g/available_frequencies ]]; then
+    add_dev "$g/max_freq" "$g/available_frequencies" || { log "no levels in $g"; exit 1; }
+  else log "GPU devfreq $gpu_devfreq not writable, leaving the GPU alone"; fi
+fi
+
+mkdir -p "$state" || { log "cannot create $state"; exit 1; }
+touch "$state/orig" || { log "cannot save caps"; exit 1; }
+# A cap is saved the first time it reads, never twice.
+saved=$(<"$state/orig")
+save_cap() { # file value
+  [[ $'\n'$saved$'\n' == *$'\n'"$1 "* ]] && return 0
+  echo "$1 $2" >> "$state/orig" || { log "cannot save $1"; return 1; }
+  saved+=$'\n'"$1 $2"
+}
+
+# Every log line about a repeating failure is printed once until it clears.
+declare -A said busy
+say() { [[ -n ${said[$1]:-} ]] || log "$2"; said[$1]=1; }
+unsay() { unset 'said[$1]'; }
+
+# The guard's own cap per device, as an index into its levels. It is read
+# from sysfs only the first time; after that sysfs is only compared and
+# written, so a cluster that comes back with the kernel's own value gets the
+# tracked cap again. Kept in /run so --tick and a restart carry it.
+declare -A track
+load_track() {
+  local f v k
+  [[ -f $state/levels ]] || return 0
+  while read -r f v; do
+    for k in "${!caps[@]}"; do [[ ${caps[k]} == "$f" && $v =~ ^[0-9]+$ ]] && track[$k]=$v; done
+  done < "$state/levels"
+}
+load_track
+save_track() {
+  local k
+  for k in "${!track[@]}"; do echo "${caps[k]} ${track[$k]}"; done > "$state/levels" || log "cannot save the tracked caps"
+}
+
+# Percent busy over every CPU since the last tick. Per-CPU counters from
+# /proc/stat are kept in $state/stat so --tick carries them (restore deletes
+# it). iowait counts as idle. -1 until two readings, or when a counter went
+# backwards.
+cpu_busy() {
+  local c u n s idle io irq sirq st total b dt=0 db=0
+  local -A pt pb
+  busy_pct=-1
+  if [[ -f $state/stat ]]; then
+    while read -r c total b; do pt[$c]=$total; pb[$c]=$b; done < "$state/stat"
+  fi
+  local new= bad=0 seen=0
+  while read -r c u n s idle io irq sirq st _; do
+    [[ $c =~ ^cpu([0-9]+)$ ]] || continue
+    total=$((u + n + s + idle + io + irq + sirq + ${st:-0})); b=$((total - idle - io))
+    new+="$c $total $b"$'\n'
+    [[ -n ${pt[$c]:-} ]] || { bad=1; continue; }
+    (( total >= pt[$c] && b >= pb[$c] )) || { bad=1; continue; }
+    dt=$((dt + total - pt[$c])); db=$((db + b - pb[$c])); seen=1
+  done < "$proc/stat" 2>/dev/null
+  printf '%s' "$new" > "$state/stat"
+  (( seen && !bad && dt > 0 )) && busy_pct=$((db * 100 / dt))
+  return 0
+}
+
+failing=
+tick() {
+  local t v hot=0 good=0 bad= rc=0 k i n cur want changed=0
+  local -a lv
+  for t in "${temps[@]}"; do
+    if read -r v < "$t" 2>/dev/null && [[ $v =~ ^-?[0-9]+$ ]]; then
+      (( good++ )); (( v > hot )) && hot=$v
+    else bad+=" $t"; fi
+  done
+  # a zone that fails is skipped; the zones are looked up again so a module
+  # reload recovers. Logged only when the failing set changes.
+  if [[ $bad != "$failing" ]]; then
+    [[ -n $bad ]] && log "cannot read:$bad (skipped)" || log "all SoC zones read again"
+    failing=$bad
+  fi
+  if [[ -n $bad ]] || (( ${#temps[@]} != 4 )); then discover; fi
+  # nothing readable: hold the caps
+  (( good )) || return 0
+  cpu_busy
+  (( ${#inactive[@]} )) && { pick_up; load_track; }
+  for k in "${!caps[@]}"; do
+    read -ra lv <<< "${levels[k]}"
+    n=${#lv[@]}
+    # -EBUSY: the cluster went offline outside this guard. Skip it, quietly
+    # after the first time.
+    if ! read -r cur < "${caps[k]}" 2>/dev/null || [[ ! $cur =~ ^[0-9]+$ ]]; then
+      [[ -n ${busy[$k]:-} ]] || log "${caps[k]} cannot be read (cluster offline?), skipped"
+      busy[$k]=1; continue
+    fi
+    [[ -n ${busy[$k]:-} ]] && { log "${caps[k]} reads again"; unset 'busy[$k]'; }
+    save_cap "${caps[k]}" "$cur" || rc=1
+    if [[ -z ${track[$k]:-} ]]; then
+      # first sight: start from the hardware max, not a cap someone else
+      # left (the old stopgap's); the cap found is still what stop restores
+      track[$k]=$((n - 1)); i=$((n - 1)); changed=1
+    fi
+    i=${track[$k]}
+    # below the floor the lowest level is never reached by stepping; in
+    # the hold band the caps still climb while the CPUs are idle, so a
+    # phone idling at 56-57 C does not stay ratcheted down
+    if (( hot >= floor )); then i=0
+    elif (( hot >= step_down )); then (( i > 1 )) && ((i--))
+    elif (( hot < step_up || (busy_pct >= 0 && busy_pct < idle_busy) )); then (( i < n - 1 )) && ((i++))
+    fi
+    (( i == track[$k] )) || { track[$k]=$i; changed=1; }
+    want=${lv[i]}
+    if (( want != cur )); then
+      if echo "$want" > "${caps[k]}" 2>/dev/null; then unsay "cap$k"
+      else say "cap$k" "could not write ${caps[k]}"; rc=1; fi
+    fi
+  done
+  (( changed )) && save_track
+  return $rc
+}
+
+case ${1:-} in
+  --tick) tick; exit ;;
+esac
+trap 'restore; exit $?' TERM INT
+exec {pause}<> <(:) # a pipe that never has data: read -t on it is a builtin sleep
+while :; do
+  if tick; then unsay tick; else say tick "a tick had a failed write (logged once until a clean tick)"; fi
+  { : > "$state/ticked"; } 2>/dev/null # a tick has finished (the tests wait on it)
+  read -rt "$interval" -u "$pause" _
+done
