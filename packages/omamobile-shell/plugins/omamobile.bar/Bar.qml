@@ -282,11 +282,6 @@ Item {
       shell.summon(quickSettingsId, JSON.stringify({ source: "bar" }))
   }
 
-  function openBluetoothPanel() {
-    if (shell && typeof shell.summon === "function")
-      shell.summon(quickSettingsId, JSON.stringify({ source: "bar", page: "bluetooth" }))
-  }
-
   function toggleQuickSettings() {
     if (shell && typeof shell.toggle === "function")
       shell.toggle(quickSettingsId, JSON.stringify({ source: "bar" }))
@@ -471,10 +466,16 @@ Item {
               text: root.bluetoothConnected ? "󰂱" : "󰂯"
             }
 
-            // With bar.cardsOnTap, a tap opens quick settings' Bluetooth panel
-            // (not Omarchy's card: the phone's panel makes the phone visible
-            // while it is open and shows the code a pairing asks to confirm);
-            // a pull opens quick settings.
+            // Omarchy's bluetooth panel, unseen but for its popup.
+            Loader {
+              id: bluetoothPanel
+              anchors.fill: parent
+              active: root.cardsOnTap
+              source: "file://" + root.omarchyPath + "/shell/plugins/panels/bluetooth/Panel.qml"
+              onLoaded: { item.bar = root; item.opacity = 0 }
+            }
+
+            // With bar.cardsOnTap, a tap opens the card; a pull opens quick settings.
             MouseArea {
               anchors.fill: parent
               anchors.leftMargin: -Style.space(8)
@@ -486,8 +487,8 @@ Item {
               onPositionChanged: function(mouse) {
                 if (!pulled && mouse.y - pressY > Style.space(14)) { pulled = true; root.openQuickSettings() }
               }
-              onClicked: if (!pulled) root.openBluetoothPanel()
-              function triggerPress(button) { root.openBluetoothPanel() }
+              onClicked: if (!pulled && bluetoothPanel.item) bluetoothPanel.item.toggle()
+              function triggerPress(button) { if (bluetoothPanel.item) bluetoothPanel.item.toggle() }
               Component.onCompleted: root.clickTargets = root.clickTargets.concat([this])
               Component.onDestruction: root.clickTargets = root.clickTargets.filter(function(t) { return t !== this }, this)
             }

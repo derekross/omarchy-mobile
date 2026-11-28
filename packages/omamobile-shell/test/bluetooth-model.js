@@ -144,6 +144,8 @@ test("BlueZ errors read as people would say them", () => {
   assert.strictEqual(M.errorMessage("connect", "", ""), "Couldn't connect")
   assert.strictEqual(M.isHarmless("org.bluez.Error.AlreadyExists"), true)
   assert.strictEqual(M.isHarmless("org.bluez.Error.Failed"), false)
+  assert.strictEqual(M.isHarmless("org.bluez.Error.NotConnected"), true)
+  assert.strictEqual(M.errorMessage("disconnect", "org.bluez.Error.Failed", ""), "Couldn't disconnect")
 })
 
 test("helper lines parse, junk doesn't", () => {

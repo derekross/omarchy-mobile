@@ -1,0 +1,52 @@
+# Bluetooth: a disconnect from the bar's Bluetooth panel holds. The panel
+# runs omarchy-bluetooth-device disconnect, which left the device trusted,
+# and BlueZ takes a trusted device's own connection without asking, so
+# AirPods came straight back within a second of the tap and the sound
+# stayed on them. Taking the trust away isn't enough: BlueZ then refuses
+# their audio, but they bring their link back anyway, the panel shows them
+# connected, and the next tap disconnects them again instead of connecting.
+# So disconnect blocks the device, and connect and pair unblock it before
+# they trust and connect as before; two minutes after a disconnect the block
+# lifts by itself, so a device that later starts up (a car) connects again.
+# Forget removes the device, block and all.
+#
+# Against Omarchy 4.5.0 (4.5.0-3).
+diff --git i/bin/omarchy-bluetooth-device w/bin/omarchy-bluetooth-device
+--- i/bin/omarchy-bluetooth-device
++++ w/bin/omarchy-bluetooth-device
+@@ -29,20 +29,35 @@
+   bluetoothctl trust "$address" >/dev/null 2>&1 || true
+ }
+ 
++# A disconnect blocks the device; connecting or pairing again lifts it.
++unblock_device() {
++  bluetoothctl unblock "$address" >/dev/null 2>&1 || true
++}
++
+ case "$action" in
+   pair)
+     power_on
++    unblock_device
+     timeout 20s bluetoothctl pair "$address" >/dev/null 2>&1 || true
+     trust_device
+     timeout 20s bluetoothctl connect "$address" >/dev/null 2>&1 || true
+     ;;
+   connect)
+     power_on
++    unblock_device
+     trust_device
+     timeout 20s bluetoothctl connect "$address" >/dev/null 2>&1 || true
+     ;;
+   disconnect)
++    # Blocked, so the device can't connect straight back. Headphones left
++    # trusted reconnected within a second; untrusted, they still brought
++    # their link back with no audio, and the panel showed them connected.
++    bluetoothctl block "$address" >/dev/null 2>&1 || true
+     timeout 10s bluetoothctl disconnect "$address" >/dev/null 2>&1 || true
++    # Only long enough to stop that reconnect: two minutes on, the block
++    # goes, so the device (a car starting up later) can connect again.
++    systemd-run --user --quiet --collect --on-active=120 \
++      bluetoothctl unblock "$address" >/dev/null 2>&1 || true
+     ;;
+   forget)
+     power_on

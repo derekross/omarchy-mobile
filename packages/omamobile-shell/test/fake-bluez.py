@@ -18,6 +18,8 @@ from gi.repository import GLib
 
 ADAPTER = "/org/bluez/hci0"
 ADAPTER_IFACE = "org.bluez.Adapter1"
+DEVICE = ADAPTER + "/dev_00_11_22_33_44_55"
+DEVICE_IFACE = "org.bluez.Device1"
 PROPS_IFACE = "org.freedesktop.DBus.Properties"
 log_path = sys.argv[1]
 
@@ -86,24 +88,118 @@ class Adapter(dbus.service.Object):
         GLib.timeout_add(300, done)
 
 
+class Rejected(dbus.DBusException):
+    _dbus_error_name = "org.bluez.Error.Rejected"
+
+
+class Device(dbus.service.Object):
+    """One paired, trusted device (a placeholder address), which can be
+    connected and disconnected, and whose own reconnect (Reconnect, a test
+    call) is refused while it is Blocked and asks the default agent to
+    authorize a service, as src/device.c does, while it isn't Trusted. With
+    IncomingPair (a test call) it pairs to us as a car's "add phone" does:
+    unpaired and untrusted, it asks the default agent to confirm a passkey
+    and, on yes, is Paired (a PropertiesChanged signal, as BlueZ sends)."""
+
+    def __init__(self, bus, manager):
+        super().__init__(bus, DEVICE)
+        self.manager = manager
+        self.props = {"Address": "02:00:00:00:00:01", "Paired": dbus.Boolean(True),
+                      "Trusted": dbus.Boolean(True), "Blocked": dbus.Boolean(False),
+                      "Connected": dbus.Boolean(False)}
+
+    @dbus.service.signal(PROPS_IFACE, signature="sa{sv}as")
+    def PropertiesChanged(self, interface, changed, invalidated):
+        pass
+
+    @dbus.service.method(PROPS_IFACE, in_signature="ss", out_signature="v")
+    def Get(self, interface, name):
+        return self.props[name]
+
+    @dbus.service.method(PROPS_IFACE, in_signature="s", out_signature="a{sv}")
+    def GetAll(self, interface):
+        return self.props
+
+    @dbus.service.method(PROPS_IFACE, in_signature="ssv", out_signature="")
+    def Set(self, interface, name, value):
+        log(device_set=name, value=bool(value))
+        self.props[name] = dbus.Boolean(bool(value))
+
+    @dbus.service.method(DEVICE_IFACE, in_signature="", out_signature="")
+    def Connect(self):
+        log(device_call="Connect", trusted=bool(self.props["Trusted"]))
+        self.props["Connected"] = dbus.Boolean(True)
+
+    @dbus.service.method(DEVICE_IFACE, in_signature="", out_signature="")
+    def Disconnect(self):
+        log(device_call="Disconnect", trusted=bool(self.props["Trusted"]))
+        self.props["Connected"] = dbus.Boolean(False)
+
+    @dbus.service.method("org.omamobile.Test", in_signature="", out_signature="")
+    def Reconnect(self):
+        if self.props["Blocked"]:
+            log(reconnect="rejected", why="blocked")
+            return
+        if self.props["Trusted"]:
+            log(reconnect="trusted")
+            return
+        agent = self.manager.agent
+        if not agent:
+            log(reconnect="rejected", why="no agent")
+            return
+        # Asynchronously: the agent asks this process whether the device is
+        # Trusted while it answers.
+        bus = dbus.SystemBus()
+        dbus.Interface(bus.get_object(agent[0], agent[1]), "org.bluez.Agent1").AuthorizeService(
+            dbus.ObjectPath(DEVICE), "0000110b-0000-1000-8000-00805f9b34fb",
+            reply_handler=lambda: log(reconnect="authorized"),
+            error_handler=lambda error: log(reconnect="rejected", why=error.get_dbus_name()))
+
+
+    @dbus.service.method("org.omamobile.Test", in_signature="", out_signature="")
+    def IncomingPair(self):
+        self.props["Paired"] = dbus.Boolean(False)
+        self.props["Trusted"] = dbus.Boolean(False)
+        agent = self.manager.agent
+        if not agent:
+            log(incoming="rejected", why="no agent")
+            return
+
+        def paired():
+            log(incoming="paired")
+            self.props["Paired"] = dbus.Boolean(True)
+            self.PropertiesChanged(DEVICE_IFACE, {"Paired": dbus.Boolean(True)}, [])
+
+        bus = dbus.SystemBus()
+        dbus.Interface(bus.get_object(agent[0], agent[1]), "org.bluez.Agent1").RequestConfirmation(
+            dbus.ObjectPath(DEVICE), dbus.UInt32(123456), reply_handler=paired,
+            error_handler=lambda error: log(incoming="rejected", why=error.get_dbus_name()))
+
+
 class Root(dbus.service.Object):
-    def __init__(self, bus, adapter):
+    def __init__(self, bus, adapter, device=None):
         super().__init__(bus, "/")
         self.adapter = adapter
+        self.device = device
 
     @dbus.service.method("org.freedesktop.DBus.ObjectManager", in_signature="", out_signature="a{oa{sa{sv}}}")
     def GetManagedObjects(self):
-        return {ADAPTER: {ADAPTER_IFACE: self.adapter.props}}
+        objects = {ADAPTER: {ADAPTER_IFACE: self.adapter.props}}
+        if self.device:
+            objects[DEVICE] = {DEVICE_IFACE: self.device.props}
+        return objects
 
 
 class AgentManager(dbus.service.Object):
     def __init__(self, bus, adapter):
         super().__init__(bus, "/org/bluez")
         self.adapter = adapter
+        self.agent = None
 
-    @dbus.service.method("org.bluez.AgentManager1", in_signature="os", out_signature="")
-    def RegisterAgent(self, path, capability):
+    @dbus.service.method("org.bluez.AgentManager1", in_signature="os", out_signature="", sender_keyword="sender")
+    def RegisterAgent(self, path, capability, sender=None):
         log(call="RegisterAgent", capability=str(capability))
+        self.agent = (sender, path)
         self.adapter.agent_bondable(True)
 
     @dbus.service.method("org.bluez.AgentManager1", in_signature="o", out_signature="")
@@ -113,6 +209,7 @@ class AgentManager(dbus.service.Object):
     @dbus.service.method("org.bluez.AgentManager1", in_signature="o", out_signature="")
     def UnregisterAgent(self, path):
         log(call="UnregisterAgent")
+        self.agent = None
         self.adapter.change("Pairable", dbus.Boolean(False))
 
 
@@ -120,8 +217,8 @@ def main():
     dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
     bus = dbus.SystemBus()
     adapter = Adapter(bus)
-    Root(bus, adapter)
-    AgentManager(bus, adapter)
+    manager = AgentManager(bus, adapter)
+    Root(bus, adapter, Device(bus, manager))
     name = dbus.service.BusName("org.bluez", bus)  # noqa: F841 (held for the run)
     log(call="ready")
     GLib.MainLoop().run()

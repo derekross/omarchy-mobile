@@ -252,12 +252,13 @@ function errorMessage(op, name, message) {
   if (/InProgress/.test(error)) return "Already in progress"
   if (/NoReply|Timeout/i.test(error)) return op === "pair" ? "Pairing timed out" : "Connection timed out"
   if (/ConnectionAttemptFailed/.test(error)) return "Couldn't connect. Is it in range?"
+  if (op === "disconnect") return "Couldn't disconnect"
   return op === "pair" ? "Pairing failed" : "Couldn't connect"
 }
 
 // Errors that mean the operation is already done.
 function isHarmless(name) {
-  return /AlreadyExists|AlreadyConnected/.test(String(name || ""))
+  return /AlreadyExists|AlreadyConnected|NotConnected/.test(String(name || ""))
 }
 
 // ---------------------------------------------------------------- agent
