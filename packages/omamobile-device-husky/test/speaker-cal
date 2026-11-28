@@ -118,8 +118,7 @@ cat > "$T/bin/blockdev" <<'FAKE'
 echo "blockdev $*" >> "$FAKE/log"
 case $1 in
   --getro) cat "$FAKE/ro" ;;
-  --setro) echo 1 > "$FAKE/ro" ;;
-  --setrw) echo 0 > "$FAKE/ro" ;;
+  *) exit 99 ;;
 esac
 FAKE
 cat > "$T/bin/dump.f2fs" <<'FAKE'
@@ -492,7 +491,7 @@ rc=0; out=$(run) || rc=$?
 [[ $rc == 1 && $out == *"the storage guard is not in force; not reading it"* ]] || fail "a writable persist is refused: $out"
 ! grep -q 'dump.f2fs\|blockdev --set' "$F/log" || fail "a writable persist is not dumped and its flag is not changed"
 [[ $(<"$F/ro") == 0 && -z $(ls -A "$T/run") && ! -e $st/speaker-cal-started ]] || fail "a refused writable persist leaves nothing behind"
-! grep -q 'CAL_' "$F/log" || fail "a refused writable persist writes nothing to the card"
+! grep -q 'Preload Switch\|CAL_' "$F/log" || fail "a refused writable persist writes nothing to the card"
 pass "persist: writable (no storage guard), mounted, bad or out-of-range records, short or missing file are refused; the read-only flag is never changed"
 
 # 10. check: CAL_SET_STATUS 2 on both passes; 1, or not running, fails; nothing is written
