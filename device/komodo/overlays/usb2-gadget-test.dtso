@@ -1,0 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/* Enable the Komodo Type-C controller described by the kernel board DTS. */
+/dts-v1/;
+/plugin/;
+
+&hsi2c6 {
+	tcpc@25 {
+		status = "okay";
+	};
+};

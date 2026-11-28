@@ -1,0 +1,16 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/* Enable the Komodo GPU nodes described by the kernel board DTS. */
+/dts-v1/;
+/plugin/;
+
+&cmu_g3d {
+	status = "okay";
+};
+
+&komodo_gpu_opp {
+	status = "okay";
+};
+
+&gpu {
+	status = "okay";
+};

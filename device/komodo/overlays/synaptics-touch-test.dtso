@@ -1,0 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/* Enable the Komodo Synaptics touchscreen described by the kernel board DTS. */
+/dts-v1/;
+/plugin/;
+
+&spi20 {
+	touchscreen@0 {
+		status = "okay";
+	};
+};

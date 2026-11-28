@@ -1,0 +1,80 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+set -uo pipefail
+
+state=/var/lib/omamobile
+marker=$state/komodo-gpu-started
+ready=/run/omamobile-komodo-gpu-ready.json
+gpu=/sys/bus/platform/devices/1f000000.gpu
+
+log() {
+  printf 'komodo-gpu: %s\n' "$*" | systemd-cat -t omamobile-komodo-gpu 2>/dev/null \
+    || printf 'komodo-gpu: %s\n' "$*" >&2
+}
+
+case ${1:-} in
+  '') ;;
+  --retry) rm -f "$marker" ;;
+  *) log 'usage: omamobile-komodo-gpu-start [--retry]'; exit 2 ;;
+esac
+
+[[ -e $gpu ]] || { log 'GPU absent from this device tree; skipped'; exit 0; }
+if [[ -e $marker ]]; then
+  log "previous probe stopped at $(cat "$marker" 2>/dev/null); leaving Panthor off. Review this boot's kernel log, then run omamobile-komodo-gpu-start --retry."
+  exit 0
+fi
+[[ -c /dev/watchdog0 ]] || { log 'watchdog0 is missing; refusing an unguarded probe'; exit 1; }
+
+mkdir -p "$state"
+printf '%s %s\n' "$(date -Is)" gpu > "$marker"
+sync -f "$marker" 2>/dev/null || sync
+rm -f "$ready"
+
+# The watchdog resets the phone if the GPU probe wedges the kernel. It feeds
+# for at most 60 seconds; successful or failed probes stop it with the magic
+# close character. The timeout path deliberately omits that character.
+(
+  exec 3>/dev/watchdog0 || exit 1
+  echo $$ > /run/komodo-gpu-watchdog.pid
+  stop() { printf V >&3; exec 3>&-; rm -f /run/komodo-gpu-watchdog.pid; exit 0; }
+  trap stop TERM INT HUP
+  end=$(( $(date +%s) + 60 ))
+  while [[ $(date +%s) -lt $end ]]; do
+    printf k >&3 || exit 1
+    sleep 2 & wait $!
+  done
+) &
+watchdog_pid=$!
+sleep 0.2
+if ! kill -0 "$watchdog_pid" 2>/dev/null; then
+  rm -f "$marker"
+  log 'could not start watchdog feeder; refusing the GPU probe'
+  exit 1
+fi
+
+stop_watchdog() {
+  kill -TERM "$watchdog_pid" 2>/dev/null || true
+  wait "$watchdog_pid" 2>/dev/null || true
+}
+trap stop_watchdog EXIT
+
+if ! modprobe panthor; then
+  rm -f "$marker"
+  log 'modprobe panthor failed; see the kernel log'
+  exit 1
+fi
+
+for _ in $(seq 1 120); do
+  if [[ $(readlink -f "$gpu/driver" 2>/dev/null) == */panthor ]]; then
+    printf '{"gpu":"panthor","by":"omamobile-komodo-gpu-start"}\n' > "$ready"
+    rm -f "$marker"
+    sync -f "$state" 2>/dev/null || sync
+    log 'Panthor bound and the render node is ready'
+    exit 0
+  fi
+  sleep 0.25
+done
+
+rm -f "$marker"
+log 'Panthor did not bind within 30 seconds; see the kernel log'
+exit 1
