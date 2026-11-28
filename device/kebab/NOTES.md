@@ -54,6 +54,14 @@ peripheral, no panel node and the wrong touch controller (S6SY761).
 [tree72]: https://gitlab.postmarketos.org/soc/qualcomm-sm8250/linux
 [tree]: https://gitlab.com/sm8250-mainline/linux
 
+## 2026-11-28: the status bar's clock and the camera hole (`boot_b`)
+
+The 8T's front camera hole is at the top left, under the status bar's
+clock (the bar was laid out for a centred hole). omamobile-shell 0.2.159
+(#1143) adds `bar.cutoutLeft`/`cutoutRight` and a device file;
+`omamobile-device-kebab` 0.1.7 ships `{"left": 56}` (56 logical px, 168
+physical at scale 3), which clears the hole by eye on the phone.
+
 ## 2026-11-28: the bottom speaker under PipeWire (`boot_b`, Arch root on `userdata`)
 
 Through PipeWire only the earpiece played (YouTube in Chromium, `pw-play`):

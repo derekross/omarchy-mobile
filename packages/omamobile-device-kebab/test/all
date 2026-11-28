@@ -26,3 +26,5 @@ grep -q "^Before=omamobile-kebab-display.service" systemd/omamobile-kebab-firmwa
 grep -q "losetup -r" bin/omamobile-kebab-firmware
 grep -q "mount -t vfat -o ro" bin/omamobile-kebab-firmware
 echo ok firmware
+python3 -c 'import json,sys; v=json.load(open("shell/bar-cutout.json")); sys.exit(0 if isinstance(v.get("left"), (int, float)) and v["left"] > 0 else 1)'
+echo ok bar-cutout
