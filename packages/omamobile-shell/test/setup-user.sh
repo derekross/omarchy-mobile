@@ -697,6 +697,53 @@ RUN_HOME=$ha RUN_AUTO_SLEEP=$t/auto-sleep-default run
 [[ ! -e $ha/.local/state/omarchy/toggles/omamobile-sleep ]] || fail "a user who turns auto-sleep off keeps it off"
 pass "auto-sleep: on once where the device says suspend is verified, a user's off kept"
 
+# Power profiles: a source with nothing saved gets Balanced at every login;
+# an owner's saved choice stays. Then Omarchy's own
+# omarchy-powerprofiles-set, when its package is at hand, run on AC with a
+# daemon that offers all three (omamobile-omarchy's fake driver): with no
+# state it picks Performance, after this step Balanced.
+hp=$t/power; mkdir -p "$hp/.config/hypr" "$hp/.local/state/omarchy/done"
+cp "$H"/.config/hypr/*.lua "$hp/.config/hypr/"
+touch "$hp/.local/state/omarchy/done/omamobile-shell-profile"
+RUN_HOME=$hp run
+pps=$hp/.local/state/omarchy/powerprofiles
+[[ $(cat "$pps/ac") == balanced && $(cat "$pps/battery") == balanced ]] || fail "no saved profile: both sources start on Balanced"
+echo power-saver >"$pps/battery"
+RUN_HOME=$hp run
+[[ $(cat "$pps/battery") == power-saver ]] || fail "a profile picked later stays"
+rm "$pps/ac"
+RUN_HOME=$hp run
+[[ $(cat "$pps/ac") == balanced ]] || fail "a source whose choice is gone gets Balanced again at the next login"
+ho=$t/power-owner; mkdir -p "$ho/.config/hypr" "$ho/.local/state/omarchy/done" "$ho/.local/state/omarchy/powerprofiles"
+cp "$H"/.config/hypr/*.lua "$ho/.config/hypr/"
+touch "$ho/.local/state/omarchy/done/omamobile-shell-profile"
+echo performance >"$ho/.local/state/omarchy/powerprofiles/ac"
+RUN_HOME=$ho run
+[[ $(cat "$ho/.local/state/omarchy/powerprofiles/ac") == performance ]] || fail "an owner's saved AC choice is kept"
+[[ $(cat "$ho/.local/state/omarchy/powerprofiles/battery") == balanced ]] || fail "the source with nothing saved starts on Balanced"
+pass "power profiles: a source with nothing saved gets Balanced at every login, an owner's choice kept"
+opkg=${OMARCHY_PKG:-$(ls ~/.cache/omamobile-rootfs/pkg/omarchy-[0-9]*-aarch64.pkg.tar.* 2>/dev/null | grep -v '\.sig$' | sort | tail -1 || true)}
+if [[ -n $opkg ]] && command -v bsdtar >/dev/null &&
+   bsdtar -xf "$opkg" -C "$t" usr/bin/omarchy-powerprofiles-set 2>/dev/null; then
+  P=$t/pp-fakes; mkdir -p "$P"
+  printf '#!/bin/bash\nprintf "power-saver\\nbalanced\\nperformance\\n"\n' >"$P/omarchy-powerprofiles-list"
+  printf '#!/bin/bash\necho "b false"\n' >"$P/busctl" # on AC
+  printf '#!/bin/bash\necho "$*" >>"$HOME/powerprofilesctl"\n' >"$P/powerprofilesctl"
+  printf '#!/bin/bash\nexit 0\n' >"$P/omarchy-shell"
+  chmod +x "$P"/*
+  ppset() { env -i HOME="$1" PATH="$P:/usr/bin:/bin" bash "$t/usr/bin/omarchy-powerprofiles-set" autodetect; }
+  hn=$t/power-none; mkdir -p "$hn"
+  ppset "$hn"; [[ $(cat "$hn/powerprofilesctl") == "set performance" ]] || fail "Omarchy with no state picks Performance on AC: $(cat "$hn/powerprofilesctl")"
+  hs=$t/power-step; mkdir -p "$hs/.config/hypr" "$hs/.local/state/omarchy/done"
+  cp "$H"/.config/hypr/*.lua "$hs/.config/hypr/"
+  touch "$hs/.local/state/omarchy/done/omamobile-shell-profile"
+  RUN_HOME=$hs run
+  ppset "$hs"; [[ $(cat "$hs/powerprofilesctl") == "set balanced" ]] || fail "after the step Omarchy starts on Balanced on AC: $(cat "$hs/powerprofilesctl")"
+  pass "a session that starts on AC: Omarchy's own omarchy-powerprofiles-set picks Balanced after the step, Performance without it"
+else
+  pass "a session that starts on AC, against Omarchy's omarchy-powerprofiles-set # SKIP no omarchy package or bsdtar"
+fi
+
 # Browser setup is optional: a broken helper must not skip later login steps.
 rm "$F/omamobile-browser-setup"
 fake omamobile-browser-setup 'exit 1'

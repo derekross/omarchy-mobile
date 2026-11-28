@@ -4,7 +4,8 @@
 # series after the package transaction; the module-tree cleanup's timer is
 # enabled by the wants link staged here, and Arch's linux-modules-cleanup is
 # held off by a drop-in (lib/modules-cleanup says why). zram/91-omamobile.conf
-# caps Omarchy's swap on zram at half the RAM.
+# caps Omarchy's swap on zram at half the RAM. omamobile-power-profile makes
+# the power card's profiles set the CPU ceilings (lib/power-profile says how).
 #   ./install DESTDIR
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
@@ -17,6 +18,7 @@ for f in lib/update-bin/*; do
 done
 install -Dm755 lib/lock-pam "$d/usr/lib/omamobile-omarchy/lock-pam"
 install -Dm755 lib/modules-cleanup "$d/usr/lib/omamobile-omarchy/modules-cleanup"
+install -Dm755 lib/power-profile "$d/usr/lib/omamobile-omarchy/power-profile"
 u=$d/usr/lib/systemd/system
 install -Dm644 systemd/omamobile-modules-cleanup.service "$u/omamobile-modules-cleanup.service"
 install -Dm644 systemd/omamobile-modules-cleanup.timer "$u/omamobile-modules-cleanup.timer"
@@ -24,6 +26,11 @@ install -Dm644 systemd/linux-modules-cleanup.service.d/10-omamobile.conf \
   "$u/linux-modules-cleanup.service.d/10-omamobile.conf"
 install -d "$u/timers.target.wants"
 ln -sfn ../omamobile-modules-cleanup.timer "$u/timers.target.wants/omamobile-modules-cleanup.timer"
+install -Dm644 systemd/omamobile-power-profile.service "$u/omamobile-power-profile.service"
+install -d "$u/power-profiles-daemon.service.wants"
+ln -sfn ../omamobile-power-profile.service "$u/power-profiles-daemon.service.wants/omamobile-power-profile.service"
+install -Dm644 systemd/power-profiles-daemon.service.d/10-omamobile.conf \
+  "$u/power-profiles-daemon.service.d/10-omamobile.conf"
 for f in patches/*.patch; do
   install -Dm644 "$f" "$d/usr/share/omamobile/omarchy/patches/${f##*/}"
 done

@@ -9,8 +9,8 @@ cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
 pass() { printf 'ok - %s\n' "$1"; }
 
-for f in install omamobile-omarchy.install lib/update-bin/* lib/lock-pam lib/modules-cleanup test/update.sh \
-         test/lock-pam.sh test/lock-glance test/sleep-lock.sh test/launch-shell-env.sh test/modules-cleanup.sh test/zram.sh test/run-mode.sh; do
+for f in install omamobile-omarchy.install lib/update-bin/* lib/lock-pam lib/modules-cleanup lib/power-profile test/update.sh \
+         test/lock-pam.sh test/lock-glance test/sleep-lock.sh test/launch-shell-env.sh test/modules-cleanup.sh test/zram.sh test/run-mode.sh test/power-profile.sh; do
   bash -n "$f" || fail "$f parses"
 done
 for f in bin/omamobile-omarchy-patches bin/omamobile-update test/patches.py; do
@@ -65,6 +65,18 @@ pass "install stages the module cleanup, its timer's wants link and the drop-in 
 bash test/modules-cleanup.sh || fail "modules-cleanup"
 bash test/zram.sh || fail "zram drop-in"
 bash test/run-mode.sh || fail "the /run mode rule"
+[[ -x $t/stage/usr/lib/omamobile-omarchy/power-profile ]] || fail "power-profile staged executable"
+[[ $(readlink "$u/power-profiles-daemon.service.wants/omamobile-power-profile.service") == ../omamobile-power-profile.service ]] \
+  || fail "the power-profile unit starts with the daemon"
+grep -qxF 'ConditionPathExists=!/usr/share/omamobile/power-profile-off' "$u/omamobile-power-profile.service" \
+  || fail "the power-profile unit stays off on a device that ships power-profile-off"
+grep -qxF 'ExecStart=/usr/lib/omamobile-omarchy/power-profile watch' "$u/omamobile-power-profile.service" || fail "the unit follows the profile"
+grep -qxF 'ExecStopPost=/usr/lib/omamobile-omarchy/power-profile restore' "$u/omamobile-power-profile.service" \
+  || fail "the unit gives the top frequency back when it stops"
+grep -qxF 'Environment=POWER_PROFILE_DAEMON_FAKE_DRIVER=1' "$u/power-profiles-daemon.service.d/10-omamobile.conf" \
+  || fail "power-profiles-daemon offers all three profiles"
+pass "install stages the power-profile follower, starts it at boot, and gives the daemon all three profiles"
+bash test/power-profile.sh || fail "power-profile"
 
 # Every patch file says what it is for, before its first diff
 for p in patches/*.patch; do

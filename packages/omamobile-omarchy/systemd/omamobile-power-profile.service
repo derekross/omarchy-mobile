@@ -1,0 +1,20 @@
+[Unit]
+Description=Omamobile: power profiles set the CPU ceilings
+Documentation=https://github.com/derekross/omamobile/issues/1027
+After=power-profiles-daemon.service
+# Started with the daemon, not by multi-user.target: the daemon's own unit is
+# ordered after multi-user.target, so a multi-user want was a cycle and
+# systemd dropped this unit at boot
+BindsTo=power-profiles-daemon.service
+ConditionPathExists=/sys/devices/system/cpu/cpufreq/policy0
+# A device whose thermal guard writes the same limits says so (lib/power-profile)
+ConditionPathExists=!/usr/share/omamobile/power-profile-off
+
+[Service]
+ExecStart=/usr/lib/omamobile-omarchy/power-profile watch
+ExecStopPost=/usr/lib/omamobile-omarchy/power-profile restore
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=power-profiles-daemon.service
