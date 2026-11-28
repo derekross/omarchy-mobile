@@ -10,8 +10,47 @@ This package contains the read-only foundation and one settings page, Display
 (brightness and, where the monitor lists more than one, the refresh rate; the
 refresh rate changes the running session only: turning the phone makes
 auto-rotate apply the monitor's preferred mode again, and a session restart or a
-reload of Hyprland's config does too). The page runs
-`backends/display.sh` through a fixed-argument runner, with no shell string.
+reload of Hyprland's config does too) and the screen lock. The page runs
+`backends/display.sh` and `backends/lock.sh` through a fixed-argument runner,
+with no shell string. When Settings is started from a login outside the
+graphical session (for example over SSH), display.sh finds Hyprland's instance
+signature from `$XDG_RUNTIME_DIR/hypr/*/.socket.sock` (the newest live one) and
+sets the brightness through the user's graphical session (loginctl Display).
+
+"Lock screen after" (30 s, 1, 2, 3 or 5 min) sets `idle.lock` in
+`~/.config/omarchy/shell.json`, the one timer Omarchy's idle service has: the
+phone locks after that long without input and the lock turns the screen off a
+few seconds later, so lock and screen off are the same timer. There is no
+Never: a phone that never locks by itself isn't offered one tap away. A 0 set
+by hand in shell.json still means no idle lock, and the page says so.
+"Lock after 30 minutes while a keyboard is connected" writes 1800 there while
+a Bluetooth or USB keyboard (udev `ID_INPUT_KEYBOARD=1`, bus 0005, or bus 0003
+outside `/devices/virtual/input`, with the letter keys and space, a name, and
+not a known security token or barcode scanner) is connected, and the chosen
+time back when it goes. The user unit
+`omamobile-lock-keyboard.service` follows `udevadm monitor` for input devices
+and runs `lock.sh apply`. It is not enabled by the package: turning the toggle
+on enables and starts it, turning it off stops and disables it (opening the
+page puts the unit in line with a saved choice, e.g. after an upgrade), and when it
+stops `lock.sh restore` writes the chosen time back. The 1800 is only written
+while that unit runs; a failed apply (a broken `shell.json`) is logged once and
+retried on the next input change instead of restarting the unit. After a write
+the running shell is told with `omarchy-shell shell reloadConfig`, as
+Omarchy's `omarchy-shell-config` does; if that fails the page shows an error
+and the reload is tried again on the next change, even one that writes
+nothing. If the watcher cannot be started the toggle goes back to off.
+Stay awake and idle on/off are never touched. The choice lives in
+`~/.config/omamobile/lock.json`, saved (only when it changed) before
+`shell.json` with a flag saying whether the 1800 in force is the keyboard's,
+kept until the chosen time is back in `shell.json`, so a crash at any point
+never turns it into the owner's choice. A value changed in Omarchy's
+own settings is adopted. Nothing is
+written until the user picks something on the page, and nothing at all if the
+user's `shell.json` does not parse. Both files are written under one `flock`.
+Known limits: a USB receiver, dock or KVM that exposes a full keyboard
+interface counts even with no keyboard behind it; a Bluetooth keyboard that
+goes to sleep disconnects, so the timer comes back until it wakes.
+
 A second page, Battery, sets the charge limit (80, 85, 90, 95 or 100 %), only
 on a phone whose device package declares one in
 `/usr/share/omamobile/charge-limit.conf` (a line `supply=NAME`;

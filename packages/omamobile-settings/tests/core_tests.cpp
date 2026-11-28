@@ -12,7 +12,10 @@
 #include <QJsonDocument>
 #include <QSaveFile>
 #include <QQmlApplicationEngine>
+#include <QQmlComponent>
 #include <QQmlContext>
+#include <QSignalSpy>
+#include <memory>
 #include <QTemporaryDir>
 
 class CoreTests : public QObject {
@@ -134,6 +137,65 @@ private slots:
         QVERIFY(page->property("status").toString().startsWith("Stops charging at this level"));
         QMetaObject::invokeMethod(page.get(), "apply", QVariant(QVariantMap{{"available", false}}));
         QCOMPARE(page->property("status").toString(), QString("Settings cannot set a charge limit on this phone."));
+    }
+    void displaySearchFindsTheScreenLock() {
+        Backend backend;
+        backend.setBackendDir(stubs("off"));
+        backend.search("screen lock");
+        QCOMPARE(backend.rows().size(), 1);
+        QCOMPARE(backend.rows().first().toMap()["id"].toString(), QString("display"));
+    }
+    // a backend dir with a stub lock.sh that prints the given line
+    static QString stubBackends(QTemporaryDir &dir, const QByteArray &line) {
+        QFile script(dir.filePath("lock.sh"));
+        if (!script.open(QIODevice::WriteOnly)) return {};
+        script.write("echo '" + line + "'\n");
+        return dir.path();
+    }
+    void runnerKnowsLockAndRejectsOthers() {
+        QTemporaryDir dir;
+        ActionRunner runner;
+        runner.setBackendDir(stubBackends(dir, R"({"lock":60,"keyboardAwake":false,"keyboard":false,"effective":60})"));
+        QSignalSpy done(&runner, &ActionRunner::finished);
+        const int bad = runner.run("nope", {"get"});
+        const int badArg = runner.run("lock", {"set", "lock", "60;x"});
+        const int lock = runner.run("lock", {"get"});
+        QTRY_COMPARE(done.count(), 3);
+        QMap<int, QString> errors;
+        for (const auto &call : done) errors[call.at(2).toInt()] = call.at(1).toMap()["error"].toString();
+        QCOMPARE(errors[bad], QString("unknown action"));
+        QCOMPARE(errors[badArg], QString("bad argument"));
+        QVERIFY(errors[lock].isEmpty());
+        QCOMPARE(done.at(2).at(1).toMap()["lock"].toInt(), 60);
+        // no backend there: an error, not a crash
+        QTemporaryDir empty;
+        runner.setBackendDir(empty.path());
+        runner.run("lock", {"get"});
+        QTRY_COMPARE(done.count(), 4);
+        QVERIFY(!done.at(3).at(1).toMap()["error"].toString().isEmpty());
+    }
+    void displayPageShowsTheLockAnswer() {
+        QTemporaryDir dir;
+        ActionRunner runner;
+        runner.setBackendDir(stubBackends(dir, R"({"error":"stub says no"})"));
+        Backend backend; // outlives the engine: the style singleton reads it until the engine goes
+        backend.setBackendDir(stubs("off"));
+        QQmlEngine engine;
+        engine.rootContext()->setContextProperty("backend", &backend);
+        engine.rootContext()->setContextProperty("actions", &runner);
+        QQmlComponent component(&engine, QUrl("qrc:/DisplayPage.qml"));
+        std::unique_ptr<QObject> page(component.create());
+        QVERIFY2(page, qPrintable(component.errorString()));
+        QCOMPARE(page->property("lockChoices").toList().size(), 5);  // 30 s to 5 min, no Never
+        // the stub backend's error: the lock rows leave "busy" and show it
+        QTRY_VERIFY(!page->property("lockBusy").toBool());
+        QCOMPARE(page->property("lockError").toString(), QString("stub says no"));
+        QMetaObject::invokeMethod(page.get(), "applyLock",
+            QVariant(QVariantMap{{"lock", 0}, {"keyboardAwake", true}, {"keyboard", true}, {"effective", 0}}));
+        QCOMPARE(page->property("lockAfter").toInt(), 0);
+        QVERIFY(page->property("keyboardAwake").toBool());
+        QVERIFY(page->property("keyboard").toBool());
+        QVERIFY(page->property("lockError").toString().isEmpty());
     }
     void searchHasOnlyImplementedRoutesAndBackClearsIt() {
         Backend backend;

@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: MIT
+# Settings > Display > "Lock after 30 minutes while a keyboard is connected": follows keyboards coming and
+# going. Enabled and started by `lock.sh set keyboard on`, stopped and disabled by `off`; not enabled for
+# anyone by the package. The keyboard's 1800 s is only written while this runs; when it stops for any
+# reason the user's chosen timeout is written back (ExecStopPost).
+[Unit]
+Description=Omarchy Mobile: lock after 30 minutes while a keyboard is connected
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+ExecStart=/usr/lib/omamobile-settings/omamobile-lock-keyboard
+ExecStopPost=/usr/bin/bash /usr/lib/omamobile-settings/backends/lock.sh restore
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=graphical-session.target
