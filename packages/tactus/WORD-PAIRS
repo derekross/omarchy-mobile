@@ -1,0 +1,17 @@
+The word pairs (/usr/lib/tactus/share/phosh-osk-stevia/word-pairs.txt)
+
+Which word follows which, and how often, for the 10,000 commonest words:
+counted by tools/tactus-word-pairs.py in Tatoeba's English sentences
+(https://tatoeba.org), from its weekly export of 2026-11-21
+(https://downloads.tatoeba.org/exports/per_language/eng/eng_sentences.tsv.bz2),
+every twentieth sentence left out for the checks. A pair seen fewer than six
+times is not kept. The file holds counts only, no sentence.
+
+Tatoeba's exports carry no version, so the file is kept in the package's
+sources rather than fetched: running the script on a newer export gives
+somewhat different counts.
+
+Licence of the sentences the counts come from: Creative Commons Attribution
+2.0 France (CC BY 2.0 FR), https://creativecommons.org/licenses/by/2.0/fr/,
+by Tatoeba's contributors (https://tatoeba.org). Part of them are also
+CC0 1.0.

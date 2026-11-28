@@ -1,0 +1,3282 @@
+Subject: osk-widget: Tactus's keys, and where in a key a tap landed
+
+Loading a layout stays Stevia's. The geometry, the drawing and the touch
+handling are written anew for a phone keyboard with the look and the manners
+of the keyboards on current phones:
+
+- every measure is in points of a 390 pt wide phone and scales with the
+  widget's width; a keyboard much wider than tall (a phone on its side) has
+  lower keys;
+- the keys are drawn with cairo and pango from tactus-draw (panel, keys,
+  labels, Shift in its three states, Delete, Return), light or dark;
+- under the keys a strip with the emoji key, the microphone and, between
+  them while there is something to paste, the paste key: a tap or a hold,
+  and a press that travels (a swipe that starts on it) is neither;
+- a long press shows the letter's other forms in a bar above the key, and a
+  slide along it picks one;
+- held on the space bar, the keyboard is a trackpad for the cursor
+  (tactus-trackpad): the finger's motion moves it, further the faster it
+  goes, and a finger resting at the left or right side keeps it going;
+- Shift turns itself on where a sentence starts (set_autoshift), and a
+  double tap locks it;
+- each key press is reported with where in the key the finger landed
+  (take_tap), which the autocorrection weighs, and the keys' touch targets
+  shift by what was learned about the owner's fingers (set_touch_bias)
+  and, while a word is typed, lean toward the letters likely next
+  (tactus_ac_tap_cost: a tap in a key's middle is always that key's);
+- the widget says how high its panel is and how much room it needs above the
+  keys for the bar of other forms (get_panel_height, get_overhang), so the
+  surface can leave that band to the application underneath, and how far
+  the windows are to reach under the panel's top (get_panel_under).
+---
+--- a/src/pos-osk-widget.h
++++ b/src/pos-osk-widget.h
+@@ -15,6 +15,9 @@
+ 
+ #define POS_OSK_WIDGET_KEY_HEIGHT_DEFAULT 50
+ #define POS_OSK_WIDGET_KEY_HEIGHT_MAX 100
++/* What holding Return emits: a new line where Return would send (Shift+Return
++ * to the application). Tactus's own; no layout file names it. */
++#define POS_OSK_SYMBOL_NEWLINE "KEY_NEWLINE"
+ 
+ #define POS_TYPE_OSK_WIDGET (pos_osk_widget_get_type ())
+ 
+@@ -42,4 +45,19 @@
+ void              pos_osk_widget_set_key_height (PosOskWidget *self, guint key_height);
+ guint             pos_osk_widget_max_rows (PosOskWidget *self);
+ 
++/* Tactus */
++guint             pos_osk_widget_get_overhang (PosOskWidget *self);
++guint             pos_osk_widget_get_panel_height (PosOskWidget *self);
++guint             pos_osk_widget_get_panel_under (PosOskWidget *self);
++void              pos_osk_widget_set_flat_top (PosOskWidget *self, gboolean flat);
++void              pos_osk_widget_set_attached (PosOskWidget *self, gboolean attached);
++gboolean          pos_osk_widget_get_caps_lock (PosOskWidget *self);
++void              pos_osk_widget_set_autoshift (PosOskWidget *self,
++                                                gboolean      wanted,
++                                                gboolean      context_changed);
++gboolean          pos_osk_widget_take_tap (PosOskWidget *self, double *dx, double *dy);
++void              pos_osk_widget_set_touch_bias (PosOskWidget *self, double dx, double dy);
++void              pos_osk_widget_cancel_touches (PosOskWidget *self);
++void              pos_osk_widget_set_paste_shown (PosOskWidget *self, gboolean shown);
++
+ G_END_DECLS
+--- a/src/pos-osk-widget.c
++++ b/src/pos-osk-widget.c
+@@ -1,41 +1,81 @@
+ /*
+  * Copyright (C) 2022-2024 The Phosh Developers
+  *               2025 Phosh.mobi e.V.
++ *               2026 W4HO
+  *
+  * SPDX-License-Identifier: GPL-3.0-or-later
+  *
+  * Author: Guido Günther <agx@sigxcpu.org>
++ *
++ * Tactus. Loading a layout is Stevia's; the geometry, the drawing and the
++ * touch handling are written for a phone keyboard with the look and the
++ * manners of the keyboards on current phones: every measure below is in
++ * points of a 390 pt wide phone and scales with the widget's width.
+  */
+ 
+ #define G_LOG_DOMAIN "pos-osk-widget"
+ 
+ #include "pos-config.h"
+ 
+-#include "util.h"
+-#include "pos-char-popup.h"
++#include "tactus-autocorrect.h"
++#include "tactus-draw.h"
++#include "tactus-trackpad.h"
+ #include "phosh-osk-enums.h"
+ #include "pos-enums.h"
+ #include "pos-enum-types.h"
+-#include "pos-indicator-popup.h"
+ #include "pos-osk-key.h"
+ #include "pos-osk-widget.h"
+ 
+ #include "gmobile.h"
+ 
+ #include <json-glib/json-glib.h>
+-#include <pango/pangocairo.h>
+ 
+ #include <math.h>
+ 
+-#define KEY_ICON_SIZE 16
+-
+-/* Default us layout */
+-#define LAYOUT_COLS 10
+ #define LAYOUT_MAX_ROWS 5
+-
+ #define MINIMUM_WIDTH 360
+ 
+-#define EVENT_HISTORY_THRESHOLD_MS 150
++/* The keyboard's measures, in points */
++#define PT_WIDTH        390.0
++#define PT_WIDTH_MAX    430.0 /* heights and letters stop growing here */
++#define PT_INSET        3.5   /* from the screen's edge to the first key's slot */
++#define PT_GAP_H        6.5
++#define PT_GAP_V        11.0
++#define PT_KEY_H        43.0
++#define PT_TOP_PAD      12.0
++#define PT_STRIP_H      71.5  /* under the keys: emoji, paste and dictation */
++#define PT_SHIFT_GAP    7.8   /* extra room between Shift or Delete and the letters */
++#define PT_KEY_RADIUS   6.8
++#define PT_FONT_LOWER   23.85
++#define PT_FONT_UPPER   21.1
++#define PT_FONT_LABEL   18.3
++#define PT_ICON_EDGE    42.5  /* emoji and dictation: centre, from the side */
++#define PT_ICON_DROP    38.0  /* and below the keys */
++#define PT_PASTE_SLOP   12.0  /* paste: a press that travels further than this is no tap and no hold */
++#define PT_POPUP_H      68.0
++#define PT_POPUP_GAP    4.0
++#define PT_POPUP_RADIUS 18.0
++#define PT_POPUP_SEL_W  36.0
++#define PT_POPUP_SEL_H  48.0
++/* The same, for a keyboard much wider than tall (a phone on its side) */
++#define PT_WIDE_FROM    560.0
++#define PT_WIDE_GAP_V   7.0
++#define PT_WIDE_KEY_H   34.0
++#define PT_WIDE_TOP_PAD 8.0
++#define PT_WIDE_STRIP_H 40.0
++
++#define WEIGHT_LOWER 360
++#define WEIGHT_UPPER 445
++#define WEIGHT_LABEL 430
++
++#define LONG_PRESS_MS       400
++#define LINGER_MS           70
++#define SHIFT_DOUBLE_TAP_US (350 * G_TIME_SPAN_MILLISECOND)
++/* Cursor mode: finger travel for one step */
++
++#define MAX_TOUCHES 6
++/* The pointer (a mouse, or a test) is a touch of its own */
++#define POINTER_SEQUENCE ((GdkEventSequence *) GUINT_TO_POINTER (1))
+ 
+ enum {
+   OSK_KEY_DOWN,
+@@ -44,6 +84,7 @@
+   OSK_KEY_SYMBOL,
+   OSK_POPOVER_SHOWN,
+   OSK_POPOVER_HIDDEN,
++  OSK_STRIP_KEY,
+   N_SIGNALS
+ };
+ static guint signals[N_SIGNALS];
+@@ -60,22 +101,37 @@
+ static GParamSpec *props[PROP_LAST_PROP];
+ 
+ typedef enum {
+-  CURSOR_DRAG_STARTING,
+-  CURSOR_DRAG_HORIZ,
+-  CURSOR_DRAG_VERT,
+-} cursor_drag_t;
++  TACTUS_ROLE_CHAR,
++  TACTUS_ROLE_SPACE,
++  TACTUS_ROLE_SHIFT,
++  TACTUS_ROLE_BACKSPACE,
++  TACTUS_ROLE_SYM,       /* "123" and "ABC" */
++  TACTUS_ROLE_SYM2,      /* "#+=" and, on that page, "123" */
++  TACTUS_ROLE_RETURN,
++  TACTUS_ROLE_EMOJI,
++  TACTUS_ROLE_MIC,
++  TACTUS_ROLE_PASTE,
++} TactusRole;
++
++/* Where a key is: what is drawn, and the wider span that takes its touches */
++typedef struct {
++  PosOskKey *key;
++  TactusRole role;
++  double     vx, vy, vw, vh;
++  double     hx0, hx1;
++  int        row;
++} TactusGeom;
+ 
+ /**
+  * PosOskWidgetRow:
+  * @width: number in key units
+- * @offset_x: offset from the right in key units
++ * @offset_x: offset from the left in key units
+  *
+  * A key row on a #PosOskWidgetKeyboardLayer of the #PosOskWidget.
+- * Renders the keys and reacts to touch and pointer events. Much
+- * of the logic can go if we use GtkWidgets for the keys itself.
+  */
+ typedef struct {
+   GPtrArray *keys;
++  GArray    *geoms;
+   double     width;
+   double     offset_x;
+ } PosOskWidgetRow;
+@@ -83,19 +139,14 @@
+ /**
+  * PosOskWidgetKeyboardLayer:
+  * @width: The maximum width in key units
+- * @offset_x: Offset of this layer from the left side in pixels
+- * @key_width: Key width in pixels of a 1 unit wide key
+- * @key_height: key height in pixels of a 1 unit high key
++ * @key_width: Width in pixels of one unit: a letter key and the gap beside it
+  *
+  * Describes the character layout of one layer of keys.
+  */
+ typedef struct {
+   PosOskWidgetRow rows[LAYOUT_MAX_ROWS];
+   double          width;
+-
+-  int             offset_x;
+   double          key_width;
+-  double          key_height;
+   guint           n_rows;
+ } PosOskWidgetKeyboardLayer;
+ 
+@@ -119,6 +170,33 @@
+   double                    width;
+ } PosOskWidgetLayout;
+ 
++typedef enum {
++  TACTUS_TOUCH_KEY,        /* a character, the space bar or return */
++  TACTUS_TOUCH_BACKSPACE,
++  TACTUS_TOUCH_SHIFT,
++  TACTUS_TOUCH_SYM,
++  TACTUS_TOUCH_SYM2,
++  TACTUS_TOUCH_STRIP,
++} TactusTouchKind;
++
++/* One finger on the keyboard */
++typedef struct {
++  PosOskWidget     *widget;
++  gboolean          active;
++  GdkEventSequence *seq;
++  TactusTouchKind   kind;
++  TactusGeom       *geom;       /* the key under the finger; NULL once it has left the keys */
++  TactusRole        down_role;
++  double            x0, y0, x, y;
++  gboolean          consumed;   /* typed already: another finger came down */
++  gboolean          moved_off;
++  gboolean          return_to_letters; /* slid from "123" onto this key */
++  gboolean          chord_used; /* Shift, "123": a key was typed while this was held */
++  gboolean          strayed;    /* Paste: the finger travelled, as in a swipe; for good */
++  PosOskWidgetLayer layer_before;
++  guint             long_id;
++} TactusTouch;
++
+ /**
+  * PosOskWidget:
+  * @name: The name of the layout, e.g. `de`, `us`, `de+ch`
+@@ -132,207 +210,70 @@
+   GtkDrawingArea     parent;
+ 
+   PhoshOskFeatures   features;
+-  int width, height;
++  int                width, height;
+   PosOskWidgetLayout layout;
+-  guint key_height;
++  guint              key_height;
+ 
+-  GtkStyleContext   *key_context;
+   PosOskWidgetLayer  layer;
+   PosOskWidgetMode   mode;
+   /* Contains pointers to key symbols (keys have ownership) */
+   GPtrArray         *symbols;
+-  gboolean             caps_lock;
++  gboolean           caps_lock;
+ 
+-  char                *name;
+-  char                *display_name;
+-  char                *lang;
+-  char                *region;
+-  char                *layout_id;
+-
+-  PosOskKey           *current;
+-  PosOskKey           *space;
+-  GtkGestureLongPress *long_press;
+-  GdkEventSequence    *sequence;
+-  GtkWidget           *char_popup;
+-  guint                repeat_id;
+-
+-  PosIndicatorPopup   *indicator_popup;
+-
+-  /* Cursor movement */
+-  GtkGesture          *cursor_drag;
+-  double               last_x, last_y;
+-  GArray              *event_history;
+-  cursor_drag_t        drag_type;
+-
+-  /* Key scaling */
+-  GtkCssProvider      *css_provider;
+-  int key_scale;
++  char              *name;
++  char              *display_name;
++  char              *lang;
++  char              *region;
++  char              *layout_id;
++
++  /* The look */
++  GSettings         *interface_settings;
++  TactusTheme        theme;
++
++  /* The measures, in pixels, for the current width */
++  gboolean           with_overhang;
++  double             extra;     /* height given beyond what is needed: clear, above the panel */
++  gboolean           flat_top;
++  gboolean           attached;  /* something sits right on top: no clear room above the keys */
++  double             s, vs;
++  double             inset, gap_h, gap_v, key_h, pitch, top_pad, strip_h;
++  double             overhang;
++  TactusGeom         emoji, mic, paste;
++  gboolean           paste_shown; /* there is something to paste */
++  guint              resize_id;
++
++  /* Fingers */
++  TactusTouch        touches[MAX_TOUCHES];
++  TactusGeom        *linger;
++  guint              linger_id;
++  TactusTouch       *cursor_touch;
++  TactusTrackpad     trackpad;
++  guint              edge_id;
++
++  /* Shift */
++  gboolean           autoshift;
++  gboolean           shift_override;
++  gint64             last_shift_tap;
++
++  /* The row of accented letters shown for a held key */
++  struct {
++    gboolean   active;
++    TactusTouch *touch;
++    GPtrArray *options;
++    int        selected;
++    double     x, y, w, h, cell;
++  } popup;
++
++  /* Where the finger landed on the last letter typed, for the typing engine */
++  double             tap_dx, tap_dy;
++  gboolean           tap_valid;
++  /* Where this owner's fingers land compared to where they aim, in key sizes */
++  double             bias_x, bias_y;
+ };
+ G_DEFINE_TYPE (PosOskWidget, pos_osk_widget, GTK_TYPE_DRAWING_AREA)
+ 
+-typedef struct {
+-  double delta_x, delta_y;
+-  guint32 time;
+-} EventHistoryRecord;
+-
+-
+-static void
+-pos_osk_widget_calculate_drag_velocity (PosOskWidget *self, double *v_x, double *v_y)
+-{
+-  gdouble total_delta_x = 0, total_delta_y = 0;
+-  guint32 first_time = 0, last_time = 0;
+-  guint i;
+-
+-  for (i = 0; i < self->event_history->len; i++) {
+-    EventHistoryRecord *r =
+-      &g_array_index (self->event_history, EventHistoryRecord, i);
+-
+-    if (i == 0)
+-      first_time = r->time;
+-    else {
+-      total_delta_x += r->delta_x;
+-      total_delta_y += r->delta_y;
+-    }
+-
+-    last_time = r->time;
+-  }
+-
+-  if (first_time == last_time) {
+-    if (v_x)
+-      *v_x = total_delta_x / (last_time - first_time);
+-
+-    if (v_y)
+-      *v_y = total_delta_y / (last_time - first_time);
+-  }
+-
+-  if (v_x)
+-    *v_x = total_delta_x / (last_time - first_time);
+-
+-  if (v_y)
+-    *v_y = total_delta_y / (last_time - first_time);
+-}
+-
+-
+-static void
+-pos_osk_widget_trim_event_history (PosOskWidget *self)
+-{
+-  g_autoptr (GdkEvent) event = gtk_get_current_event ();
+-  guint32 threshold_time = gdk_event_get_time (event) - EVENT_HISTORY_THRESHOLD_MS;
+-  guint i;
+-
+-  for (i = 0; i < self->event_history->len; i++) {
+-    guint32 time = g_array_index (self->event_history,
+-                                  EventHistoryRecord, i).time;
+-
+-    if (time >= threshold_time)
+-      break;
+-  }
+-
+-  if (i > 0)
+-    g_array_remove_range (self->event_history, 0, i);
+-}
+-
+-
+-static void
+-pos_osk_widget_append_to_event_history (PosOskWidget *self, double delta_x, double delta_y)
+-{
+-  g_autoptr (GdkEvent) event = gtk_get_current_event ();
+-  EventHistoryRecord record;
+-
+-  pos_osk_widget_trim_event_history (self);
+-
+-  record.delta_x = delta_x;
+-  record.delta_y = delta_y;
+-  record.time = gdk_event_get_time (event);
+-
+-  g_array_append_val (self->event_history, record);
+-}
+-
+-
+-static void
+-on_drag_begin (PosOskWidget *self,
+-               double        start_x,
+-               double        start_y)
+-{
+-  if (self->mode != POS_OSK_WIDGET_MODE_CURSOR)
+-    return;
+-
+-  self->drag_type = CURSOR_DRAG_STARTING;
+-  self->last_x = start_x;
+-  self->last_y = start_y;
+-}
+-
+-#define KEY_DIST_X 5
+-#define KEY_DIST_Y 10
+-#define V_X_MIN 1.4
+-#define V_Y_MIN 2.8
+ 
+-#define CAN_DRAG_HORIZ(self)                                            \
+-  (self->drag_type == CURSOR_DRAG_STARTING || self->drag_type == CURSOR_DRAG_HORIZ)
+-#define CAN_DRAG_VERT(self)                                             \
+-  (self->drag_type == CURSOR_DRAG_STARTING || self->drag_type == CURSOR_DRAG_VERT)
+-#define DRAG_TYPE(self)                                                 \
+-  (self->drag_type == CURSOR_DRAG_STARTING ? "starting"                 \
+-   : self->drag_type == CURSOR_DRAG_HORIZ  ? "horiz"                    \
+-   : "vert")
+-
+-
+-static void
+-on_drag_update (PosOskWidget *self, double off_x, double off_y)
+-{
+-  const char *symbol = NULL;
+-  double delta_x, delta_y, v_x, v_y;
+-
+-  if (self->mode != POS_OSK_WIDGET_MODE_CURSOR)
+-    return;
+-
+-  g_debug ("%s: (%f,%f) %s", __func__, off_x, off_y, DRAG_TYPE (self));
+-
+-  delta_x = self->last_x - off_x;
+-  delta_y = self->last_y - off_y;
+-  pos_osk_widget_append_to_event_history (self, delta_x, delta_y);
+-
+-  pos_osk_widget_calculate_drag_velocity (self, &v_x, &v_y);
+-
+-  if (CAN_DRAG_HORIZ (self) && ABS (v_x) < V_X_MIN && ABS (v_y) > V_Y_MIN) {
+-    g_debug ("Switching to vert: %f %f", v_x, v_y);
+-    self->drag_type = CURSOR_DRAG_VERT;
+-  } else if (CAN_DRAG_VERT (self) && ABS (v_y) < V_Y_MIN && ABS (v_x) > V_X_MIN) {
+-    g_debug ("Switching to horiz: %f %f", v_x, v_y);
+-    self->drag_type = CURSOR_DRAG_HORIZ;
+-  }
+-
+-  if (ABS (delta_x) > KEY_DIST_X && CAN_DRAG_HORIZ (self)) {
+-    symbol =  delta_x > 0 ? POS_OSK_SYMBOL_LEFT : POS_OSK_SYMBOL_RIGHT;
+-    self->last_x = off_x;
+-    self->drag_type = CURSOR_DRAG_HORIZ;
+-  } else if (ABS (delta_y) > KEY_DIST_Y && CAN_DRAG_VERT (self)) {
+-    symbol =  delta_y > 0 ? POS_OSK_SYMBOL_UP : POS_OSK_SYMBOL_DOWN;
+-    self->last_y = off_y;
+-    self->drag_type = CURSOR_DRAG_VERT;
+-  }
+-
+-  if (symbol)
+-    g_signal_emit (self, signals[OSK_KEY_SYMBOL], 0, symbol);
+-}
+-
+-
+-static void
+-on_drag_end (PosOskWidget *self)
+-{
+-  if (self->mode != POS_OSK_WIDGET_MODE_CURSOR)
+-    return;
+-
+-  pos_osk_widget_set_mode (self, POS_OSK_WIDGET_MODE_KEYBOARD);
+-  g_array_remove_range (self->event_history, 0, self->event_history->len);
+-}
+-
+-
+-static void
+-on_drag_cancel (PosOskWidget *self)
+-{
+-  on_drag_end (self);
+-}
++static void tactus_set_layer (PosOskWidget *self, PosOskWidgetLayer layer);
+ 
+ 
+ static PosOskWidgetKeyboardLayer *
+@@ -364,16 +305,6 @@
+ }
+ 
+ 
+-static PosOskWidgetRow *
+-pos_osk_widget_get_row (PosOskWidget *self, guint row)
+-{
+-  PosOskWidgetKeyboardLayer *l;
+-
+-  l = pos_osk_widget_get_current_layer (self);
+-  return &l->rows[row];
+-}
+-
+-
+ static guint
+ pos_osk_widget_row_get_num_keys (PosOskWidgetRow *row)
+ {
+@@ -393,6 +324,23 @@
+ }
+ 
+ 
++static gboolean
++tactus_is_letters (PosOskWidgetLayer layer)
++{
++  return layer == POS_OSK_WIDGET_LAYER_NORMAL || layer == POS_OSK_WIDGET_LAYER_CAPS;
++}
++
++
++static gboolean
++tactus_types (TactusRole role)
++{
++  return role == TACTUS_ROLE_CHAR || role == TACTUS_ROLE_SPACE || role == TACTUS_ROLE_RETURN;
++}
++
++/*
++ * Layout loading
++ */
++
+ static void
+ pos_osk_widget_layout_free (PosOskWidgetLayout *layout)
+ {
+@@ -400,18 +348,21 @@
+   g_clear_pointer (&layout->locale, g_free);
+ 
+   for (int l = 0; l < POS_OSK_WIDGET_LAST_LAYER + 1; l++) {
+-    for (int r = 0; r < layout->n_rows; r++) {
+-      if (layout->layers[l].rows[r].keys) {
+-        g_ptr_array_free (layout->layers[l].rows[r].keys, TRUE);
+-        layout->layers[l].rows[r].keys = NULL;
+-      }
++    for (int r = 0; r < LAYOUT_MAX_ROWS; r++) {
++      PosOskWidgetRow *row = &layout->layers[l].rows[r];
++
++      g_clear_pointer (&row->keys, g_ptr_array_unref);
++      g_clear_pointer (&row->geoms, g_array_unref);
+     }
++    layout->layers[l].n_rows = 0;
++    layout->layers[l].width = 0.0;
+   }
+ }
+ 
+-
++/* Delete in the row above the last, Return in the last */
+ static void
+-add_common_keys_post (PosOskWidgetRow *row, PosOskWidgetLayer layer, gint rownum, guint max_rows)
++add_common_keys_post (PosOskWidgetRow *row, PosOskWidgetLayer layer, gint rownum, guint max_rows,
++                      double edge_width)
+ {
+   PosOskKey *key;
+ 
+@@ -429,7 +380,7 @@
+     key = g_object_new (POS_TYPE_OSK_KEY,
+                         "symbol", "KEY_ENTER",
+                         "icon", "keyboard-enter-symbolic",
+-                        "width", 2.0,
++                        "width", edge_width,
+                         "style", "return",
+                         NULL);
+     row->width += pos_osk_key_get_width (key);
+@@ -437,13 +388,15 @@
+   }
+ }
+ 
+-
++/* Shift (on the number pages: the key to the other one) in the row above the last,
++ * and the key between letters and numbers in the last */
+ static void
+ add_common_keys_pre (PosOskWidget      *self,
+                      PosOskWidgetRow   *row,
+                      PosOskWidgetLayer  layer,
+                      gint               rownum,
+-                     guint              max_rows)
++                     guint              max_rows,
++                     double             edge_width)
+ {
+   PosOskKey *key;
+ 
+@@ -454,7 +407,7 @@
+       const char *label, *icon;
+       switch (layer) {
+       case POS_OSK_WIDGET_LAYER_SYMBOLS:
+-        label = "={<";
++        label = "#+=";
+         icon = NULL;
+         break;
+       case POS_OSK_WIDGET_LAYER_SYMBOLS2:
+@@ -483,23 +436,12 @@
+   } else if (rownum == max_rows - 1) {
+     const char *label;
+ 
+-    key = g_object_new (POS_TYPE_OSK_KEY,
+-                        "use", POS_OSK_KEY_USE_MENU,
+-                        "icon", "layout-menu-symbolic",
+-                        "width", 1.0,
+-                        "style", "sys",
+-                        NULL);
+-    row->width += pos_osk_key_get_width (key);
+-    g_ptr_array_insert (row->keys, 0, key);
+-
+     switch (layer) {
+     case POS_OSK_WIDGET_LAYER_SYMBOLS:
+     case POS_OSK_WIDGET_LAYER_SYMBOLS2:
+       label = "ABC";
+       break;
+     case POS_OSK_WIDGET_LAYER_CAPS:
+-      label = "={<";
+-      break;
+     case POS_OSK_WIDGET_LAYER_NORMAL:
+       label = "123";
+       break;
+@@ -509,7 +451,7 @@
+     key = g_object_new (POS_TYPE_OSK_KEY,
+                         "label", label,
+                         "use", POS_OSK_KEY_USE_TOGGLE,
+-                        "width", 1.0,
++                        "width", edge_width,
+                         "layer", POS_OSK_WIDGET_LAYER_SYMBOLS,
+                         "style", "toggle",
+                         NULL);
+@@ -525,10 +467,9 @@
+ {
+   if (g_strcmp0 (symbol, " ") == 0) {
+     return g_object_new (POS_TYPE_OSK_KEY,
+-                         "label", self->display_name,
+                          "symbol", symbol,
+                          "symbols", symbols,
+-                         "width", 2.0,
++                         "width", 1.0,
+                          "expand", TRUE,
+                          "style", "space",
+                          NULL);
+@@ -570,6 +511,7 @@
+            guint             max_rows)
+ {
+   gsize num_keys;
++  double edge_width;
+ 
+   num_keys = json_array_get_length (arow);
+   row->keys = g_ptr_array_new_full (num_keys + 2, g_object_unref);
+@@ -604,8 +546,11 @@
+     return;
+   }
+ 
+-  add_common_keys_pre (self, row, l, r, max_rows);
+-  add_common_keys_post (row, l, r, max_rows);
++  /* With only the space bar between them the keys at the ends are wide: each
++   * ends where the letters above begin */
++  edge_width = num_keys == 1 ? 2.5 : 1.5;
++  add_common_keys_pre (self, row, l, r, max_rows, edge_width);
++  add_common_keys_post (row, l, r, max_rows, edge_width);
+ }
+ 
+ 
+@@ -616,7 +561,7 @@
+   gboolean ret = FALSE;
+   gdouble max_width = 0.0;
+ 
+-  num_rows = json_array_get_length (rows);
++  num_rows = MIN (json_array_get_length (rows), LAYOUT_MAX_ROWS);
+   layer->n_rows = num_rows;
+ 
+   for (int r = 0; r < num_rows; r++) {
+@@ -636,13 +581,16 @@
+   }
+   layer->width = max_width;
+ 
+-  /* If the row has a key that should be expanded use that one to fill
+-     the maximum width */
+   for (int r = 0; r < num_rows; r++) {
+     PosOskWidgetRow *row = pos_osk_widget_get_layer_row (self, l, r);
+     PosOskKey *expand_key = NULL;
++    double spare = layer->width - row->width;
+ 
+-    /* Find possible key to expand */
++    if (row->keys == NULL)
++      continue;
++
++    /* If the row has a key that should be expanded use that one to fill
++       the maximum width */
+     for (int k = 0; k < row->keys->len; k++) {
+       PosOskKey *key = g_ptr_array_index (row->keys, k);
+ 
+@@ -652,13 +600,26 @@
+       }
+     }
+ 
+-    if (expand_key) {
+-      float width = pos_osk_key_get_width (expand_key);
+-      float expand = layer->width - row->width;
+-      if (width > 0) {
+-        pos_osk_key_set_width (expand_key, width + expand);
+-        row->width += expand;
++    if (expand_key && spare > 0.0) {
++      pos_osk_key_set_width (expand_key, pos_osk_key_get_width (expand_key) + spare);
++      row->width += spare;
++    } else if (r == num_rows - 2 && num_rows >= 2 && spare > 0.01) {
++      /* The row between Shift and Delete fills its width: on the number pages
++       * its five keys are wider than the letters they replace */
++      guint n = 0;
++
++      for (int k = 0; k < row->keys->len; k++) {
++        if (pos_osk_key_get_use (g_ptr_array_index (row->keys, k)) == POS_OSK_KEY_USE_KEY)
++          n++;
++      }
++      for (int k = 0; n && k < row->keys->len; k++) {
++        PosOskKey *key = g_ptr_array_index (row->keys, k);
++
++        if (pos_osk_key_get_use (key) == POS_OSK_KEY_USE_KEY)
++          pos_osk_key_set_width (key, pos_osk_key_get_width (key) + spare / n);
+       }
++      if (n)
++        row->width += spare;
+     }
+   }
+ 
+@@ -667,6 +628,10 @@
+     PosOskWidgetRow *row = pos_osk_widget_get_layer_row (self, l, r);
+ 
+     row->offset_x = 0.5 * (layer->width - row->width);
++    if (row->keys) {
++      row->geoms = g_array_sized_new (FALSE, TRUE, sizeof (TactusGeom), row->keys->len);
++      g_array_set_size (row->geoms, row->keys->len);
++    }
+   }
+ 
+   return ret;
+@@ -785,801 +750,1263 @@
+   return TRUE;
+ }
+ 
++/*
++ * Geometry
++ */
+ 
+-static void
+-pos_osk_widget_set_property (GObject      *object,
+-                             guint         property_id,
+-                             const GValue *value,
+-                             GParamSpec   *pspec)
++static gboolean
++tactus_is_wide (int width)
+ {
+-  PosOskWidget *self = POS_OSK_WIDGET (object);
+-
+-  switch (property_id) {
+-  case PROP_FEATURES:
+-    self->features = g_value_get_flags (value);
+-    break;
+-  case PROP_KEY_HEIGHT:
+-    pos_osk_widget_set_key_height (self, g_value_get_uint (value));
+-    break;
+-  default:
+-    G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
+-    break;
+-  }
++  return width > PT_WIDE_FROM;
+ }
+ 
+-
++/* The measures for a keyboard this wide */
+ static void
+-pos_osk_widget_get_property (GObject    *object,
+-                             guint       property_id,
+-                             GValue     *value,
+-                             GParamSpec *pspec)
++tactus_update_metrics (PosOskWidget *self, int width)
+ {
+-  PosOskWidget *self = POS_OSK_WIDGET (object);
++  gboolean wide = tactus_is_wide (width);
+ 
+-  switch (property_id) {
+-  case PROP_LAYER:
+-    g_value_set_enum (value, self->layer);
+-    break;
+-  case PROP_NAME:
+-    g_value_set_string (value, self->name);
+-    break;
+-  case PROP_MODE:
+-    g_value_set_enum (value, self->mode);
+-    break;
+-  case PROP_FEATURES:
+-    g_value_set_flags (value, self->features);
+-    break;
+-  case PROP_KEY_HEIGHT:
+-    g_value_set_uint (value, self->key_height);
+-    break;
+-  default:
+-    G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
+-    break;
+-  }
++  self->s = width / PT_WIDTH;
++  self->vs = MIN (width, PT_WIDTH_MAX) / PT_WIDTH;
++  self->inset = PT_INSET * self->s;
++  self->gap_h = PT_GAP_H * self->vs;
++  self->gap_v = (wide ? PT_WIDE_GAP_V : PT_GAP_V) * self->vs;
++  self->key_h = (wide ? PT_WIDE_KEY_H : PT_KEY_H) * self->vs;
++  self->pitch = self->key_h + self->gap_v;
++  self->top_pad = (wide ? PT_WIDE_TOP_PAD : PT_TOP_PAD) * self->vs;
++  self->strip_h = (wide ? PT_WIDE_STRIP_H : PT_STRIP_H) * self->vs;
++  /* Room above the keys for the row of accented letters of a key in the top row */
++  if (self->with_overhang && !self->attached)
++    self->overhang = ceil ((PT_POPUP_H + PT_POPUP_GAP) * self->vs - self->top_pad + 3.0);
++  else
++    self->overhang = 0.0;
++  /* Given more height than it needs, the keyboard stays at the bottom */
++  self->overhang += self->extra;
+ }
+ 
+-/**
+- * select_symbols2:
+- * @self: The osk widget
+- * @key: The pressed key
+- *
+- * Check whether we should switch into or out of the symbols2 layer. If the layer
+- * didn't change, the current layer is returned.
+- *
+- * Returns: The resulting layer.
+- */
+-static PosOskWidgetLayer
+-select_symbols2 (PosOskWidget *self, PosOskKey *key)
+-{
+-  if (pos_osk_widget_get_layer (self) == POS_OSK_WIDGET_LAYER_SYMBOLS &&
+-      pos_osk_key_get_layer (key) == POS_OSK_WIDGET_LAYER_CAPS) {
+-    return POS_OSK_WIDGET_LAYER_SYMBOLS2;
+-  }
+ 
+-  if (pos_osk_widget_get_layer (self) == POS_OSK_WIDGET_LAYER_CAPS &&
+-      pos_osk_key_get_layer (key) == POS_OSK_WIDGET_LAYER_SYMBOLS) {
+-    return POS_OSK_WIDGET_LAYER_SYMBOLS2;
+-  }
++static double
++tactus_rows_top (PosOskWidget *self)
++{
++  return self->overhang + self->top_pad;
++}
+ 
+-  if (pos_osk_widget_get_layer (self) == POS_OSK_WIDGET_LAYER_SYMBOLS2 &&
+-      pos_osk_key_get_layer (key) == POS_OSK_WIDGET_LAYER_CAPS) {
+-    return POS_OSK_WIDGET_LAYER_SYMBOLS;
+-  }
+ 
+-  if (pos_osk_widget_get_layer (self) == POS_OSK_WIDGET_LAYER_SYMBOLS2 &&
+-      pos_osk_key_get_layer (key) == POS_OSK_WIDGET_LAYER_SYMBOLS) {
+-    return POS_OSK_WIDGET_LAYER_NORMAL;
+-  }
++static double
++tactus_keys_bottom (PosOskWidget *self)
++{
++  guint n = MAX (self->layout.n_rows, 1);
+ 
+-  return self->layer;
++  return tactus_rows_top (self) + (n - 1) * self->pitch + self->key_h;
+ }
+ 
+ 
+-static void
+-pos_osk_widget_set_key_pressed (PosOskWidget *self, PosOskKey *key, gboolean pressed)
++static int
++tactus_height_for_width (PosOskWidget *self, int width)
+ {
+-  const GdkRectangle *box;
++  double save_s = self->s, save_extra = self->extra;
++  int height;
++
++  self->extra = 0.0;
++  tactus_update_metrics (self, width);
++  height = ceil (tactus_keys_bottom (self) + self->strip_h);
++  self->extra = save_extra;
++  if (self->width > 0 && save_s > 0.0)
++    tactus_update_metrics (self, self->width);
++  else
++    tactus_update_metrics (self, width);
+ 
+-  pos_osk_key_set_pressed (key, pressed);
+-  box = pos_osk_key_get_box (key);
+-  gtk_widget_queue_draw_area (GTK_WIDGET (self), box->x, box->y, box->width, box->height);
++  return height;
+ }
+ 
+ 
+-static void
+-switch_layer (PosOskWidget *self, PosOskKey *key)
++static TactusRole
++tactus_role (PosOskKey *key, PosOskWidgetLayer layer)
+ {
+-  PosOskWidgetLayer new_layer;
+-  PosOskWidgetLayer layer = pos_osk_key_get_layer (key);
++  const char *symbol = pos_osk_key_get_symbol (key);
+ 
+-  if (pos_osk_key_get_use (key) == POS_OSK_KEY_USE_TOGGLE) {
+-    new_layer = select_symbols2 (self, key);
+-    if (new_layer == self->layer) {
+-      switch (layer) {
+-      case POS_OSK_WIDGET_LAYER_CAPS:
+-      case POS_OSK_WIDGET_LAYER_SYMBOLS:
+-        if (new_layer == layer)
+-          new_layer = POS_OSK_WIDGET_LAYER_NORMAL;
+-        else
+-          new_layer = layer;
+-        break;
+-      case POS_OSK_WIDGET_LAYER_NORMAL:
+-      case POS_OSK_WIDGET_LAYER_SYMBOLS2:
+-      default:
+-        g_return_if_reached ();
+-        break;
+-      }
+-    }
+-    self->caps_lock = FALSE;
+-    /* Reset caps layer on every (non toggle) key press */
+-  } else if (self->layer == POS_OSK_WIDGET_LAYER_CAPS && !self->caps_lock) {
+-    new_layer = POS_OSK_WIDGET_LAYER_NORMAL;
+-  } else {
+-    return;
++  switch (pos_osk_key_get_use (key)) {
++  case POS_OSK_KEY_USE_DELETE:
++    return TACTUS_ROLE_BACKSPACE;
++  case POS_OSK_KEY_USE_TOGGLE:
++    if (pos_osk_key_get_layer (key) == POS_OSK_WIDGET_LAYER_CAPS)
++      return tactus_is_letters (layer) ? TACTUS_ROLE_SHIFT : TACTUS_ROLE_SYM2;
++    return TACTUS_ROLE_SYM;
++  case POS_OSK_KEY_USE_KEY:
++  case POS_OSK_KEY_USE_MENU:
++  default:
++    break;
+   }
+ 
+-  pos_osk_widget_set_layer (self, new_layer);
++  if (g_strcmp0 (symbol, POS_OSK_SYMBOL_SPACE) == 0)
++    return TACTUS_ROLE_SPACE;
++  if (g_strcmp0 (symbol, "KEY_ENTER") == 0)
++    return TACTUS_ROLE_RETURN;
++  return TACTUS_ROLE_CHAR;
+ }
+ 
+-
++/* Place every key of every layer for the current width */
+ static void
+-set_caps_lock (PosOskWidget *self, gboolean caps_lock)
++tactus_layout_keys (PosOskWidget *self)
+ {
+-  PosOskWidgetLayer layer;
++  double rows_top;
+ 
+-  if (self->caps_lock == caps_lock)
++  if (self->width <= 0)
+     return;
+ 
+-  self->caps_lock = caps_lock;
++  tactus_update_metrics (self, self->width);
++  rows_top = tactus_rows_top (self);
+ 
+-  layer = self->caps_lock ? POS_OSK_WIDGET_LAYER_CAPS : POS_OSK_WIDGET_LAYER_NORMAL;
+-  pos_osk_widget_set_layer (self, layer);
+-}
++  for (int l = 0; l <= POS_OSK_WIDGET_LAST_LAYER; l++) {
++    PosOskWidgetKeyboardLayer *layer = pos_osk_widget_get_keyboard_layer (self, l);
++    int first_row = self->layout.n_rows - layer->n_rows;
++
++    if (layer->width <= 0.0)
++      continue;
+ 
++    layer->key_width = (self->width - 2 * self->inset) / layer->width;
+ 
+-static PosOskKey *
+-pos_osk_widget_locate_key (PosOskWidget *self, double x, double y)
++    for (int r = 0; r < layer->n_rows; r++) {
++      PosOskWidgetRow *row = pos_osk_widget_get_layer_row (self, l, r);
++      double c = row->offset_x;
++      guint n = pos_osk_widget_row_get_num_keys (row);
++
++      for (int k = 0; k < n; k++) {
++        PosOskKey *key = pos_osk_widget_row_get_key (row, k);
++        TactusGeom *g = &g_array_index (row->geoms, TactusGeom, k);
++        double units = pos_osk_key_get_width (key);
++        double slot_x = self->inset + c * layer->key_width;
++        double slot_w = units * layer->key_width;
++        GdkRectangle box;
++
++        g->key = key;
++        g->role = tactus_role (key, l);
++        g->row = first_row + r;
++        g->vx = slot_x + self->gap_h / 2;
++        g->vw = slot_w - self->gap_h;
++        g->vy = rows_top + g->row * self->pitch;
++        g->vh = self->key_h;
++        /* Shift and Delete stand a little apart from the letters */
++        if (units > 1.2 && (g->role == TACTUS_ROLE_SHIFT || g->role == TACTUS_ROLE_SYM2)) {
++          g->vw -= PT_SHIFT_GAP * self->s;
++        } else if (units > 1.2 && g->role == TACTUS_ROLE_BACKSPACE) {
++          g->vx += PT_SHIFT_GAP * self->s;
++          g->vw -= PT_SHIFT_GAP * self->s;
++        }
++        /* A row's first and last key take the touches out to the edges */
++        g->hx0 = k == 0 ? -G_MAXDOUBLE : slot_x;
++        g->hx1 = k == n - 1 ? G_MAXDOUBLE : slot_x + slot_w;
++
++        box.x = g->vx;
++        box.y = g->vy;
++        box.width = g->vw;
++        box.height = g->vh;
++        pos_osk_key_set_box (key, &box);
++
++        c += units;
++      }
++    }
++  }
++
++  /* Under the keys */
++  {
++    double cy = tactus_keys_bottom (self) + MIN (PT_ICON_DROP * self->vs, self->strip_h / 2);
++    double half = 22.0 * self->vs;
++
++    self->emoji = (TactusGeom) {
++      .role = TACTUS_ROLE_EMOJI, .row = -1,
++      .vx = PT_ICON_EDGE * self->s - half, .vy = cy - half, .vw = 2 * half, .vh = 2 * half,
++    };
++    self->mic = (TactusGeom) {
++      .role = TACTUS_ROLE_MIC, .row = -1,
++      .vx = self->width - PT_ICON_EDGE * self->s - half, .vy = cy - half,
++      .vw = 2 * half, .vh = 2 * half,
++    };
++    self->paste = (TactusGeom) {
++      .role = TACTUS_ROLE_PASTE, .row = -1,
++      .vx = self->width / 2.0 - half, .vy = cy - half,
++      .vw = 2 * half, .vh = 2 * half,
++    };
++  }
++}
++
++/* Keys that grow: of the letter a tap is on and the letters around it, the
++ * tap is the one likelier next where it lands close enough to it (the
++ * autocorrection says how far each may reach, from the word being typed). A
++ * tap in a key's middle is always that key's, and nothing changes on
++ * screen. */
++static TactusGeom *
++tactus_lean (PosOskWidget *self, PosOskWidgetKeyboardLayer *layer, int r, TactusGeom *hit, double x, double y)
++{
++  TactusGeom *best = hit;
++  double kw = layer->key_width, best_cost, hit_prior;
++  const char *sym;
++
++  if (hit->role != TACTUS_ROLE_CHAR || hit->key == NULL || kw <= 0 || self->pitch <= 0)
++    return hit;
++  sym = pos_osk_key_get_symbol (hit->key);
++  hit_prior = tactus_ac_tap_prior (sym);
++  best_cost = tactus_ac_tap_cost (sym, (x - (hit->vx + hit->vw / 2)) / kw,
++                                  (y - (hit->vy + hit->vh / 2)) / self->pitch);
++
++  for (int rr = MAX (r - 1, 0); rr <= MIN (r + 1, (int) layer->n_rows - 1); rr++) {
++    GArray *geoms = layer->rows[rr].geoms;
++
++    for (guint k = 0; geoms && k < geoms->len; k++) {
++      TactusGeom *c = &g_array_index (geoms, TactusGeom, k);
++      double cx = c->vx + c->vw / 2, cy = c->vy + c->vh / 2, cost;
++
++      if (c == hit || c->role != TACTUS_ROLE_CHAR || c->key == NULL)
++        continue;
++      if (fabs (x - cx) > 1.6 * kw || fabs (y - cy) > 1.6 * self->pitch)
++        continue;
++      /* only a likelier letter takes a tap from the one it landed on */
++      sym = pos_osk_key_get_symbol (c->key);
++      if (tactus_ac_tap_prior (sym) <= hit_prior)
++        continue;
++      cost = tactus_ac_tap_cost (sym, (x - cx) / kw, (y - cy) / self->pitch);
++      if (cost < best_cost) {
++        best = c;
++        best_cost = cost;
++      }
++    }
++  }
++  return best;
++}
++
++/* The key (or the emoji, paste or dictation key) a touch at this place is for */
++static TactusGeom *
++tactus_hit_test (PosOskWidget *self, double x, double y)
+ {
+-  int row_num;
+-  PosOskWidgetRow *row;
+-  PosOskKey *key = NULL;
+-  double pos_x;
+   PosOskWidgetKeyboardLayer *layer = pos_osk_widget_get_current_layer (self);
+-  guint off_y = self->height - (layer->n_rows * layer->key_height);
++  PosOskWidgetRow *row;
++  double rows_top = tactus_rows_top (self);
++  double keys_bottom = tactus_keys_bottom (self);
++  int first_row = self->layout.n_rows - layer->n_rows;
++  int r;
+ 
+-  pos_x = x - layer->offset_x;
++  if (layer->n_rows == 0 || self->width <= 0)
++    return NULL;
+ 
+-  row_num = (int)((y - off_y) / layer->key_height);
+-  g_return_val_if_fail (row_num < self->layout.n_rows, NULL);
++  /* Where this owner's fingers land, compared to where they aim */
++  x -= self->bias_x * layer->key_width;
++  y -= self->bias_y * self->pitch;
++
++  /* Under the keys: emoji on the left, dictation on the right and, while
++   * there is something to paste, paste in the middle, each with a span as
++   * wide as the others'. Between them is no key. */
++  if (y >= keys_bottom + MIN (14.0 * self->vs, self->strip_h / 3)) {
++    double reach = 2 * PT_ICON_EDGE * self->s;
++
++    if (x < reach)
++      return &self->emoji;
++    if (x > self->width - reach)
++      return &self->mic;
++    if (self->paste_shown && fabs (x - self->width / 2.0) < reach / 2)
++      return &self->paste;
++    return NULL;
++  }
++  /* Well above the keys */
++  if (y < rows_top - self->key_h)
++    return NULL;
+ 
+-  row = pos_osk_widget_get_row (self, row_num);
+-  pos_x -= row->offset_x * layer->key_width;
+-  for (int k = 0; k < pos_osk_widget_row_get_num_keys (row); k++) {
+-    key = pos_osk_widget_row_get_key (row, k);
++  r = floor ((y - (rows_top - self->gap_v / 2)) / self->pitch);
++  r = CLAMP (r, first_row, (int) self->layout.n_rows - 1) - first_row;
+ 
+-    pos_x -= pos_osk_key_get_width (key) * layer->key_width;
+-    if (pos_x <= 0)
+-      break;
++  row = &layer->rows[r];
++  if (row->geoms == NULL)
++    return NULL;
++
++  for (int k = 0; k < row->geoms->len; k++) {
++    TactusGeom *g = &g_array_index (row->geoms, TactusGeom, k);
++
++    if (x < g->hx1)
++      return tactus_lean (self, layer, r, g, x, y);
+   }
++  return NULL;
++}
+ 
+-  g_return_val_if_fail (key != NULL, NULL);
++/*
++ * Layers and Shift
++ */
+ 
+-  return key;
++/* The letters page to show when nothing holds Shift */
++static PosOskWidgetLayer
++tactus_letters_layer (PosOskWidget *self)
++{
++  if (self->caps_lock)
++    return POS_OSK_WIDGET_LAYER_CAPS;
++  if (self->shift_override && tactus_is_letters (self->layer))
++    return self->layer;
++  /* No capitals page, no automatic capitals */
++  if (self->layout.layers[POS_OSK_WIDGET_LAYER_CAPS].n_rows == 0)
++    return POS_OSK_WIDGET_LAYER_NORMAL;
++  return self->autoshift ? POS_OSK_WIDGET_LAYER_CAPS : POS_OSK_WIDGET_LAYER_NORMAL;
+ }
+ 
+ 
+-static void
+-key_repeat_cancel (PosOskWidget *self)
++static TactusTouch *
++tactus_held (PosOskWidget *self, TactusTouchKind kind, TactusTouch *except)
+ {
+-  g_clear_handle_id (&self->repeat_id, g_source_remove);
++  for (int i = 0; i < MAX_TOUCHES; i++) {
++    TactusTouch *t = &self->touches[i];
++
++    if (t->active && !t->consumed && t->kind == kind && t != except)
++      return t;
++  }
++  return NULL;
+ }
+ 
+ 
+ static void
+-pos_osk_widget_show_indicator_popup (PosOskWidget *self, PosOskKey *key)
++tactus_set_layer (PosOskWidget *self, PosOskWidgetLayer layer)
+ {
+-  const char *symbol;
+-
+-  if (!(self->features & PHOSH_OSK_FEATURE_KEY_INDICATOR))
++  if (layer == self->layer)
++    return;
++  /* A layout need not have every page */
++  if (self->layout.layers[layer].n_rows == 0)
+     return;
+ 
+-  symbol = pos_osk_key_get_symbol (key);
+-  if (!symbol || strlen (symbol) != 1 || g_str_equal (symbol, POS_OSK_SYMBOL_SPACE))
+-      return;
++  self->layer = layer;
+ 
+-  pos_indicator_popup_show_key (self->indicator_popup, key);
++  /* The keys under the fingers are the new page's now */
++  for (int i = 0; i < MAX_TOUCHES; i++) {
++    TactusTouch *t = &self->touches[i];
++
++    if (t->active && !t->consumed && t->geom && t->geom->row >= 0)
++      t->geom = tactus_hit_test (self, t->x, t->y);
++  }
++
++  g_object_notify_by_pspec (G_OBJECT (self), props[PROP_LAYER]);
++  gtk_widget_queue_draw (GTK_WIDGET (self));
+ }
+ 
++/*
++ * Typing
++ */
+ 
+ static void
+-pos_osk_widget_key_press_action (PosOskWidget *self, PosOskKey *key)
++on_linger_timeout (gpointer data)
+ {
+-  self->current = key;
+-  pos_osk_widget_set_key_pressed (self, key, TRUE);
+-
+-  pos_osk_widget_show_indicator_popup (self, key);
++  PosOskWidget *self = POS_OSK_WIDGET (data);
+ 
+-  g_signal_emit (self, signals[OSK_KEY_DOWN], 0, pos_osk_key_get_symbol (key));
++  self->linger_id = 0;
++  self->linger = NULL;
++  gtk_widget_queue_draw (GTK_WIDGET (self));
+ }
+ 
++/* A key just typed stays lit for a moment, so that a quick tap shows */
++static void
++tactus_set_linger (PosOskWidget *self, TactusGeom *g)
++{
++  g_clear_handle_id (&self->linger_id, g_source_remove);
++  self->linger = g;
++  self->linger_id = g_timeout_add_once (LINGER_MS, on_linger_timeout, self);
++}
+ 
+-static gboolean
+-pos_osk_widget_key_press (PosOskWidget *self, double x, double y)
++/* What follows a key that typed something: Shift lets go, the number page goes back */
++static void
++tactus_after_key (PosOskWidget *self, TactusTouch *t, const char *symbol, PosOskWidgetLayer typed_on)
+ {
+-  PosOskKey *key = NULL;
++  TactusTouch *shift = tactus_held (self, TACTUS_TOUCH_SHIFT, t);
++  TactusTouch *sym = tactus_held (self, TACTUS_TOUCH_SYM, t);
+ 
+-  key = pos_osk_widget_locate_key (self, x, y);
+-  g_return_val_if_fail (key != NULL, GDK_EVENT_PROPAGATE);
++  self->shift_override = FALSE;
++  if (shift)
++    shift->chord_used = TRUE;
++  if (sym)
++    sym->chord_used = TRUE;
+ 
+-  if (self->current) {
+-    g_warning ("Got button press event for %s while another key %s is pressed",
+-               POS_OSK_KEY_DBG (key), POS_OSK_KEY_DBG (self->current));
+-  }
+-  pos_osk_widget_key_press_action (self, key);
++  if (tactus_is_letters (typed_on)) {
++    if (!shift && tactus_is_letters (self->layer))
++      tactus_set_layer (self, tactus_letters_layer (self));
++  } else {
++    gboolean back = (t && t->return_to_letters) ||
++      (!sym && (g_strcmp0 (symbol, " ") == 0 || g_strcmp0 (symbol, "'") == 0));
+ 
+-  return GDK_EVENT_PROPAGATE;
++    if (back && !tactus_is_letters (self->layer))
++      tactus_set_layer (self, tactus_letters_layer (self));
++  }
+ }
+ 
+ 
+-static gboolean
+-pos_osk_widget_button_press_event (GtkWidget *widget, GdkEventButton *event)
++static void
++tactus_commit_key (PosOskWidget *self, TactusTouch *t)
+ {
+-  PosOskWidget *self = POS_OSK_WIDGET (widget);
++  TactusGeom *g = t->geom;
++  PosOskWidgetLayer typed_on = self->layer;
++  g_autofree char *symbol = NULL;
+ 
+-  g_debug ("Button press: %f, %f, button: %d, state: %d",
+-           event->x, event->y, event->button, event->state);
++  g_return_if_fail (g && g->key);
+ 
+-  if (event->type != GDK_BUTTON_PRESS)
+-    return GDK_EVENT_PROPAGATE;
++  symbol = g_strdup (pos_osk_key_get_symbol (g->key));
+ 
+-  pos_osk_widget_key_press (self, event->x, event->y);
++  /* Where in its key the finger was, for the typing engine */
++  self->tap_valid = FALSE;
++  if (g->role == TACTUS_ROLE_CHAR) {
++    PosOskWidgetKeyboardLayer *layer = pos_osk_widget_get_current_layer (self);
++    double px = t->moved_off ? t->x : t->x0;
++    double py = t->moved_off ? t->y : t->y0;
+ 
+-  return GDK_EVENT_STOP;
+-}
++    if (layer->key_width > 0.0 && self->pitch > 0.0) {
++      self->tap_dx = (px - (g->vx + g->vw / 2)) / layer->key_width;
++      self->tap_dy = (py - (g->vy + g->vh / 2)) / self->pitch;
++      self->tap_valid = TRUE;
++    }
++  }
+ 
++  tactus_set_linger (self, g);
+ 
+-static void
+-get_popup_pos (PosOskKey *key, GdkRectangle *out)
+-{
+-  const GdkRectangle *box = pos_osk_key_get_box (key);
++  g_signal_emit (self, signals[OSK_KEY_SYMBOL], 0, symbol);
++  g_signal_emit (self, signals[OSK_KEY_UP], 0, symbol);
++  self->tap_valid = FALSE;
+ 
+-  out->x = box->x + (0.5 * box->width);
+-  out->y = box->y + (0.5 * box->height);
+-  out->width = 0;
+-  out->height = 0;
++  tactus_after_key (self, t, symbol, typed_on);
+ }
+ 
++/*
++ * The row of accented letters of a held key
++ */
+ 
+ static void
+-pos_osk_widget_show_menu (PosOskWidget *self, PosOskKey *key)
++tactus_popup_close (PosOskWidget *self)
+ {
+-  GVariantBuilder builder;
+-  GActionGroup *group = gtk_widget_get_action_group (GTK_WIDGET (self), "win");
+-  GdkRectangle rect;
++  if (!self->popup.active)
++    return;
+ 
+-  get_popup_pos (key, &rect);
+-  g_variant_builder_init (&builder, G_VARIANT_TYPE_TUPLE);
+-  g_variant_builder_add_value (&builder, g_variant_new ("i", rect.x));
+-  g_variant_builder_add_value (&builder, g_variant_new ("i", rect.y));
+-  g_action_group_activate_action (group, "menu", g_variant_builder_end (&builder));
+-  pos_osk_key_set_pressed (key, FALSE);
++  self->popup.active = FALSE;
++  self->popup.touch = NULL;
++  g_clear_pointer (&self->popup.options, g_ptr_array_unref);
++  g_signal_emit (self, signals[OSK_POPOVER_HIDDEN], 0);
++  gtk_widget_queue_draw (GTK_WIDGET (self));
+ }
+ 
+ 
+ static void
+-pos_osk_widget_key_release_action (PosOskWidget *self, PosOskKey *key)
++tactus_popup_open (PosOskWidget *self, TactusTouch *t)
+ {
+-  switch (pos_osk_key_get_use (key)) {
+-  case POS_OSK_KEY_USE_TOGGLE:
+-    switch_layer (self, key);
+-    break;
++  PosOskWidgetKeyboardLayer *layer = pos_osk_widget_get_current_layer (self);
++  TactusGeom *g = t->geom;
++  GStrv alts = pos_osk_key_get_symbols (g->key);
++  const char *base = pos_osk_key_get_symbol (g->key);
++  double cell = layer->key_width;
++  double key_cx = g->vx + g->vw / 2;
++  double room = self->width - 2 * self->inset;
++  int n_alts, total, right_room, left_room, n_right, n_left, base_idx;
++  const char **options;
+ 
+-  case POS_OSK_KEY_USE_KEY:
+-    pos_indicator_popup_hide (self->indicator_popup, FALSE);
+-    G_GNUC_FALLTHROUGH;
+-  case POS_OSK_KEY_USE_DELETE:
+-    pos_osk_widget_set_key_pressed (self, self->current, FALSE);
+-    g_signal_emit (self, signals[OSK_KEY_SYMBOL], 0, pos_osk_key_get_symbol (key));
+-    g_signal_emit (self, signals[OSK_KEY_UP], 0, pos_osk_key_get_symbol (key));
+-    switch_layer (self, key);
+-    break;
++  /* No clear room above the keys to show them in */
++  if (self->overhang <= 0.0)
++    return;
++  if (alts == NULL || alts[0] == NULL || cell <= 0.0)
++    return;
+ 
+-  case POS_OSK_KEY_USE_MENU:
+-    pos_osk_widget_show_menu (self, key);
+-    break;
+-  default:
+-    g_assert_not_reached ();
++  n_alts = g_strv_length (alts);
++  total = n_alts + 1;
++  if (total * cell > room)
++    cell = room / total;
++
++  /* The letter itself stays over its key; the others go to the side with more
++   * room first, the likeliest nearest, and what doesn't fit there goes to the
++   * other side */
++  right_room = MAX (0, (int) floor ((self->width - self->inset - (key_cx + cell / 2)) / cell + 0.01));
++  left_room = MAX (0, (int) floor ((key_cx - cell / 2 - self->inset) / cell + 0.01));
++  if (key_cx < self->width / 2.0) {
++    n_right = MIN (n_alts, right_room);
++    n_left = n_alts - n_right;
++  } else {
++    n_left = MIN (n_alts, left_room);
++    n_right = n_alts - n_left;
++  }
++  base_idx = n_left;
++
++  options = g_new0 (const char *, total);
++  options[base_idx] = base;
++  for (int i = 0; i < n_alts; i++) {
++    if (key_cx < self->width / 2.0) {
++      if (i < n_right)
++        options[base_idx + 1 + i] = alts[i];
++      else
++        options[base_idx - 1 - (i - n_right)] = alts[i];
++    } else {
++      if (i < n_left)
++        options[base_idx - 1 - i] = alts[i];
++      else
++        options[base_idx + 1 + (i - n_left)] = alts[i];
++    }
+   }
+ 
+-  self->current = NULL;
++  g_clear_pointer (&self->popup.options, g_ptr_array_unref);
++  self->popup.options = g_ptr_array_new_with_free_func (g_free);
++  for (int i = 0; i < total; i++)
++    g_ptr_array_add (self->popup.options, g_strdup (options[i]));
++  g_free (options);
++
++  self->popup.cell = cell;
++  self->popup.w = total * cell;
++  self->popup.x = key_cx - cell / 2 - base_idx * cell;
++  self->popup.x = CLAMP (self->popup.x, self->inset, MAX (self->inset, self->width - self->inset - self->popup.w));
++  self->popup.h = PT_POPUP_H * self->vs;
++  self->popup.y = MAX (1.0, g->vy - PT_POPUP_GAP * self->vs - self->popup.h);
++  self->popup.selected = base_idx;
++  self->popup.touch = t;
++  self->popup.active = TRUE;
++
++  g_signal_emit (self, signals[OSK_POPOVER_SHOWN], 0, alts);
++  gtk_widget_queue_draw (GTK_WIDGET (self));
+ }
+ 
+ 
+-static gboolean
+-pos_osk_widget_button_release_event (GtkWidget *widget, GdkEventButton *event)
++static void
++tactus_popup_track (PosOskWidget *self, double x)
+ {
+-  PosOskWidget *self = POS_OSK_WIDGET (widget);
+-  PosOskKey *key = NULL;
++  int idx = floor ((x - self->popup.x) / self->popup.cell);
+ 
+-  g_debug ("Button release: %f, %f, button: %d, state: %d",
+-           event->x, event->y, event->button, event->state);
++  idx = CLAMP (idx, 0, (int) self->popup.options->len - 1);
++  if (idx == self->popup.selected)
++    return;
+ 
+-  key_repeat_cancel (self);
+-  pos_osk_widget_set_mode (self, POS_OSK_WIDGET_MODE_KEYBOARD);
++  self->popup.selected = idx;
++  gtk_widget_queue_draw (GTK_WIDGET (self));
++}
+ 
+-  if (event->button != 1)
+-    return GDK_EVENT_PROPAGATE;
+ 
+-  /* Already cancelled */
+-  if (self->current == NULL)
+-    return GDK_EVENT_PROPAGATE;
++static void
++tactus_popup_commit (PosOskWidget *self)
++{
++  TactusTouch *t = self->popup.touch;
++  PosOskWidgetLayer typed_on = self->layer;
++  g_autofree char *symbol = NULL;
+ 
+-  key = pos_osk_widget_locate_key (self, event->x, event->y);
+-  g_return_val_if_fail (key != NULL, GDK_EVENT_PROPAGATE);
++  symbol = g_strdup (g_ptr_array_index (self->popup.options, self->popup.selected));
+ 
+-  pos_osk_widget_key_release_action (self, key);
++  self->tap_valid = FALSE;
++  g_signal_emit (self, signals[OSK_KEY_SYMBOL], 0, symbol);
++  g_signal_emit (self, signals[OSK_KEY_UP], 0, symbol);
++  tactus_popup_close (self);
+ 
+-  return GDK_EVENT_STOP;
++  tactus_after_key (self, t, symbol, typed_on);
+ }
+ 
++/*
++ * The space bar, held, makes the keyboard a trackpad for the cursor
++ * (tactus-trackpad: the finger's motion, faster going further, and a finger
++ * resting at a side keeps the cursor going)
++ */
+ 
+ static void
+-pos_osk_widget_cancel_press (PosOskWidget *self)
++tactus_cursor_begin (PosOskWidget *self, TactusTouch *t)
+ {
+-  if (self->current == NULL)
+-    return;
++  self->cursor_touch = t;
++  tactus_trackpad_begin (&self->trackpad, t->x, t->y, g_get_monotonic_time (), 0.0, self->width, self->s);
++  /* A tick: the keyboard is a touch pad now */
++  g_signal_emit (self, signals[OSK_KEY_DOWN], 0, NULL);
++  pos_osk_widget_set_mode (self, POS_OSK_WIDGET_MODE_CURSOR);
++}
+ 
+-  key_repeat_cancel (self);
+ 
+-  pos_osk_widget_set_key_pressed (self, self->current, FALSE);
+-  g_signal_emit (self, signals[OSK_KEY_CANCELLED], 0, pos_osk_key_get_symbol (self->current));
+-  self->current = NULL;
++static void
++tactus_cursor_steps (PosOskWidget *self, int across, int down)
++{
++  for (; across > 0; across--)
++    g_signal_emit (self, signals[OSK_KEY_SYMBOL], 0, POS_OSK_SYMBOL_RIGHT);
++  for (; across < 0; across++)
++    g_signal_emit (self, signals[OSK_KEY_SYMBOL], 0, POS_OSK_SYMBOL_LEFT);
++  for (; down > 0; down--)
++    g_signal_emit (self, signals[OSK_KEY_SYMBOL], 0, POS_OSK_SYMBOL_DOWN);
++  for (; down < 0; down++)
++    g_signal_emit (self, signals[OSK_KEY_SYMBOL], 0, POS_OSK_SYMBOL_UP);
++}
++
++
++static gboolean
++on_cursor_edge (gpointer data)
++{
++  PosOskWidget *self = data;
++
++  if (self->cursor_touch == NULL || self->trackpad.edge == 0) {
++    self->edge_id = 0;
++    return G_SOURCE_REMOVE;
++  }
++  tactus_cursor_steps (self, tactus_trackpad_edge_steps (&self->trackpad, g_get_monotonic_time ()), 0);
++  return G_SOURCE_CONTINUE;
++}
++
++
++static void
++tactus_cursor_move (PosOskWidget *self, double x, double y)
++{
++  int across = 0, down = 0;
++
++  tactus_trackpad_move (&self->trackpad, x, y, g_get_monotonic_time (), &across, &down);
++  tactus_cursor_steps (self, across, down);
++  if (self->trackpad.edge != 0 && self->edge_id == 0)
++    self->edge_id = g_timeout_add (TACTUS_TRACKPAD_EDGE_EVERY_MS, on_cursor_edge, self);
++}
++
+ 
+-  pos_indicator_popup_hide (self->indicator_popup, TRUE);
++static void
++tactus_cursor_end (PosOskWidget *self)
++{
++  self->cursor_touch = NULL;
++  g_clear_handle_id (&self->edge_id, g_source_remove);
++  pos_osk_widget_set_mode (self, POS_OSK_WIDGET_MODE_KEYBOARD);
+ }
+ 
++/*
++ * Fingers
++ */
+ 
++/* Return held: a new line where a tap would send what was written off (a
++ * message, a search, a form). It is typed the moment the hold is long enough,
++ * so the line break showing is the sign that it took; letting go then types
++ * nothing more. */
++static void
++tactus_newline (PosOskWidget *self, TactusTouch *t)
++{
++  t->consumed = TRUE;
++  g_signal_emit (self, signals[OSK_KEY_SYMBOL], 0, POS_OSK_SYMBOL_NEWLINE);
++  g_signal_emit (self, signals[OSK_KEY_UP], 0, POS_OSK_SYMBOL_NEWLINE);
++  gtk_widget_queue_draw (GTK_WIDGET (self));
++}
++
++
++/* Whether a press on Paste has travelled: a swipe that starts on the key (up
++ * from there for the home screen, down to put the keyboard away) is not a
++ * tap and not a hold. Once it has, it stays so, wherever the finger goes. */
+ static gboolean
+-pos_osk_widget_touch_event (GtkWidget *widget, GdkEventTouch *event)
++tactus_paste_strayed (PosOskWidget *self, TactusTouch *t)
+ {
+-  PosOskWidget *self = POS_OSK_WIDGET (widget);
+-
+-  g_debug ("Touch event: seq: %p (%f, %f), type: %d",
+-           event->sequence,
+-           event->x,
+-           event->y,
+-           event->type);
+-
+-  if (event->type == GDK_TOUCH_BEGIN) {
+-    if (self->current) {
+-      key_repeat_cancel (self);
+-      pos_osk_widget_set_mode (self, POS_OSK_WIDGET_MODE_KEYBOARD);
+-      pos_osk_widget_key_release_action (self, self->current);
+-    }
++  double slop = PT_PASTE_SLOP * self->vs;
++  double dx = t->x - t->x0, dy = t->y - t->y0;
+ 
+-    self->sequence = event->sequence;
+-    pos_osk_widget_key_press (self, event->x, event->y);
+-    return GDK_EVENT_STOP;
++  if (dx * dx + dy * dy > slop * slop)
++    t->strayed = TRUE;
++  if (t->strayed) {
++    t->geom = NULL;
++    g_clear_handle_id (&t->long_id, g_source_remove);
+   }
++  return t->strayed;
++}
+ 
+-  if (event->sequence != self->sequence)
+-    return GDK_EVENT_PROPAGATE;
++/* Paste held: the clipboard's history. Asked for the moment the hold is long
++ * enough, as Return's new line is; letting go then does nothing more. */
++static gboolean
++on_paste_hold (gpointer data)
++{
++  TactusTouch *t = data;
++  PosOskWidget *self = t->widget;
+ 
+-  if (event->type == GDK_TOUCH_END || event->type == GDK_TOUCH_CANCEL) {
+-    if (self->current) {
+-      key_repeat_cancel (self);
+-      pos_osk_widget_set_mode (self, POS_OSK_WIDGET_MODE_KEYBOARD);
+-      pos_osk_widget_key_release_action (self, self->current);
+-    }
+-  } else if (event->type == GDK_TOUCH_UPDATE) {
+-    PosOskKey *key;
+-
+-    if (!self->current)
+-      return GDK_EVENT_PROPAGATE;
+-
+-    key = pos_osk_widget_locate_key (self, event->x, event->y);
+-    if (self->current && key != self->current) {
+-      gboolean accept = !!(self->features & PHOSH_OSK_FEATURE_KEY_DRAG);
+-
+-      g_debug ("Crossed key boundary, %s", accept ? "accepting" : "canceling");
+-      if (accept) {
+-        /* Handle current key */
+-        pos_osk_widget_key_release_action (self, self->current);
+-        /* Make the new key current */
+-        pos_osk_widget_key_press_action (self, key);
+-        return GDK_EVENT_STOP;
+-      } else {
+-        pos_osk_widget_cancel_press (self);
+-      }
+-    }
+-    return GDK_EVENT_PROPAGATE;
+-  }
++  t->long_id = 0;
++  if (!t->active || t->consumed || t->kind != TACTUS_TOUCH_STRIP || t->down_role != TACTUS_ROLE_PASTE)
++    return G_SOURCE_REMOVE;
++  if (!self->paste_shown || tactus_paste_strayed (self, t) || t->geom == NULL)
++    return G_SOURCE_REMOVE;
+ 
+-  return GDK_EVENT_STOP;
++  t->consumed = TRUE;
++  g_signal_emit (self, signals[OSK_STRIP_KEY], 0, "clipboard");
++  gtk_widget_queue_draw (GTK_WIDGET (self));
++  return G_SOURCE_REMOVE;
+ }
+ 
+ 
+ static gboolean
+-pos_osk_widget_motion_notify_event (GtkWidget *widget, GdkEventMotion *event)
++on_long_press (gpointer data)
+ {
+-  PosOskWidget *self = POS_OSK_WIDGET (widget);
+-  PosOskKey *key;
++  TactusTouch *t = data;
++  PosOskWidget *self = t->widget;
+ 
+-  if ((event->state & GDK_BUTTON1_MASK) == 0)
+-    return GDK_EVENT_PROPAGATE;
++  t->long_id = 0;
++  if (!t->active || t->consumed || t->geom == NULL || t->kind != TACTUS_TOUCH_KEY)
++    return G_SOURCE_REMOVE;
++  if (self->popup.active || self->cursor_touch)
++    return G_SOURCE_REMOVE;
+ 
+-  key = pos_osk_widget_locate_key (self, event->x, event->y);
+-  if (self->current && key != self->current) {
+-    gboolean accept = !!(self->features & PHOSH_OSK_FEATURE_KEY_DRAG);
+-
+-    g_debug ("Crossed key boundary, %s", accept ? "accepting" : "canceling");
+-    if (accept) {
+-      /* Handle current key */
+-      pos_osk_widget_key_release_action (self, self->current);
+-      /* Make the new key current */
+-      pos_osk_widget_key_press_action (self, key);
+-      return GDK_EVENT_STOP;
+-    } else {
+-      pos_osk_widget_cancel_press (self);
+-    }
+-  }
++  if (t->geom->role == TACTUS_ROLE_SPACE)
++    tactus_cursor_begin (self, t);
++  else if (t->geom->role == TACTUS_ROLE_CHAR)
++    tactus_popup_open (self, t);
++  else if (t->geom->role == TACTUS_ROLE_RETURN)
++    tactus_newline (self, t);
+ 
+-  return GDK_EVENT_PROPAGATE;
++  return G_SOURCE_REMOVE;
+ }
+ 
+-
++/* Holding the space bar moves the cursor; holding a letter that has them
++ * shows its accents; holding Return types a new line */
+ static void
+-on_symbol_selected (PosOskWidget *self, const char *symbol)
++tactus_arm_long_press (PosOskWidget *self, TactusTouch *t, gboolean space_too)
+ {
+-  g_debug ("Selected '%s' from popover", symbol);
++  g_clear_handle_id (&t->long_id, g_source_remove);
+ 
+-  g_signal_emit (self, signals[OSK_KEY_DOWN], 0, symbol);
+-  g_signal_emit (self, signals[OSK_KEY_SYMBOL], 0, symbol);
+-  g_signal_emit (self, signals[OSK_KEY_UP], 0, symbol);
+-  g_clear_pointer (&self->char_popup, phosh_cp_widget_destroy);
++  if (t->geom == NULL || t->geom->key == NULL)
++    return;
++
++  if (t->geom->role == TACTUS_ROLE_SPACE) {
++    if (!space_too)
++      return;
++  } else if (t->geom->role == TACTUS_ROLE_CHAR) {
++    GStrv alts = pos_osk_key_get_symbols (t->geom->key);
++
++    if (alts == NULL || alts[0] == NULL)
++      return;
++  } else if (t->geom->role != TACTUS_ROLE_RETURN) {
++    return;
++  }
++
++  t->long_id = g_timeout_add (LONG_PRESS_MS, on_long_press, t);
++  g_source_set_name_by_id (t->long_id, "[pos-osk-widget] long press");
+ }
+ 
+ 
+-static void
+-on_popover_closed (PosOskWidget *self)
++static TactusTouch *
++tactus_find_touch (PosOskWidget *self, GdkEventSequence *seq)
+ {
+-  g_debug ("Closed symbol popover");
+-  g_signal_emit (self, signals[OSK_POPOVER_HIDDEN], 0);
++  for (int i = 0; i < MAX_TOUCHES; i++) {
++    if (self->touches[i].active && self->touches[i].seq == seq)
++      return &self->touches[i];
++  }
++  return NULL;
+ }
+ 
+ 
+ static void
+-on_long_pressed (GtkGestureLongPress *gesture, double x, double y, gpointer user_data)
++tactus_touch_begin (PosOskWidget *self, GdkEventSequence *seq, double x, double y)
+ {
+-  PosOskWidget *self = POS_OSK_WIDGET (user_data);
+-  PosOskKey *key = pos_osk_widget_locate_key (self, x, y);
+-  GStrv symbols = NULL;
+-  GdkRectangle rect = { 0 };
++  TactusTouch *t = NULL;
++  TactusGeom *g;
++  const char *symbol;
+ 
+-  g_debug ("Long press '%s'", pos_osk_key_get_label (key) ?: pos_osk_key_get_symbol (key));
++  /* One finger chooses an accent or moves the cursor: others wait */
++  if (self->popup.active || self->cursor_touch)
++    return;
++  /* The same finger can't come down twice */
++  if (tactus_find_touch (self, seq))
++    return;
+ 
+-  if (g_strcmp0 (pos_osk_key_get_symbol (key), POS_OSK_SYMBOL_SPACE) == 0) {
+-    key_repeat_cancel (self);
+-    /* Remember the key we want to untoggle when mode ends */
+-    self->space = key;
+-    pos_osk_widget_set_mode (self, POS_OSK_WIDGET_MODE_CURSOR);
++  if (tactus_hit_test (self, x, y) == NULL)
+     return;
++
++  /* A key another finger still holds is typed first */
++  for (int i = 0; i < MAX_TOUCHES; i++) {
++    TactusTouch *o = &self->touches[i];
++
++    if (o->active && !o->consumed && o->kind == TACTUS_TOUCH_KEY) {
++      g_clear_handle_id (&o->long_id, g_source_remove);
++      if (o->geom)
++        tactus_commit_key (self, o);
++      o->consumed = TRUE;
++    }
+   }
+ 
+-  if (pos_osk_key_get_use (key) == POS_OSK_KEY_USE_TOGGLE &&
+-      pos_osk_key_get_layer (key) == POS_OSK_WIDGET_LAYER_CAPS) {
+-    g_debug ("Enabling caps lock");
+-    set_caps_lock (self, TRUE);
+-    pos_osk_widget_cancel_press (self);
++  /* That may have changed the page */
++  g = tactus_hit_test (self, x, y);
++  if (g == NULL)
+     return;
+-  }
+ 
+-  symbols = pos_osk_key_get_symbols (key);
+-  if (symbols == NULL || symbols[0] == NULL)
++  for (int i = 0; i < MAX_TOUCHES; i++) {
++    if (!self->touches[i].active) {
++      t = &self->touches[i];
++      break;
++    }
++  }
++  if (t == NULL)
+     return;
+ 
+-  pos_osk_widget_cancel_press (self);
+-  g_clear_pointer (&self->char_popup, phosh_cp_widget_destroy);
+-  self->char_popup = GTK_WIDGET (pos_char_popup_new (GTK_WIDGET (self), symbols));
++  *t = (TactusTouch) {
++    .widget = self, .active = TRUE, .seq = seq,
++    .geom = g, .down_role = g->role,
++    .x0 = x, .y0 = y, .x = x, .y = y,
++    .layer_before = self->layer,
++  };
++
++  switch (g->role) {
++  case TACTUS_ROLE_SHIFT:
++    t->kind = TACTUS_TOUCH_SHIFT;
++    g_signal_emit (self, signals[OSK_KEY_DOWN], 0, NULL);
++    /* Held, it gives capitals for as long as it is held */
++    tactus_set_layer (self, POS_OSK_WIDGET_LAYER_CAPS);
++    break;
++  case TACTUS_ROLE_SYM2:
++    t->kind = TACTUS_TOUCH_SYM2;
++    g_signal_emit (self, signals[OSK_KEY_DOWN], 0, NULL);
++    tactus_set_layer (self, self->layer == POS_OSK_WIDGET_LAYER_SYMBOLS ?
++                      POS_OSK_WIDGET_LAYER_SYMBOLS2 : POS_OSK_WIDGET_LAYER_SYMBOLS);
++    break;
++  case TACTUS_ROLE_SYM:
++    t->kind = TACTUS_TOUCH_SYM;
++    g_signal_emit (self, signals[OSK_KEY_DOWN], 0, NULL);
++    /* The page changes as the finger comes down, so it can slide on to a key there */
++    if (tactus_is_letters (self->layer)) {
++      tactus_set_layer (self, POS_OSK_WIDGET_LAYER_SYMBOLS);
++    } else {
++      self->shift_override = FALSE;
++      tactus_set_layer (self, tactus_letters_layer (self));
++    }
++    break;
++  case TACTUS_ROLE_BACKSPACE:
++    t->kind = TACTUS_TOUCH_BACKSPACE;
++    /* Deletes as the finger comes down; the surface repeats it while it stays */
++    g_signal_emit (self, signals[OSK_KEY_DOWN], 0, "KEY_BACKSPACE");
++    g_signal_emit (self, signals[OSK_KEY_SYMBOL], 0, "KEY_BACKSPACE");
++    break;
++  case TACTUS_ROLE_EMOJI:
++  case TACTUS_ROLE_MIC:
++  case TACTUS_ROLE_PASTE:
++    t->kind = TACTUS_TOUCH_STRIP;
++    g_signal_emit (self, signals[OSK_KEY_DOWN], 0, NULL);
++    if (g->role == TACTUS_ROLE_PASTE) {
++      t->long_id = g_timeout_add (LONG_PRESS_MS, on_paste_hold, t);
++      g_source_set_name_by_id (t->long_id, "[pos-osk-widget] paste held");
++    }
++    break;
++  case TACTUS_ROLE_CHAR:
++  case TACTUS_ROLE_SPACE:
++  case TACTUS_ROLE_RETURN:
++  default:
++    t->kind = TACTUS_TOUCH_KEY;
++    symbol = pos_osk_key_get_symbol (g->key);
++    g_signal_emit (self, signals[OSK_KEY_DOWN], 0, symbol);
++    tactus_arm_long_press (self, t, TRUE);
++    break;
++  }
+ 
+-  get_popup_pos (key, &rect);
+-  gtk_popover_set_pointing_to (GTK_POPOVER (self->char_popup), &rect);
++  /* The page may have changed under the finger */
++  if (t->geom && t->geom->row >= 0)
++    t->geom = tactus_hit_test (self, x, y);
+ 
+-  g_signal_connect_object (self->char_popup, "selected",
+-                           G_CALLBACK (on_symbol_selected),
+-                           self,
+-                           G_CONNECT_SWAPPED);
+-  g_signal_connect_object (self->char_popup, "closed",
+-                           G_CALLBACK (on_popover_closed),
+-                           self,
+-                           G_CONNECT_SWAPPED);
+-  gtk_popover_popup (GTK_POPOVER (self->char_popup));
+-  g_signal_emit (self, signals[OSK_POPOVER_SHOWN], 0, symbols);
++  gtk_widget_queue_draw (GTK_WIDGET (self));
+ }
+ 
+ 
+ static void
+-render_outline (cairo_t *cr, GtkStyleContext *context, const GdkRectangle *box)
++tactus_touch_update (PosOskWidget *self, GdkEventSequence *seq, double x, double y)
+ {
+-  GtkBorder margin, border;
+-  double x, y, width, height;
++  TactusTouch *t = tactus_find_touch (self, seq);
++  TactusGeom *g;
+ 
+-  gtk_style_context_get_margin (context, GTK_STATE_FLAG_NORMAL, &margin);
+-  gtk_style_context_get_border (context, GTK_STATE_FLAG_NORMAL, &border);
++  if (t == NULL)
++    return;
+ 
+-  x = margin.left + border.left;
+-  y = margin.top + border.top;
+-  width = box->width - x - margin.right - border.right;
+-  height = box->height - y - margin.bottom - border.bottom;
++  t->x = x;
++  t->y = y;
+ 
+-  gtk_render_background (context, cr, x, y, width, height);
+-  gtk_render_frame (context, cr, x, y, width, height);
+-}
++  if (self->popup.active && self->popup.touch == t) {
++    tactus_popup_track (self, x);
++    return;
++  }
++  if (self->cursor_touch == t) {
++    tactus_cursor_move (self, x, y);
++    return;
++  }
++  if (t->consumed)
++    return;
++  if (t->kind == TACTUS_TOUCH_STRIP && t->down_role == TACTUS_ROLE_PASTE) {
++    gboolean was = t->strayed;
+ 
++    if (tactus_paste_strayed (self, t)) {
++      if (!was)
++        gtk_widget_queue_draw (GTK_WIDGET (self));
++      return;
++    }
++  }
+ 
+-#if !PANGO_VERSION_CHECK (1, 50, 0)
+-G_DEFINE_AUTOPTR_CLEANUP_FUNC (PangoLayout, g_object_unref)
+-G_DEFINE_AUTOPTR_CLEANUP_FUNC (PangoFontDescription, pango_font_description_free)
+-#endif
++  g = tactus_hit_test (self, x, y);
++  if (g == t->geom)
++    return;
++
++  switch (t->kind) {
++  case TACTUS_TOUCH_KEY:
++    /* The finger slid to another key: that one is typed when it lifts */
++    g_clear_handle_id (&t->long_id, g_source_remove);
++    t->moved_off = TRUE;
++    if (g && tactus_types (g->role)) {
++      t->geom = g;
++      tactus_arm_long_press (self, t, FALSE);
++    } else {
++      t->geom = NULL;
++    }
++    break;
++  case TACTUS_TOUCH_BACKSPACE:
++    if (t->geom)
++      g_signal_emit (self, signals[OSK_KEY_UP], 0, "KEY_BACKSPACE");
++    t->geom = NULL;
++    break;
++  case TACTUS_TOUCH_SHIFT:
++    if (g && g->role == TACTUS_ROLE_CHAR) {
++      /* From Shift on to a letter: a capital, and Shift is done */
++      t->kind = TACTUS_TOUCH_KEY;
++      t->moved_off = TRUE;
++      t->geom = g;
++      tactus_arm_long_press (self, t, FALSE);
++    } else {
++      t->geom = (g && g->role == TACTUS_ROLE_SHIFT) ? g : NULL;
++    }
++    break;
++  case TACTUS_TOUCH_SYM:
++    if (g && tactus_types (g->role)) {
++      /* From "123" on to a key: that one, and back to the letters */
++      t->kind = TACTUS_TOUCH_KEY;
++      t->moved_off = TRUE;
++      t->return_to_letters = tactus_is_letters (t->layer_before);
++      t->geom = g;
++      tactus_arm_long_press (self, t, FALSE);
++    } else {
++      t->geom = (g && g->role == TACTUS_ROLE_SYM) ? g : NULL;
++    }
++    break;
++  case TACTUS_TOUCH_SYM2:
++  case TACTUS_TOUCH_STRIP:
++  default:
++    t->geom = (g && g->role == t->down_role) ? g : NULL;
++    break;
++  }
+ 
++  gtk_widget_queue_draw (GTK_WIDGET (self));
++}
+ 
++/* Shift was let go */
+ static void
+-render_label (cairo_t *cr, GtkStyleContext *context, const char *label, const GdkRectangle *box)
++tactus_shift_released (PosOskWidget *self, TactusTouch *t)
+ {
+-  g_autoptr (PangoLayout) layout = pango_cairo_create_layout (cr);
+-  g_autoptr (PangoFontDescription) font = NULL;
+-  PangoRectangle extents = { 0, };
+-  GdkRGBA color = {0};
+-  GtkStateFlags state;
++  gint64 now = g_get_monotonic_time ();
+ 
+-  cairo_save (cr);
++  if (!tactus_is_letters (self->layer))
++    return;
+ 
+-  state = gtk_style_context_get_state (context);
+-  gtk_style_context_get (context, state, "font", &font, NULL);
+-  pango_layout_set_font_description (layout, font);
+-
+-  pango_layout_set_text (layout, label, -1);
+-  pango_layout_set_alignment (layout, PANGO_ALIGN_CENTER);
+-
+-  pango_layout_set_width (layout, PANGO_SCALE * box->width);
+-  pango_layout_get_extents (layout, NULL, &extents);
+-
+-  cairo_move_to (cr,
+-                 0.0,
+-                 0.5 * (box->height - (double)extents.height / PANGO_SCALE));
+-  gtk_style_context_get_color (context, state, &color);
+-
+-  cairo_set_source_rgba (cr,
+-                         color.red,
+-                         color.green,
+-                         color.blue,
+-                         color.alpha);
+-  pango_cairo_show_layout (cr, layout);
++  if (t->chord_used) {
++    /* It was held for some capitals: back to small letters */
++    self->shift_override = FALSE;
++    tactus_set_layer (self, self->caps_lock ? POS_OSK_WIDGET_LAYER_CAPS : POS_OSK_WIDGET_LAYER_NORMAL);
++    return;
++  }
++  if (t->geom == NULL) {
++    /* The finger slid away: as it was */
++    tactus_set_layer (self, tactus_is_letters (t->layer_before) ? t->layer_before : self->layer);
++    return;
++  }
+ 
+-  cairo_restore (cr);
++  if (self->caps_lock) {
++    self->caps_lock = FALSE;
++    self->shift_override = TRUE;
++    self->last_shift_tap = 0;
++    tactus_set_layer (self, POS_OSK_WIDGET_LAYER_NORMAL);
++  } else if (now - self->last_shift_tap < SHIFT_DOUBLE_TAP_US) {
++    /* Two quick taps lock the capitals */
++    self->caps_lock = TRUE;
++    self->shift_override = FALSE;
++    self->last_shift_tap = 0;
++    tactus_set_layer (self, POS_OSK_WIDGET_LAYER_CAPS);
++  } else {
++    self->shift_override = TRUE;
++    self->last_shift_tap = now;
++    tactus_set_layer (self, t->layer_before == POS_OSK_WIDGET_LAYER_CAPS ?
++                      POS_OSK_WIDGET_LAYER_NORMAL : POS_OSK_WIDGET_LAYER_CAPS);
++  }
++  gtk_widget_queue_draw (GTK_WIDGET (self));
+ }
+ 
+ 
+ static void
+-render_hint (cairo_t *cr, GtkStyleContext *context, const char *hint, const GdkRectangle *box)
++tactus_touch_end (PosOskWidget *self, GdkEventSequence *seq, double x, double y, gboolean cancelled)
+ {
+-  g_autoptr (PangoLayout) layout = pango_cairo_create_layout (cr);
+-  g_autoptr (PangoFontDescription) font = NULL;
+-  PangoRectangle extents = { 0, };
+-  GdkRGBA color = {0};
+-  GtkStateFlags state = GTK_STATE_FLAG_INSENSITIVE;
+-  int x, y, size;
+-  GtkBorder margin, border;
+-  /* TODO: this should come from css */
+-  int hint_margin = 1;
+-  float hint_scale = 0.75;
+-
+-  cairo_save (cr);
++  TactusTouch *t = tactus_find_touch (self, seq);
+ 
+-  gtk_style_context_set_state (context, state);
+-  gtk_style_context_add_class (context, "hint");
++  if (t == NULL)
++    return;
+ 
+-  gtk_style_context_get (context, state, "font", &font, NULL);
+-  size = pango_font_description_get_size (font);
+-  pango_font_description_set_size (font, hint_scale * size);
+-  pango_layout_set_font_description (layout, font);
+-
+-  pango_layout_set_text (layout, hint, -1);
+-  pango_layout_set_alignment (layout, PANGO_ALIGN_CENTER);
+-
+-  gtk_style_context_get_margin (context, state, &margin);
+-  gtk_style_context_get_border (context, state, &border);
+-
+-  pango_layout_get_extents (layout, NULL, &extents);
+-
+-  x = box->width - border.left - margin.left - margin.right - border.right
+-    - (extents.width / PANGO_SCALE) - hint_margin;
+-  y = margin.top + border.top + hint_margin;
+-
+-  gtk_style_context_get_color (context, state, &color);
+-
+-  cairo_move_to (cr, x, y);
+-  cairo_set_source_rgba (cr,
+-                         color.red,
+-                         color.green,
+-                         color.blue,
+-                         color.alpha);
+-  pango_cairo_show_layout (cr, layout);
++  if (!cancelled) {
++    t->x = x;
++    t->y = y;
++  }
++  g_clear_handle_id (&t->long_id, g_source_remove);
++
++  if (self->popup.active && self->popup.touch == t) {
++    if (cancelled)
++      tactus_popup_close (self);
++    else
++      tactus_popup_commit (self);
++  } else if (self->cursor_touch == t) {
++    tactus_cursor_end (self);
++  } else if (t->consumed) {
++    /* typed already */
++  } else if (cancelled) {
++    switch (t->kind) {
++    case TACTUS_TOUCH_KEY:
++      if (t->geom && t->geom->key)
++        g_signal_emit (self, signals[OSK_KEY_CANCELLED], 0, pos_osk_key_get_symbol (t->geom->key));
++      break;
++    case TACTUS_TOUCH_BACKSPACE:
++      if (t->geom)
++        g_signal_emit (self, signals[OSK_KEY_CANCELLED], 0, "KEY_BACKSPACE");
++      break;
++    case TACTUS_TOUCH_SHIFT:
++      if (tactus_is_letters (self->layer) && tactus_is_letters (t->layer_before))
++        tactus_set_layer (self, t->layer_before);
++      break;
++    case TACTUS_TOUCH_SYM:
++    case TACTUS_TOUCH_SYM2:
++    case TACTUS_TOUCH_STRIP:
++    default:
++      break;
++    }
++  } else {
++    switch (t->kind) {
++    case TACTUS_TOUCH_KEY:
++      if (t->geom && t->geom->key)
++        tactus_commit_key (self, t);
++      break;
++    case TACTUS_TOUCH_BACKSPACE:
++      if (t->geom)
++        g_signal_emit (self, signals[OSK_KEY_UP], 0, "KEY_BACKSPACE");
++      break;
++    case TACTUS_TOUCH_SHIFT:
++      tactus_shift_released (self, t);
++      break;
++    case TACTUS_TOUCH_SYM:
++      /* Held while keys were typed there: back to where it came from */
++      if (t->chord_used) {
++        self->shift_override = FALSE;
++        tactus_set_layer (self, tactus_is_letters (t->layer_before) ?
++                          tactus_letters_layer (self) : POS_OSK_WIDGET_LAYER_SYMBOLS);
++      }
++      break;
++    case TACTUS_TOUCH_STRIP:
++      /* Where the finger was lifted counts too: a quick swipe may have said
++       * nothing in between */
++      if (t->down_role == TACTUS_ROLE_PASTE && (!self->paste_shown || tactus_paste_strayed (self, t)))
++        break;
++      if (t->geom)
++        g_signal_emit (self, signals[OSK_STRIP_KEY], 0,
++                       t->geom->role == TACTUS_ROLE_EMOJI ? "emoji" :
++                       t->geom->role == TACTUS_ROLE_PASTE ? "paste" : "mic");
++      break;
++    case TACTUS_TOUCH_SYM2:
++    default:
++      break;
++    }
++  }
+ 
+-  cairo_restore (cr);
+-  gtk_style_context_remove_class (context, "hint");
+-  gtk_style_context_set_state (context, GTK_STATE_FLAG_NORMAL);
++  t->active = FALSE;
++  gtk_widget_queue_draw (GTK_WIDGET (self));
+ }
+ 
+-
+-static void
+-render_icon (cairo_t            *cr,
+-             GtkStyleContext    *context,
+-             GtkIconTheme       *icon_theme,
+-             const char         *icon,
+-             int                 icon_size,
+-             const GdkRectangle *box,
+-             int                 scale)
++/**
++ * pos_osk_widget_cancel_touches:
++ * @self: The osk widget
++ *
++ * Forget every finger on the keyboard: nothing more is typed for them.
++ */
++void
++pos_osk_widget_cancel_touches (PosOskWidget *self)
+ {
+-  cairo_surface_t *surface;
+-
+-  g_autoptr (GtkIconInfo) icon_info = NULL;
+-  g_autoptr (GdkPixbuf) pixbuf = NULL;
+-
+-  icon_info = gtk_icon_theme_lookup_icon_for_scale (icon_theme, icon, icon_size, scale, 0);
++  g_return_if_fail (POS_IS_OSK_WIDGET (self));
+ 
+-  pixbuf = gtk_icon_info_load_symbolic_for_context (icon_info, context, NULL, NULL);
++  for (int i = 0; i < MAX_TOUCHES; i++) {
++    TactusTouch *t = &self->touches[i];
+ 
+-  surface = gdk_cairo_surface_create_from_pixbuf (pixbuf, scale, NULL);
+-  gtk_render_icon_surface (context, cr, surface,
+-                           (box->width - icon_size) / 2,
+-                           (box->height - icon_size) / 2);
+-  cairo_surface_destroy (surface);
++    if (t->active)
++      tactus_touch_end (self, t->seq, t->x, t->y, TRUE);
++    g_clear_handle_id (&t->long_id, g_source_remove);
++  }
++  g_clear_handle_id (&self->linger_id, g_source_remove);
++  self->linger = NULL;
+ }
+ 
+ 
+-static void
+-draw_key (PosOskWidget *self, PosOskKey *key, cairo_t *cr)
++static gboolean
++pos_osk_widget_touch_event (GtkWidget *widget, GdkEventTouch *event)
+ {
+-  GdkRGBA fg_color;
+-  GtkStateFlags state;
+-  const GdkRectangle *box;
+-  g_autofree char *style = NULL;
+-  g_autofree char *icon = NULL;
+-  g_autofree char *label = NULL;
+-  g_autofree char *symbol = NULL;
+-  gboolean pressed;
+-  double width;
+-  int scale;
+-  int icon_size;
+-
+-  scale = gtk_widget_get_scale_factor (GTK_WIDGET (self));
+-  state = gtk_style_context_get_state (self->key_context);
+-  gtk_style_context_get_color (self->key_context, state, &fg_color);
++  PosOskWidget *self = POS_OSK_WIDGET (widget);
+ 
+-  g_object_get (key, "style", &style, "pressed", &pressed, "width", &width,
+-                "symbol", &symbol, "label", &label, "icon", &icon, NULL);
++  if (event->type == GDK_TOUCH_BEGIN)
++    tactus_touch_begin (self, event->sequence, event->x, event->y);
++  else if (event->type == GDK_TOUCH_UPDATE)
++    tactus_touch_update (self, event->sequence, event->x, event->y);
++  else if (event->type == GDK_TOUCH_END)
++    tactus_touch_end (self, event->sequence, event->x, event->y, FALSE);
++  else if (event->type == GDK_TOUCH_CANCEL)
++    tactus_touch_end (self, event->sequence, event->x, event->y, TRUE);
++  else
++    return GDK_EVENT_PROPAGATE;
+ 
+-  if (style)
+-    gtk_style_context_add_class (self->key_context, style);
++  return GDK_EVENT_STOP;
++}
+ 
+-  if (pressed)
+-    gtk_style_context_add_class (self->key_context, "pressed");
+ 
+-  cairo_save (cr);
++static gboolean
++pos_osk_widget_button_press_event (GtkWidget *widget, GdkEventButton *event)
++{
++  PosOskWidget *self = POS_OSK_WIDGET (widget);
+ 
+-  box = pos_osk_key_get_box (key);
+-  cairo_translate (cr, box->x, box->y);
+-  cairo_rectangle (cr, 0.0, 0.0, box->width, box->height);
+-  cairo_clip (cr);
+-
+-  /* Scale icon by key scale */
+-  icon_size = MIN (KEY_ICON_SIZE * (self->key_scale / 100.0), box->height / 2.0);
+-
+-  render_outline (cr, self->key_context, box);
+-
+-  if (self->mode == POS_OSK_WIDGET_MODE_KEYBOARD) {
+-    if (icon) {
+-      GdkScreen *screen = gtk_widget_get_screen (GTK_WIDGET (self));
+-      GtkIconTheme *icon_theme = gtk_icon_theme_get_for_screen (screen);
++  /* Touches arrive as touches; what they also raise as a pointer is not for us */
++  if (gdk_event_get_pointer_emulated ((GdkEvent *) event))
++    return GDK_EVENT_STOP;
++  if (event->type != GDK_BUTTON_PRESS || event->button != 1)
++    return GDK_EVENT_PROPAGATE;
+ 
+-      render_icon (cr, self->key_context, icon_theme, icon, icon_size, box, scale);
+-    } else {
+-      GStrv symbols = pos_osk_key_get_symbols (key);
++  tactus_touch_begin (self, POINTER_SEQUENCE, event->x, event->y);
++  return GDK_EVENT_STOP;
++}
+ 
+-      render_label (cr, self->key_context, label ?: symbol, box);
+-      if (symbols)
+-        render_hint (cr, self->key_context, symbols[0], box);
+-    }
+-  }
+ 
+-  cairo_restore (cr);
++static gboolean
++pos_osk_widget_button_release_event (GtkWidget *widget, GdkEventButton *event)
++{
++  PosOskWidget *self = POS_OSK_WIDGET (widget);
+ 
+-  if (style)
+-    gtk_style_context_remove_class (self->key_context, style);
++  if (gdk_event_get_pointer_emulated ((GdkEvent *) event))
++    return GDK_EVENT_STOP;
++  if (event->button != 1)
++    return GDK_EVENT_PROPAGATE;
+ 
+-  if (pressed)
+-    gtk_style_context_remove_class (self->key_context, "pressed");
++  tactus_touch_end (self, POINTER_SEQUENCE, event->x, event->y, FALSE);
++  return GDK_EVENT_STOP;
+ }
+ 
+ 
+-static void
+-update_key_scale (PosOskWidget *self)
++static gboolean
++pos_osk_widget_motion_notify_event (GtkWidget *widget, GdkEventMotion *event)
+ {
+-  g_autofree char *css  = NULL;
+-  g_autoptr (GtkCssProvider) provider = gtk_css_provider_new ();
+-  GdkScreen *screen;
+-  int scale, scale_w, scale_h;
++  PosOskWidget *self = POS_OSK_WIDGET (widget);
+ 
+-  scale_h = 100 * MAX (1.0, (double)self->height / POS_INPUT_SURFACE_DEFAULT_HEIGHT); /* in % */
+-  scale_w = 100 * MAX (1.0, (double)self->width / MINIMUM_WIDTH); /* in % */
+-  scale = MIN (scale_w, scale_h);
++  if (gdk_event_get_pointer_emulated ((GdkEvent *) event))
++    return GDK_EVENT_STOP;
++  if ((event->state & GDK_BUTTON1_MASK) == 0)
++    return GDK_EVENT_PROPAGATE;
+ 
+-  /* Avoid pointless style updates */
+-  if (self->key_scale == scale)
+-    return;
+-  self->key_scale = scale;
++  tactus_touch_update (self, POINTER_SEQUENCE, event->x, event->y);
++  return GDK_EVENT_STOP;
++}
+ 
+-  g_debug ("Scaling font scale to %d%% (w: %d, h: %d)", scale, scale_w, scale_h);
++/*
++ * Drawing
++ */
+ 
+-  screen = gdk_screen_get_default ();
+-  if (self->css_provider)
+-    gtk_style_context_remove_provider_for_screen (screen,  GTK_STYLE_PROVIDER (self->css_provider));
++static gboolean
++tactus_is_pressed (PosOskWidget *self, TactusGeom *g)
++{
++  if (self->linger == g)
++    return TRUE;
+ 
++  for (int i = 0; i < MAX_TOUCHES; i++) {
++    TactusTouch *t = &self->touches[i];
+ 
+-  css = g_strdup_printf ("pos-key {"
+-                         "  font-size: %d%%;"
+-                         "}",
+-                         scale);
+-  gtk_css_provider_load_from_data (provider, css, -1, NULL);
+-  gtk_style_context_add_provider_for_screen (gdk_screen_get_default (),
+-                                             GTK_STYLE_PROVIDER (provider),
+-                                             GTK_STYLE_PROVIDER_PRIORITY_APPLICATION + 1);
+-  g_set_object (&self->css_provider, provider);
++    if (t->active && !t->consumed && t->geom == g)
++      return TRUE;
++  }
++  return FALSE;
+ }
+ 
+ 
+ static void
+-pos_osk_widget_size_allocate (GtkWidget *widget, GdkRectangle *allocation)
++tactus_draw_key (PosOskWidget *self, cairo_t *cr, TactusGeom *g)
+ {
+-  PosOskWidget *self = POS_OSK_WIDGET (widget);
++  const TactusTheme *theme = &self->theme;
++  gboolean pressed = tactus_is_pressed (self, g);
++  double radius = PT_KEY_RADIUS * self->vs;
++  double cx = g->vx + g->vw / 2, cy = g->vy + g->vh / 2;
++  const char *label;
++
++  /* A soft edge under each key of a light keyboard */
++  if (!theme->dark) {
++    tactus_rounded_rect (cr, g->vx, g->vy + 1.0, g->vw, g->vh, radius);
++    cairo_set_source_rgba (cr, 0, 0, 0, 0.06);
++    cairo_fill (cr);
++  }
++  tactus_rounded_rect (cr, g->vx, g->vy, g->vw, g->vh, radius);
++  tactus_set_source (cr, pressed ? &theme->key_pressed : &theme->key, 1.0);
++  cairo_fill (cr);
+ 
+-  self->width = allocation->width;
+-  self->height = allocation->height;
+-
+-  for (int l = 0; l <= POS_OSK_WIDGET_LAST_LAYER; l++) {
+-    PosOskWidgetKeyboardLayer *layer = pos_osk_widget_get_keyboard_layer (self, l);
+-    guint off_y;
+-
+-    layer->key_width = self->width / layer->width;
+-    layer->key_height = self->key_height;
+-    layer->offset_x = 0.5 * (self->width - (layer->width * layer->key_width));
+-    off_y = self->height - (layer->n_rows * layer->key_height);
+-
+-    /* Precalc all key positions */
+-    for (int r = 0; r < self->layout.n_rows; r++) {
+-      PosOskWidgetRow *row = pos_osk_widget_get_layer_row (self, l, r);
+-      double c = row->offset_x;
+-
+-      for (int k = 0; k < pos_osk_widget_row_get_num_keys (row); k++) {
+-        PosOskKey *key = pos_osk_widget_row_get_key (row, k);
+-        GdkRectangle box;
+-
+-        box.x = c * layer->key_width;
+-        box.y = off_y + r * layer->key_height;
+-        box.width = pos_osk_key_get_width (key) * layer->key_width;
+-        box.height = layer->key_height;
+-        pos_osk_key_set_box (key, &box);
++  /* As a touch pad the keys are blank */
++  if (self->mode == POS_OSK_WIDGET_MODE_CURSOR)
++    return;
+ 
+-        c += pos_osk_key_get_width (key);
+-      }
++  switch (g->role) {
++  case TACTUS_ROLE_SHIFT:
++    tactus_set_source (cr, &theme->icon, 1.0);
++    tactus_icon_shift (cr, cx, cy, self->vs,
++                       self->caps_lock ? TACTUS_SHIFT_LOCKED :
++                       self->layer == POS_OSK_WIDGET_LAYER_CAPS ? TACTUS_SHIFT_ON : TACTUS_SHIFT_OFF);
++    break;
++  case TACTUS_ROLE_BACKSPACE:
++    tactus_set_source (cr, &theme->icon, 1.0);
++    tactus_icon_delete (cr, cx, cy, self->vs, FALSE, NULL);
++    break;
++  case TACTUS_ROLE_RETURN:
++    tactus_set_source (cr, &theme->icon, 1.0);
++    tactus_icon_return (cr, cx, cy, self->vs);
++    break;
++  case TACTUS_ROLE_SYM:
++  case TACTUS_ROLE_SYM2:
++    label = pos_osk_key_get_label (g->key);
++    if (label)
++      tactus_draw_label (cr, label, cx, cy - 1.0 * self->vs, PT_FONT_LABEL * self->vs,
++                         WEIGHT_LABEL, TACTUS_BAND_CAP_HEIGHT, &theme->text);
++    break;
++  case TACTUS_ROLE_CHAR:
++    label = pos_osk_key_get_label (g->key) ?: pos_osk_key_get_symbol (g->key);
++    if (label == NULL)
++      break;
++    if (g_utf8_strlen (label, -1) > 1) {
++      tactus_draw_label (cr, label, cx, cy - 1.0 * self->vs, PT_FONT_LABEL * self->vs,
++                         WEIGHT_LABEL, TACTUS_BAND_CAP_HEIGHT, &theme->text);
++    } else if (g_unichar_islower (g_utf8_get_char (label))) {
++      tactus_draw_label (cr, label, cx, cy, PT_FONT_LOWER * self->vs,
++                         WEIGHT_LOWER, TACTUS_BAND_X_HEIGHT, &theme->text);
++    } else {
++      tactus_draw_label (cr, label, cx, cy - 1.5 * self->vs, PT_FONT_UPPER * self->vs,
++                         WEIGHT_UPPER, TACTUS_BAND_CAP_HEIGHT, &theme->text);
+     }
++    break;
++  case TACTUS_ROLE_SPACE:
++  case TACTUS_ROLE_EMOJI:
++  case TACTUS_ROLE_MIC:
++  case TACTUS_ROLE_PASTE:
++  default:
++    break;
+   }
++}
+ 
+-  /* On key size changes we adjust the font and icon size */
+-  update_key_scale (self);
+ 
+-  GTK_WIDGET_CLASS (pos_osk_widget_parent_class)->size_allocate (widget, allocation);
++static void
++tactus_draw_popup (PosOskWidget *self, cairo_t *cr)
++{
++  const TactusTheme *theme = &self->theme;
++  double radius = PT_POPUP_RADIUS * self->vs;
++  double pad = 2.0 * self->vs;
++  double x = self->popup.x - pad, w = self->popup.w + 2 * pad;
++  double y = self->popup.y, h = self->popup.h;
++
++  /* a soft shadow, then the row itself */
++  for (int i = 3; i >= 1; i--) {
++    tactus_rounded_rect (cr, x - i, y - i + 1.5, w + 2 * i, h + 2 * i, radius + i);
++    cairo_set_source_rgba (cr, 0, 0, 0, theme->dark ? 0.10 : 0.035);
++    cairo_fill (cr);
++  }
++  tactus_rounded_rect (cr, x, y, w, h, radius);
++  tactus_set_source (cr, &theme->popup, 1.0);
++  cairo_fill (cr);
++
++  for (int i = 0; i < self->popup.options->len; i++) {
++    const char *option = g_ptr_array_index (self->popup.options, i);
++    double cx = self->popup.x + (i + 0.5) * self->popup.cell;
++    double cy = y + h / 2;
++    gboolean lower = g_unichar_islower (g_utf8_get_char (option));
++
++    if (i == self->popup.selected) {
++      double sw = MIN (PT_POPUP_SEL_W * self->vs, self->popup.cell - 1.0);
++      double sh = PT_POPUP_SEL_H * self->vs;
++
++      tactus_rounded_rect (cr, cx - sw / 2, cy - sh / 2, sw, sh, 10.0 * self->vs);
++      tactus_set_source (cr, &theme->popup_selected, 1.0);
++      cairo_fill (cr);
++    }
++    tactus_draw_label (cr, option, cx, lower ? cy : cy - 1.5 * self->vs,
++                       (lower ? PT_FONT_LOWER : PT_FONT_UPPER) * self->vs,
++                       lower ? WEIGHT_LOWER : WEIGHT_UPPER,
++                       lower ? TACTUS_BAND_X_HEIGHT : TACTUS_BAND_CAP_HEIGHT, &theme->text);
++  }
+ }
+ 
+ 
+@@ -1587,48 +2014,79 @@
+ pos_osk_widget_draw (GtkWidget *widget, cairo_t *cr)
+ {
+   PosOskWidget *self = POS_OSK_WIDGET (widget);
+-  GtkStyleContext *context;
+   PosOskWidgetKeyboardLayer *layer = pos_osk_widget_get_current_layer (self);
++  const TactusTheme *theme = &self->theme;
++
++  if (self->width <= 0)
++    return FALSE;
+ 
+   cairo_save (cr);
+ 
+-  context = gtk_widget_get_style_context (widget);
+-  gtk_render_background (context, cr, 0, 0, self->width, self->height);
++  /* The panel; what is above it (room for a row of accents) stays clear */
++  if (self->flat_top || self->attached)
++    cairo_rectangle (cr, 0, self->overhang, self->width, self->height - self->overhang + 1.0);
++  else
++    tactus_panel_path (cr, 0, self->overhang, self->width, self->height - self->overhang + 1.0, self->vs);
++  tactus_set_source (cr, &theme->panel, 1.0);
++  cairo_fill (cr);
+ 
+-  cairo_translate (cr, layer->offset_x, 0);
++  for (int r = 0; r < layer->n_rows; r++) {
++    PosOskWidgetRow *row = &layer->rows[r];
+ 
+-  for (int r = 0; r < self->layout.n_rows; r++) {
+-    PosOskWidgetRow *row = pos_osk_widget_get_row (self, r);
++    if (row->geoms == NULL)
++      continue;
++    for (int k = 0; k < row->geoms->len; k++)
++      tactus_draw_key (self, cr, &g_array_index (row->geoms, TactusGeom, k));
++  }
+ 
+-    for (int k = 0; k < pos_osk_widget_row_get_num_keys (row); k++) {
+-      PosOskKey *key = pos_osk_widget_row_get_key (row, k);
++  tactus_icon_emoji (cr, self->emoji.vx + self->emoji.vw / 2, self->emoji.vy + self->emoji.vh / 2,
++                     self->vs, theme, tactus_is_pressed (self, &self->emoji) ? 0.45 : 1.0);
++  tactus_icon_mic (cr, self->mic.vx + self->mic.vw / 2, self->mic.vy + self->mic.vh / 2,
++                   self->vs, theme, tactus_is_pressed (self, &self->mic) ? 0.45 : 1.0);
++  if (self->paste_shown)
++    tactus_icon_paste (cr, self->paste.vx + self->paste.vw / 2, self->paste.vy + self->paste.vh / 2,
++                       self->vs, theme, tactus_is_pressed (self, &self->paste) ? 0.45 : 1.0);
+ 
+-      draw_key (self, key, cr);
+-    }
+-  }
++  if (self->popup.active)
++    tactus_draw_popup (self, cr);
+ 
+   cairo_restore (cr);
+   return FALSE;
+ }
+ 
++/*
++ * Size
++ */
+ 
+ static void
+-pos_osk_widget_finalize (GObject *object)
++on_resize_idle (gpointer data)
+ {
+-  PosOskWidget *self = POS_OSK_WIDGET (object);
++  PosOskWidget *self = POS_OSK_WIDGET (data);
+ 
+-  g_clear_handle_id (&self->repeat_id, g_source_remove);
+-  pos_osk_widget_layout_free (&self->layout);
+-  g_clear_object (&self->long_press);
+-  g_clear_pointer (&self->name, g_free);
+-  g_clear_pointer (&self->display_name, g_free);
+-  g_clear_pointer (&self->lang, g_free);
+-  g_clear_pointer (&self->region, g_free);
+-  g_clear_pointer (&self->layout_id, g_free);
+-  g_ptr_array_free (self->symbols, TRUE);
+-  g_clear_pointer (&self->event_history, g_array_unref);
++  self->resize_id = 0;
++  gtk_widget_queue_resize (GTK_WIDGET (self));
++}
+ 
+-  G_OBJECT_CLASS (pos_osk_widget_parent_class)->finalize (object);
++
++static void
++pos_osk_widget_size_allocate (GtkWidget *widget, GdkRectangle *allocation)
++{
++  PosOskWidget *self = POS_OSK_WIDGET (widget);
++  gboolean width_changed = self->width != allocation->width;
++
++  self->width = allocation->width;
++  self->height = allocation->height;
++  self->extra = 0.0;
++  self->extra = MAX (allocation->height - tactus_height_for_width (self, self->width), 0);
++
++  tactus_layout_keys (self);
++
++  /* The height follows the width: ask again when that changed */
++  if (width_changed && self->resize_id == 0 &&
++      tactus_height_for_width (self, self->width) != allocation->height)
++    self->resize_id = g_idle_add_once (on_resize_idle, self);
++
++  GTK_WIDGET_CLASS (pos_osk_widget_parent_class)->size_allocate (widget, allocation);
+ }
+ 
+ 
+@@ -1639,10 +2097,11 @@
+ {
+   PosOskWidget *self = POS_OSK_WIDGET (widget);
+ 
+-  *minimum_height = *natural_height = self->key_height * self->layout.n_rows;
+-
++  *minimum_height = *natural_height =
++    tactus_height_for_width (self, self->width > 0 ? self->width : MINIMUM_WIDTH);
+ }
+ 
++
+ static void
+ pos_osk_widget_get_preferred_width  (GtkWidget       *widget,
+                                      gint            *minimum_width,
+@@ -1651,6 +2110,97 @@
+   *minimum_width = *natural_width = MINIMUM_WIDTH;
+ }
+ 
++/*
++ * The look follows the applied Omarchy theme (tactus_theme_init), else the
++ * desktop's light or dark setting
++ */
++
++static void
++on_color_scheme_changed (PosOskWidget *self)
++{
++  g_autofree char *scheme = g_settings_get_string (self->interface_settings, "color-scheme");
++
++  tactus_theme_init (&self->theme, g_strcmp0 (scheme, "prefer-dark") == 0);
++  gtk_widget_queue_draw (GTK_WIDGET (self));
++}
++
++
++static void
++pos_osk_widget_set_property (GObject      *object,
++                             guint         property_id,
++                             const GValue *value,
++                             GParamSpec   *pspec)
++{
++  PosOskWidget *self = POS_OSK_WIDGET (object);
++
++  switch (property_id) {
++  case PROP_FEATURES:
++    self->features = g_value_get_flags (value);
++    break;
++  case PROP_KEY_HEIGHT:
++    pos_osk_widget_set_key_height (self, g_value_get_uint (value));
++    break;
++  default:
++    G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
++    break;
++  }
++}
++
++
++static void
++pos_osk_widget_get_property (GObject    *object,
++                             guint       property_id,
++                             GValue     *value,
++                             GParamSpec *pspec)
++{
++  PosOskWidget *self = POS_OSK_WIDGET (object);
++
++  switch (property_id) {
++  case PROP_LAYER:
++    g_value_set_enum (value, self->layer);
++    break;
++  case PROP_NAME:
++    g_value_set_string (value, self->name);
++    break;
++  case PROP_MODE:
++    g_value_set_enum (value, self->mode);
++    break;
++  case PROP_FEATURES:
++    g_value_set_flags (value, self->features);
++    break;
++  case PROP_KEY_HEIGHT:
++    g_value_set_uint (value, self->key_height);
++    break;
++  default:
++    G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
++    break;
++  }
++}
++
++
++static void
++pos_osk_widget_finalize (GObject *object)
++{
++  PosOskWidget *self = POS_OSK_WIDGET (object);
++
++  for (int i = 0; i < MAX_TOUCHES; i++)
++    g_clear_handle_id (&self->touches[i].long_id, g_source_remove);
++  g_clear_handle_id (&self->linger_id, g_source_remove);
++  g_clear_handle_id (&self->resize_id, g_source_remove);
++  g_clear_handle_id (&self->edge_id, g_source_remove);
++  g_clear_pointer (&self->popup.options, g_ptr_array_unref);
++  g_clear_object (&self->interface_settings);
++  pos_osk_widget_layout_free (&self->layout);
++  g_clear_pointer (&self->name, g_free);
++  g_clear_pointer (&self->display_name, g_free);
++  g_clear_pointer (&self->lang, g_free);
++  g_clear_pointer (&self->region, g_free);
++  g_clear_pointer (&self->layout_id, g_free);
++  g_ptr_array_free (self->symbols, TRUE);
++
++  G_OBJECT_CLASS (pos_osk_widget_parent_class)->finalize (object);
++}
++
+ 
+ static void
+ pos_osk_widget_class_init (PosOskWidgetClass *klass)
+@@ -1716,7 +2266,7 @@
+   /**
+    * PosOskWidget:key-height
+    *
+-   * The height of a single, regular key on the keyboard
++   * Kept for the surface's sake: the keyboard takes its height from its width.
+    */
+   props[PROP_KEY_HEIGHT] =
+     g_param_spec_uint ("key-height", "", "",
+@@ -1798,89 +2348,49 @@
+                                               0, NULL, NULL, NULL,
+                                               G_TYPE_NONE,
+                                               0);
++  /**
++   * PosOskWidget::strip-key
++   * @self: The osk widget
++   * @which: `emoji`, `mic`, `paste` (the paste key tapped) or `clipboard`
++   *   (the paste key held)
++   *
++   * One of the keys under the keyboard was tapped, or the paste key held.
++   */
++  signals[OSK_STRIP_KEY] = g_signal_new ("strip-key",
++                                         G_TYPE_FROM_CLASS (klass),
++                                         G_SIGNAL_RUN_LAST,
++                                         0, NULL, NULL, NULL,
++                                         G_TYPE_NONE,
++                                         1,
++                                         G_TYPE_STRING);
+ 
+   gtk_widget_class_set_css_name (widget_class, "pos-osk-widget");
+ }
+ 
+ 
+-/* Keys are no GObject types so make up a type for CSS */
+-static GType
+-key_type (void)
+-{
+-  static GType type = 0;
+-
+-  if (!type) {
+-    GTypeInfo info = {0};
+-    info.class_size = sizeof (GtkWidgetClass);
+-    info.instance_size = sizeof (GtkWidget);
+-
+-    type = g_type_register_static (GTK_TYPE_WIDGET, "pos-key", &info, G_TYPE_FLAG_ABSTRACT);
+-  }
+-
+-  return type;
+-}
+-
+-
+ static void
+ pos_osk_widget_init (PosOskWidget *self)
+ {
+-  const char *purpose_class = "normal";
+-  g_autoptr (GtkWidgetPath) path = NULL;
+-  GtkStyleContext *key_context;
+-  GtkStyleContext *context;
+-
+-  self->key_scale = 100; /* percent */
+   self->mode = POS_OSK_WIDGET_MODE_KEYBOARD;
+   self->layer = POS_OSK_WIDGET_LAYER_NORMAL;
+   self->symbols = g_ptr_array_new ();
+   self->key_height = POS_OSK_WIDGET_KEY_HEIGHT_DEFAULT;
+-  self->event_history = g_array_new (FALSE, FALSE, sizeof (EventHistoryRecord));
++  self->with_overhang = TRUE;
++  tactus_update_metrics (self, MINIMUM_WIDTH);
+ 
+-  gtk_widget_add_events (GTK_WIDGET (self), GDK_BUTTON_PRESS_MASK |
++  gtk_widget_add_events (GTK_WIDGET (self),
++                         GDK_TOUCH_MASK |
++                         GDK_BUTTON_PRESS_MASK |
+                          GDK_BUTTON_RELEASE_MASK |
++                         GDK_BUTTON_MOTION_MASK |
+                          GDK_POINTER_MOTION_MASK);
+ 
+-  context = gtk_widget_get_style_context (GTK_WIDGET (self));
+-  /* Create a style context for the buttons */
+-  path = gtk_widget_path_new ();
+-  /* TODO: until keys are widgets */
+-  gtk_widget_path_append_type (path, key_type ());
+-  gtk_widget_path_iter_add_class (path, -1, purpose_class);
+-
+-  key_context = gtk_style_context_new ();
+-  gtk_style_context_set_path (key_context, path);
+-  gtk_style_context_set_parent (key_context, context);
+-  gtk_style_context_set_state (key_context, GTK_STATE_FLAG_NORMAL);
+-  gtk_style_context_set_screen (key_context, gdk_screen_get_default ());
+-
+-  self->key_context = key_context;
+-
+-  self->layer = POS_OSK_WIDGET_LAYER_NORMAL;
+-
+-  self->long_press = g_object_new (GTK_TYPE_GESTURE_LONG_PRESS,
+-                                   "widget", self,
+-                                   "propagation-phase", GTK_PHASE_CAPTURE,
+-                                   "delay-factor", 0.5,
+-                                   NULL);
+-  g_signal_connect (self->long_press, "pressed", G_CALLBACK (on_long_pressed), self);
+-
+-  self->cursor_drag = g_object_new (GTK_TYPE_GESTURE_DRAG,
+-                                    "widget", self,
+-                                    "propagation-phase", GTK_PHASE_CAPTURE,
+-                                    NULL);
+-  g_object_connect (self->cursor_drag,
+-                    "swapped-signal::drag-begin",
+-                    G_CALLBACK (on_drag_begin), self,
+-                    "swapped-signal::drag-update",
+-                    G_CALLBACK (on_drag_update), self,
+-                    "swapped-signal::drag-end",
+-                    G_CALLBACK (on_drag_end), self,
+-                    "swapped-signal::cancel",
+-                    G_CALLBACK (on_drag_cancel), self,
+-                    NULL);
+-
+-  self->indicator_popup = pos_indicator_popup_new ();
+-  gtk_popover_set_relative_to (GTK_POPOVER (self->indicator_popup), GTK_WIDGET (self));
++  self->interface_settings = g_settings_new ("org.gnome.desktop.interface");
++  g_signal_connect_swapped (self->interface_settings, "changed::color-scheme",
++                            G_CALLBACK (on_color_scheme_changed), self);
++  /* and the applied Omarchy theme's, when Omarchy applies another */
++  tactus_theme_watch (self, G_CALLBACK (on_color_scheme_changed));
++  on_color_scheme_changed (self);
+ }
+ 
+ 
+@@ -1901,37 +2411,27 @@
+   return self->layer;
+ }
+ 
+-
++/**
++ * pos_osk_widget_set_layer:
++ * @self: The osk widget
++ * @layer: The page to show
++ *
++ * Show a page of the keyboard. Asking for the small letters also lets go of
++ * a locked Shift, and still shows capitals where a sentence starts.
++ */
+ void
+ pos_osk_widget_set_layer (PosOskWidget *self, PosOskWidgetLayer layer)
+ {
+   g_return_if_fail (POS_IS_OSK_WIDGET (self));
+ 
+-  if (layer == self->layer)
+-    return;
+-
+-  self->layer = layer;
++  self->shift_override = FALSE;
++  if (layer == POS_OSK_WIDGET_LAYER_NORMAL) {
++    self->caps_lock = FALSE;
++    layer = tactus_letters_layer (self);
++  }
+ 
+-  g_object_notify_by_pspec (G_OBJECT (self), props[PROP_LAYER]);
++  tactus_set_layer (self, layer);
+   gtk_widget_queue_draw (GTK_WIDGET (self));
+-
+-  /* Update key state for rendering */
+-  for (int r = 0; r < self->layout.n_rows; r++) {
+-    PosOskWidgetRow *row = pos_osk_widget_get_row (self, r);
+-
+-    for (int k = 0; k < pos_osk_widget_row_get_num_keys (row); k++) {
+-      PosOskKey *akey = g_ptr_array_index (row->keys, k);
+-      gboolean pressed;
+-
+-      if (pos_osk_key_get_use (akey) != POS_OSK_KEY_USE_TOGGLE)
+-        continue;
+-
+-      pressed = (self->layer == pos_osk_key_get_layer (akey)) ||
+-        (pos_osk_widget_get_layer (self) == POS_OSK_WIDGET_LAYER_SYMBOLS2);
+-
+-      pos_osk_widget_set_key_pressed (self, akey, pressed);
+-    }
+-  }
+ }
+ 
+ 
+@@ -2000,14 +2500,9 @@
+   if (g_strcmp0 (self->name, name) == 0)
+     return TRUE;
+ 
+-  if (self->layout.name)
+-    pos_osk_widget_layout_free (&self->layout);
+-  g_free (self->name);
+-  self->name = g_strdup (name);
+-  g_free (self->display_name);
+-  self->display_name = g_strdup (display_name);
+-  g_free (self->layout_id);
+-  self->layout_id = g_strdup (layout_id);
++  /* The keys the fingers are on are about to go */
++  pos_osk_widget_cancel_touches (self);
++  tactus_popup_close (self);
+ 
+   if (!gm_str_is_null_or_empty (variant))
+     path = g_strdup_printf ("/mobi/phosh/stevia/layouts/%s+%s.json", layout, variant);
+@@ -2018,6 +2513,14 @@
+   if (data == NULL)
+     return FALSE;
+ 
++  pos_osk_widget_layout_free (&self->layout);
++  g_free (self->name);
++  self->name = g_strdup (name);
++  g_free (self->display_name);
++  self->display_name = g_strdup (display_name);
++  g_free (self->layout_id);
++  self->layout_id = g_strdup (layout_id);
++
+   g_ptr_array_free (self->symbols, TRUE);
+   self->symbols = g_ptr_array_new ();
+ 
+@@ -2026,6 +2529,14 @@
+ 
+   parse_lang (self, layout, variant);
+ 
++  /* A terminal's keys sit right under its bar of shortcuts */
++  self->with_overhang = g_strcmp0 (layout, "terminal") != 0;
++  self->layer = POS_OSK_WIDGET_LAYER_NORMAL;
++  self->caps_lock = FALSE;
++  tactus_update_metrics (self, self->width > 0 ? self->width : MINIMUM_WIDTH);
++  tactus_layout_keys (self);
++  gtk_widget_queue_resize (GTK_WIDGET (self));
++
+   g_object_notify_by_pspec (G_OBJECT (self), props[PROP_NAME]);
+ 
+   return ret;
+@@ -2071,15 +2582,7 @@
+   g_debug ("Switching to mode: %d", mode);
+   self->mode = mode;
+ 
+-  if (mode == POS_OSK_WIDGET_MODE_CURSOR) {
+-    self->current = NULL;
+-  } else if (self->space) {
+-    pos_osk_widget_set_key_pressed (self, self->space, FALSE);
+-    self->space = NULL;
+-  }
+-
+   g_object_notify_by_pspec (G_OBJECT (self), props[PROP_MODE]);
+-  self->last_x = self->last_y = 0.0;
+   gtk_widget_queue_draw (GTK_WIDGET (self));
+ }
+ 
+@@ -2172,7 +2675,7 @@
+   g_object_notify_by_pspec (G_OBJECT (self), props[PROP_FEATURES]);
+ }
+ 
+-
++/* Kept for the surface's sake: the keyboard takes its height from its width */
+ void
+ pos_osk_widget_set_key_height (PosOskWidget *self, guint key_height)
+ {
+@@ -2181,8 +2684,6 @@
+ 
+   self->key_height = key_height;
+   g_object_notify_by_pspec (G_OBJECT (self), props[PROP_KEY_HEIGHT]);
+-
+-  gtk_widget_queue_resize (GTK_WIDGET (self));
+ }
+ 
+ 
+@@ -2193,3 +2694,196 @@
+ 
+   return self->layout.n_rows;
+ }
++
++/**
++ * pos_osk_widget_get_overhang:
++ * @self: The osk widget
++ *
++ * The height, in pixels, of the clear band above the keyboard's panel where
++ * a row of accented letters is drawn. Touches there are not the keyboard's.
++ */
++guint
++pos_osk_widget_get_overhang (PosOskWidget *self)
++{
++  g_return_val_if_fail (POS_IS_OSK_WIDGET (self), 0);
++
++  return self->overhang;
++}
++
++
++/**
++ * pos_osk_widget_get_panel_height:
++ * @self: The osk widget
++ *
++ * The height, in pixels, of the keyboard's panel: its keys and the strip under them.
++ */
++guint
++pos_osk_widget_get_panel_height (PosOskWidget *self)
++{
++  int natural;
++
++  g_return_val_if_fail (POS_IS_OSK_WIDGET (self), 0);
++
++  natural = tactus_height_for_width (self, self->width > 0 ? self->width : MINIMUM_WIDTH);
++  return MAX (natural - (int) (self->overhang - self->extra), 0);
++}
++
++/**
++ * pos_osk_widget_get_panel_under:
++ * @self: The osk widget
++ *
++ * How far, in pixels, the applications' windows are to reach under the top of
++ * the panel, so that what shows past its round corners is theirs.
++ */
++guint
++pos_osk_widget_get_panel_under (PosOskWidget *self)
++{
++  g_return_val_if_fail (POS_IS_OSK_WIDGET (self), 0);
++
++  return tactus_panel_under (self->vs > 0.0 ? self->vs : MINIMUM_WIDTH / PT_WIDTH);
++}
++
++/**
++ * pos_osk_widget_set_flat_top:
++ * @self: The osk widget
++ * @flat: Whether something sits right on top of the panel, so that its corners there are square
++ */
++void
++pos_osk_widget_set_flat_top (PosOskWidget *self, gboolean flat)
++{
++  g_return_if_fail (POS_IS_OSK_WIDGET (self));
++
++  if (self->flat_top == !!flat)
++    return;
++  self->flat_top = !!flat;
++  gtk_widget_queue_draw (GTK_WIDGET (self));
++}
++
++
++/**
++ * pos_osk_widget_set_attached:
++ * @self: The osk widget
++ * @attached: Whether something sits right on top of the keys (the search for emoji)
++ *
++ * Attached, the keyboard keeps no clear room above its keys and its panel's
++ * top is square.
++ */
++void
++pos_osk_widget_set_attached (PosOskWidget *self, gboolean attached)
++{
++  g_return_if_fail (POS_IS_OSK_WIDGET (self));
++
++  if (self->attached == !!attached)
++    return;
++  self->attached = !!attached;
++  pos_osk_widget_cancel_touches (self);
++  tactus_update_metrics (self, self->width > 0 ? self->width : MINIMUM_WIDTH);
++  gtk_widget_queue_resize (GTK_WIDGET (self));
++  gtk_widget_queue_draw (GTK_WIDGET (self));
++}
++
++
++gboolean
++pos_osk_widget_get_caps_lock (PosOskWidget *self)
++{
++  g_return_val_if_fail (POS_IS_OSK_WIDGET (self), FALSE);
++
++  return self->caps_lock;
++}
++
++/**
++ * pos_osk_widget_set_autoshift:
++ * @self: The osk widget
++ * @wanted: Whether the next letter starts a sentence
++ * @context_changed: Whether the text or the cursor changed since the last call
++ *
++ * Tell the keyboard whether the next letter should be a capital. A Shift the
++ * owner set by hand stays until the text changes.
++ */
++void
++pos_osk_widget_set_autoshift (PosOskWidget *self, gboolean wanted, gboolean context_changed)
++{
++  g_return_if_fail (POS_IS_OSK_WIDGET (self));
++
++  self->autoshift = wanted;
++  if (context_changed)
++    self->shift_override = FALSE;
++
++  if (!tactus_is_letters (self->layer) || self->shift_override || self->caps_lock)
++    return;
++  if (tactus_held (self, TACTUS_TOUCH_SHIFT, NULL))
++    return;
++
++  tactus_set_layer (self, tactus_letters_layer (self));
++}
++
++/**
++ * pos_osk_widget_take_tap:
++ * @self: The osk widget
++ * @dx:(out): How far right of its key's centre the finger was, in key widths
++ * @dy:(out): How far below, in row heights
++ *
++ * Where the finger landed for the letter being typed right now. Valid only
++ * while `key-symbol` is emitted for a letter key.
++ *
++ * Returns: %TRUE if there is such a place
++ */
++gboolean
++pos_osk_widget_take_tap (PosOskWidget *self, double *dx, double *dy)
++{
++  g_return_val_if_fail (POS_IS_OSK_WIDGET (self), FALSE);
++
++  if (!self->tap_valid)
++    return FALSE;
++
++  *dx = self->tap_dx;
++  *dy = self->tap_dy;
++  return TRUE;
++}
++
++/**
++ * pos_osk_widget_set_paste_shown:
++ * @self: The osk widget
++ * @shown: Whether there is something to paste
++ *
++ * The paste key is there only while there is something to paste. Nothing
++ * else under the keys moves when it comes or goes, and a finger on it when
++ * it goes types nothing.
++ */
++void
++pos_osk_widget_set_paste_shown (PosOskWidget *self, gboolean shown)
++{
++  g_return_if_fail (POS_IS_OSK_WIDGET (self));
++
++  if (self->paste_shown == !!shown)
++    return;
++  self->paste_shown = !!shown;
++
++  for (int i = 0; i < MAX_TOUCHES && !shown; i++) {
++    TactusTouch *t = &self->touches[i];
++
++    if (t->active && t->kind == TACTUS_TOUCH_STRIP && t->down_role == TACTUS_ROLE_PASTE) {
++      t->strayed = TRUE;
++      t->geom = NULL;
++      g_clear_handle_id (&t->long_id, g_source_remove);
++    }
++  }
++  gtk_widget_queue_draw (GTK_WIDGET (self));
++}
++
++/**
++ * pos_osk_widget_set_touch_bias:
++ * @self: The osk widget
++ * @dx: How far right of where they aim this owner's fingers land, in key widths
++ * @dy: How far below, in row heights
++ *
++ * Touches are read as that much further left and up.
++ */
++void
++pos_osk_widget_set_touch_bias (PosOskWidget *self, double dx, double dy)
++{
++  g_return_if_fail (POS_IS_OSK_WIDGET (self));
++
++  self->bias_x = CLAMP (dx, -0.25, 0.25);
++  self->bias_y = CLAMP (dy, -0.35, 0.35);
++}

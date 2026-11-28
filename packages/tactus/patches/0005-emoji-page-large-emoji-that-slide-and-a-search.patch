@@ -1,0 +1,2432 @@
+Subject: emoji-picker: large emoji that slide sideways, and a search
+
+Replaces the emoji chooser (Stevia's, after GTK's: a scrolled grid of small
+buttons made for a pointer) with a page drawn for fingers: a search field
+across the top, four rows of large emoji that slide sideways with a flick
+(the ones used lately first, then kind after kind), a row with a sign for
+each kind and the delete key, and "ABC" and the microphone at the bottom. A
+tap on a sign jumps to its kind, a long press on an emoji offers its skin
+tones. Searching puts the field and a row of what was found on top of the
+letters, which then type into the search. An emoji the font has no picture
+for is left out, on the page and in the search.
+
+The emoji and what is known about them still come from PosEmojiDb; the ones
+used lately are kept in the same setting as before.
+---
+--- a/src/pos-emoji-picker.h
++++ b/src/pos-emoji-picker.h
+@@ -14,8 +14,19 @@
+ 
+ #define POS_TYPE_EMOJI_PICKER         (pos_emoji_picker_get_type ())
+ 
+-G_DECLARE_FINAL_TYPE (PosEmojiPicker, pos_emoji_picker, POS, EMOJI_PICKER, GtkBox)
++G_DECLARE_FINAL_TYPE (PosEmojiPicker, pos_emoji_picker, POS, EMOJI_PICKER, GtkDrawingArea)
+ 
+ GtkWidget *pos_emoji_picker_new      (void);
+ 
++/* What sits on top of the letters while emoji are searched for by name */
++#define POS_TYPE_EMOJI_SEARCH         (pos_emoji_search_get_type ())
++
++G_DECLARE_FINAL_TYPE (PosEmojiSearch, pos_emoji_search, POS, EMOJI_SEARCH, GtkDrawingArea)
++
++GtkWidget  *pos_emoji_search_new       (void);
++void        pos_emoji_search_reset     (PosEmojiSearch *self);
++void        pos_emoji_search_type      (PosEmojiSearch *self, const char *text);
++void        pos_emoji_search_backspace (PosEmojiSearch *self);
++const char *pos_emoji_search_get_query (PosEmojiSearch *self);
++
+ G_END_DECLS
+--- a/src/pos-emoji-picker.c
++++ b/src/pos-emoji-picker.c
+@@ -1,5 +1,6 @@
+ /*
+  * Copyright (C) 2023 The Phosh Developers
++ *               2026 W4HO
+  *
+  * SPDX-License-Identifier: GPL-3.0-or-later
+  *
+@@ -9,632 +10,1220 @@
+  * gtkemojichooser.c: An Emoji chooser widget
+  * Copyright 2017, Red Hat, Inc.
+  * Author: Matthias Clasen <mclasen@redhat.com>
++ *
++ * The emoji page of Tactus.
++ *
++ * A search field across the top, the emoji in four rows that slide sideways
++ * (the ones used lately first, then kind after kind), under them a row with
++ * a sign for each kind and the delete key, and at the bottom "ABC" to go
++ * back to the letters and the microphone. The measures are in points of a
++ * 390 pt wide phone, as the letters' are; all of it is drawn here from
++ * scratch.
++ *
++ * The emoji and what is known about them come from PosEmojiDb, as in the
++ * emoji chooser this replaces (Stevia's, after GTK's).
+  */
+ 
++#define G_LOG_DOMAIN "pos-emoji-picker"
++
++#include "tactus-draw.h"
+ #include "pos-emoji-db.h"
+ #include "pos-emoji-picker.h"
+ 
+-#define BOX_SPACE 6
++#include <math.h>
++
++/* Measures in points of a screen 390 points wide; see pos-osk-widget.c */
++#define PT_WIDTH        390.0
++#define PT_WIDTH_MAX    430.0
++#define PT_WIDE_FROM    560.0
++#define MINIMUM_WIDTH   360
++
++#define E_FIELD_TOP     10.0
++#define E_FIELD_H       40.0
++#define E_FIELD_SIDE    9.3
++#define E_FIELD_ICON_X  30.0  /* the magnifier's middle, from the left */
++#define E_FIELD_TEXT_X  46.3  /* where the words start */
++#define E_FIELD_FONT    17.0
++#define E_ROWS          4
++#define E_ROWS_WIDE     3
++#define E_ROW0          38.5  /* the first row's middle, below the field */
++#define E_PITCH         53.2  /* from one emoji to the next, across and down */
++#define E_COL0          32.2  /* the first column's middle */
++#define E_EMOJI         34.6  /* how wide a face is */
++#define E_GAP           0.0   /* between two kinds: none, they run on */
++#define E_BAR_BELOW     44.8  /* the signs' middle, below the last row's */
++#define E_BAR_X0        28.3  /* the first sign's middle */
++#define E_BAR_END       68.2  /* the last sign's middle, from the right */
++#define E_BAR_DISC      14.65 /* the disc behind the sign of the kind in view */
++#define E_DELETE_X      24.5  /* the delete key's middle, from the right */
++#define E_STRIP         87.4  /* from the signs' middle to the bottom */
++#define E_STRIP_WIDE    58.0
++#define E_ABC_X         42.7
++#define E_ABC_BELOW     61.2  /* below the signs' middle */
++#define E_ABC_FONT      16.5
++#define E_MIC_X         42.7  /* from the right */
++#define E_MIC_BELOW     53.9
++#define E_TONES_PITCH   46.0
++#define E_TONES_H       58.0
++
++#define MAX_RECENT      28
++#define DRAG_START      8.0   /* pixels a finger moves before the emoji slide */
++#define LONG_PRESS_MS   400
++#define DELETE_DELAY_MS 350
++#define DELETE_EVERY_MS 90
++/* How fast a flick dies away: what is left of the speed after a millisecond */
++#define GLIDE_KEEP      0.998
++#define GLIDE_STOP      12.0  /* pixels a second */
++#define JUMP_MS         260.0
++#define N_TONES         6
+ 
+ enum {
+   EMOJI_PICKED,
+   DELETE_LAST,
+   DONE,
++  MIC,
++  SEARCH,
+   LAST_SIGNAL
+ };
+-
+ static int signals[LAST_SIGNAL];
+ 
+ typedef struct {
+-  GtkWidget *box;
+-  GtkWidget *button;
+-  int        group;
+-  gunichar   label;
+-  gboolean   empty;
+-} EmojiSection;
++  char     *text;     /* as drawn and typed */
++  GVariant *data;     /* what the emoji data says of it: (ausasu), or (auss) for one used lately */
++  gunichar  modifier; /* the skin tone it was used with */
++  gboolean  tones;    /* it comes in skin tones */
++} EmojiItem;
++
++typedef enum {
++  E_ZONE_NONE,
++  E_ZONE_FIELD,
++  E_ZONE_GRID,
++  E_ZONE_BAR,
++  E_ZONE_DELETE,
++  E_ZONE_ABC,
++  E_ZONE_MIC,
++} EmojiZone;
+ 
+ /**
+  * PosEmojiPicker
+  *
+- * A widget to pick emojis from.
++ * The emoji page: a widget to pick emojis from.
+  */
+ struct _PosEmojiPicker {
+-  GtkBox        parent_instance;
++  GtkDrawingArea    parent_instance;
+ 
+-  GtkWidget    *scrolled_window;
++  GSettings        *settings;
++  GSettings        *interface_settings;
++  TactusTheme       theme;
++
++  /* The emoji, by kind */
++  GPtrArray        *kinds[TACTUS_N_KINDS];
++  GVariant         *data;
++  GVariantIter     *iter;
++  guint             populate_id;
++  double            usual_width; /* of a face, to tell a missing emoji by */
++
++  /* Where things are, for the width at hand */
++  int               width, height;
++  double            s, vs;
++  int               rows;
++  double            pitch, col0, row0, bar_y, abc_y, mic_y;
++  double            kind_x[TACTUS_N_KINDS + 1]; /* where each kind starts in the row of emoji */
++  double            content;
++  double            font_size;
++  double            font_for; /* the scale font_size was worked out for */
++
++  /* Sliding */
++  double            scroll;
++  double            speed;       /* pixels a second, gliding */
++  gboolean          jumping;
++  double            jump_from, jump_to;
++  gint64            jump_start;
++  gint64            last_frame;
++  guint             tick_id;
++
++  /* The finger */
++  gboolean          touching;
++  GdkEventSequence *sequence;
++  EmojiZone         zone;
++  double            x0, y0, x, y;
++  double            scroll0;
++  gboolean          sliding;
++  EmojiItem        *pressed;
++  TactusKind        pressed_kind;
++  gint64            track_time[4];
++  double            track_x[4];
++  guint             long_id;
++  guint             delete_id;
++
++  /* The skin tones of a held emoji */
++  gboolean          tones_open;
++  EmojiItem        *tones_item;
++  double            tones_x, tones_y; /* the box's left and top */
++  int               tones_at;
++};
+ 
+-  int           emoji_max_width;
++G_DEFINE_TYPE (PosEmojiPicker, pos_emoji_picker, GTK_TYPE_DRAWING_AREA)
+ 
+-  GtkScrolledWindow *scrolled_sections;
++/*
++ * The emoji
++ */
+ 
+-  EmojiSection  recent;
+-  EmojiSection  people;
+-  EmojiSection  body;
+-  EmojiSection  nature;
+-  EmojiSection  food;
+-  EmojiSection  travel;
+-  EmojiSection  activities;
+-  EmojiSection  objects;
+-  EmojiSection  symbols;
+-  EmojiSection  flags;
+-
+-  GtkGesture   *recent_long_press;
+-  GtkGesture   *recent_multi_press;
+-  GtkGesture   *people_long_press;
+-  GtkGesture   *people_multi_press;
+-  GtkGesture   *body_long_press;
+-  GtkGesture   *body_multi_press;
+-
+-  GVariant     *data;
+-  GtkWidget    *box;
+-  GVariantIter *iter;
+-  guint         populate_idle;
++static void
++emoji_item_free (gpointer data)
++{
++  EmojiItem *item = data;
+ 
+-  GSettings    *settings;
+-};
++  g_free (item->text);
++  g_clear_pointer (&item->data, g_variant_unref);
++  g_free (item);
++}
+ 
+-G_DEFINE_TYPE (PosEmojiPicker, pos_emoji_picker, GTK_TYPE_BOX)
++/* The emoji as text, with a skin tone where it takes one */
++static char *
++emoji_text (GVariant *data, gunichar modifier, gboolean *tones)
++{
++  g_autoptr (GVariant) codes = g_variant_get_child_value (data, 0);
++  GString *text = g_string_new (NULL);
+ 
+-static void
+-on_done_clicked (PosEmojiPicker *self)
++  if (tones)
++    *tones = FALSE;
++  for (gsize i = 0; i < g_variant_n_children (codes); i++) {
++    gunichar code;
++
++    g_variant_get_child (codes, i, "u", &code);
++    if (code == 0) {
++      if (tones)
++        *tones = TRUE;
++      code = modifier;
++    }
++    if (code != 0)
++      g_string_append_unichar (text, code);
++  }
++  /* U+FE0F asks for the picture, not the sign */
++  g_string_append_unichar (text, 0xFE0F);
++  return g_string_free (text, FALSE);
++}
++
++/* An emoji the font has no picture for comes out as several, or as a box.
++ * @usual_width keeps the width of a face between calls (start it at 0). */
++static gboolean
++emoji_drawable (GtkWidget *widget, double *usual_width, const char *text)
+ {
+-  g_signal_emit (self, signals[DONE], 0);
++  g_autoptr (PangoLayout) layout = gtk_widget_create_pango_layout (widget, text);
++  PangoFontDescription *font = pango_font_description_from_string ("Noto Color Emoji 20");
++  PangoRectangle rect;
++
++  pango_layout_set_font_description (layout, font);
++  pango_font_description_free (font);
++  pango_layout_get_extents (layout, &rect, NULL);
++
++  if (*usual_width <= 0.0) {
++    g_autoptr (PangoLayout) face = gtk_widget_create_pango_layout (widget, "\360\237\231\202");
++    PangoFontDescription *same = pango_font_description_from_string ("Noto Color Emoji 20");
++    PangoRectangle usual;
++
++    pango_layout_set_font_description (face, same);
++    pango_font_description_free (same);
++    pango_layout_get_extents (face, &usual, NULL);
++    *usual_width = MAX (usual.width, 1);
++  }
++
++  return pango_layout_get_unknown_glyphs_count (layout) == 0 && rect.width < 1.5 * *usual_width;
+ }
+ 
+-static void
+-on_backspace_clicked (PosEmojiPicker *self)
++
++static TactusKind
++kind_of_group (guint group)
+ {
+-  g_signal_emit (self, signals[DELETE_LAST], 0);
++  switch (group) {
++  case 0:
++  case 1:
++    return TACTUS_KIND_SMILEYS;
++  case 3:
++    return TACTUS_KIND_ANIMALS;
++  case 4:
++    return TACTUS_KIND_FOOD;
++  case 5:
++    return TACTUS_KIND_TRAVEL;
++  case 6:
++    return TACTUS_KIND_ACTIVITY;
++  case 7:
++    return TACTUS_KIND_OBJECTS;
++  case 8:
++    return TACTUS_KIND_SYMBOLS;
++  case 9:
++    return TACTUS_KIND_FLAGS;
++  default:
++    return TACTUS_N_KINDS;
++  }
+ }
+ 
++static void emoji_layout (PosEmojiPicker *self);
+ 
+-static void
+-scroll_to_section (GtkButton *button,
+-                   gpointer   data)
++/* Take the emoji in from the data, a few milliseconds' worth at a time */
++static gboolean
++populate (gpointer user_data)
+ {
+-  EmojiSection *section = data;
+-  PosEmojiPicker *self;
+-  GtkAdjustment *adj;
+-  GtkAllocation alloc = { 0 };
+-  double value;
++  PosEmojiPicker *self = POS_EMOJI_PICKER (user_data);
++  gint64 start = g_get_monotonic_time ();
++  GVariant *item;
+ 
+-  self = POS_EMOJI_PICKER (gtk_widget_get_ancestor (GTK_WIDGET (button), POS_TYPE_EMOJI_PICKER));
++  if (self->data == NULL)
++    self->data = g_variant_ref (pos_emoji_db_get_data (pos_emoji_db_get_default ()));
++  if (self->iter == NULL)
++    self->iter = g_variant_iter_new (self->data);
+ 
+-  adj = gtk_scrolled_window_get_hadjustment (GTK_SCROLLED_WINDOW (self->scrolled_window));
++  while ((item = g_variant_iter_next_value (self->iter))) {
++    TactusKind kind;
++    guint group;
++    gboolean tones;
++    g_autofree char *text = NULL;
+ 
+-  gtk_widget_get_allocation (section->box, &alloc);
++    g_variant_get_child (item, 3, "u", &group);
++    kind = kind_of_group (group);
++    text = emoji_text (item, 0, &tones);
++    if (kind != TACTUS_N_KINDS && emoji_drawable (GTK_WIDGET (self), &self->usual_width, text)) {
++      EmojiItem *emoji = g_new0 (EmojiItem, 1);
++
++      emoji->text = g_steal_pointer (&text);
++      emoji->data = g_variant_ref (item);
++      emoji->tones = tones;
++      g_ptr_array_add (self->kinds[kind], emoji);
++    }
++    g_variant_unref (item);
+ 
+-  if (gtk_widget_get_direction (GTK_WIDGET (self)) == GTK_TEXT_DIR_RTL) {
+-    double width = gtk_widget_get_allocated_width (GTK_WIDGET (self));
+-    value = alloc.x + alloc.width - width;
+-  } else {
+-    value = alloc.x - BOX_SPACE;
++    if (g_get_monotonic_time () > start + 6000) {
++      emoji_layout (self);
++      gtk_widget_queue_draw (GTK_WIDGET (self));
++      return G_SOURCE_CONTINUE;
++    }
+   }
+ 
+-  gtk_adjustment_set_value (adj, value);
++  g_clear_pointer (&self->iter, g_variant_iter_free);
++  self->populate_id = 0;
++  emoji_layout (self);
++  gtk_widget_queue_draw (GTK_WIDGET (self));
++  return G_SOURCE_REMOVE;
+ }
+ 
+-
++/* The emoji used lately, the latest first */
+ static void
+-add_emoji (GtkWidget      *box,
+-           gboolean        prepend,
+-           GVariant       *item,
+-           gunichar        modifier,
+-           PosEmojiPicker *self);
+-
+-#define MAX_RECENT (4 * 4)
+-
+-static void
+-populate_recent_section (PosEmojiPicker *self)
++load_recent (PosEmojiPicker *self)
+ {
+-  g_autoptr (GVariant) variant = NULL;
+-  GVariant *item;
++  g_autoptr (GVariant) variant = g_settings_get_value (self->settings, "recent-emoji");
+   GVariantIter iter;
+-  gboolean empty = TRUE;
++  GVariant *entry;
+ 
+-  variant = g_settings_get_value (self->settings, "recent-emoji");
++  g_ptr_array_set_size (self->kinds[TACTUS_KIND_RECENT], 0);
+   g_variant_iter_init (&iter, variant);
+-  while ((item = g_variant_iter_next_value (&iter))) {
+-    g_autoptr (GVariant) emoji_data = NULL;
+-    gunichar modifier;
+-
+-    emoji_data = g_variant_get_child_value (item, 0);
+-    g_variant_get_child (item, 1, "u", &modifier);
+-    add_emoji (self->recent.box, FALSE, emoji_data, modifier, self);
+-    g_variant_unref (item);
+-    empty = FALSE;
+-  }
++  while ((entry = g_variant_iter_next_value (&iter))) {
++    EmojiItem *emoji = g_new0 (EmojiItem, 1);
+ 
+-  gtk_widget_set_visible (self->recent.box, !empty);
+-  gtk_widget_set_sensitive (self->recent.button, !empty);
++    emoji->data = g_variant_get_child_value (entry, 0);
++    g_variant_get_child (entry, 1, "u", &emoji->modifier);
++    emoji->text = emoji_text (emoji->data, emoji->modifier, &emoji->tones);
++    /* one the font has lost its picture for stays in the settings, unseen */
++    if (emoji_drawable (GTK_WIDGET (self), &self->usual_width, emoji->text))
++      g_ptr_array_add (self->kinds[TACTUS_KIND_RECENT], emoji);
++    else
++      emoji_item_free (emoji);
++    g_variant_unref (entry);
++    if (self->kinds[TACTUS_KIND_RECENT]->len >= MAX_RECENT)
++      break;
++  }
+ }
+ 
++/* What is kept of an emoji used lately: its codes and its name */
+ static GVariant *
+-get_recent_emoji_data (GtkWidget *widget)
++recent_data (EmojiItem *emoji)
+ {
+-  GVariant *emoji_data = g_object_get_data (G_OBJECT (widget), "emoji-data");
+-  GVariantIter *codes_iter;
+-  GVariantIter *keywords_iter;
+-  GVariantBuilder codes_builder;
+-  const char *name;
+-  const char *shortname;
+-  guint code;
+-  guint group;
+-
+-  g_assert (emoji_data);
+-
+-  if (g_variant_is_of_type (emoji_data, G_VARIANT_TYPE ("(auss)")))
+-    return emoji_data;
++  GVariantBuilder codes;
++  GVariantIter *codes_iter = NULL, *keywords_iter = NULL;
++  const char *name = "";
++  guint code, group;
+ 
+-  g_variant_get (emoji_data, "(au&sasu)", &codes_iter, &name, &keywords_iter, &group);
++  if (g_variant_is_of_type (emoji->data, G_VARIANT_TYPE ("(auss)")))
++    return g_variant_ref (emoji->data);
+ 
+-  g_variant_builder_init (&codes_builder, G_VARIANT_TYPE ("au"));
++  g_variant_get (emoji->data, "(au&sasu)", &codes_iter, &name, &keywords_iter, &group);
++  g_variant_builder_init (&codes, G_VARIANT_TYPE ("au"));
+   while (g_variant_iter_loop (codes_iter, "u", &code))
+-    g_variant_builder_add (&codes_builder, "u", code);
+-
++    g_variant_builder_add (&codes, "u", code);
+   g_variant_iter_free (codes_iter);
+   g_variant_iter_free (keywords_iter);
+ 
+-  shortname = "";
+-
+-  return g_variant_new ("(auss)", &codes_builder, name, shortname);
++  return g_variant_ref_sink (g_variant_new ("(auss)", &codes, name, ""));
+ }
+ 
++/* Note an emoji as used: it leads the ones used lately the next time the page comes up */
+ static void
+-add_recent_item (PosEmojiPicker *self, GVariant *item, gunichar modifier)
++remember (PosEmojiPicker *self, EmojiItem *emoji, gunichar modifier)
+ {
+-  GList *children, *l;
+-  int i;
++  g_autoptr (GVariant) variant = g_settings_get_value (self->settings, "recent-emoji");
++  g_autoptr (GVariant) mine = recent_data (emoji);
+   GVariantBuilder builder;
+-
+-  g_variant_ref (item);
++  GVariantIter iter;
++  GVariant *entry;
++  guint n = 1;
+ 
+   g_variant_builder_init (&builder, G_VARIANT_TYPE ("a((auss)u)"));
+-  g_variant_builder_add (&builder, "(@(auss)u)", item, modifier);
++  g_variant_builder_add (&builder, "(@(auss)u)", mine, modifier);
+ 
+-  children = gtk_container_get_children (GTK_CONTAINER (self->recent.box));
+-  for (l = children, i = 1; l; l = l->next, i++) {
+-    GVariant *item2 = get_recent_emoji_data (GTK_WIDGET (l->data));
+-    gunichar modifier2 = GPOINTER_TO_UINT (g_object_get_data (G_OBJECT (l->data), "modifier"));
+-
+-    if (modifier == modifier2 && g_variant_equal (item, item2)) {
+-      gtk_widget_destroy (GTK_WIDGET (l->data));
+-      i--;
+-      continue;
+-    }
+-    if (i >= MAX_RECENT) {
+-      gtk_widget_destroy (GTK_WIDGET (l->data));
+-      continue;
++  g_variant_iter_init (&iter, variant);
++  while ((entry = g_variant_iter_next_value (&iter))) {
++    g_autoptr (GVariant) other = g_variant_get_child_value (entry, 0);
++    g_autoptr (GVariant) codes = g_variant_get_child_value (other, 0);
++    g_autoptr (GVariant) my_codes = g_variant_get_child_value (mine, 0);
++    gunichar other_modifier;
++
++    g_variant_get_child (entry, 1, "u", &other_modifier);
++    if (n < MAX_RECENT && !(g_variant_equal (codes, my_codes) && other_modifier == modifier)) {
++      g_variant_builder_add (&builder, "(@(auss)u)", other, other_modifier);
++      n++;
+     }
+-
+-    g_variant_builder_add (&builder, "(@(auss)u)", item2, modifier2);
++    g_variant_unref (entry);
+   }
+-  g_list_free (children);
+-
+-  add_emoji (self->recent.box, TRUE, item, modifier, self);
+-
+-  /* Enable recent */
+-  gtk_widget_set_visible (self->recent.box, TRUE);
+-  gtk_widget_set_sensitive (self->recent.button, TRUE);
+-
+   g_settings_set_value (self->settings, "recent-emoji", g_variant_builder_end (&builder));
+-
+-  g_variant_unref (item);
+ }
+ 
+ 
+ static void
+-on_emoji_activated (GtkFlowBox *box, GtkFlowBoxChild *child, gpointer data)
++pick (PosEmojiPicker *self, EmojiItem *emoji, gunichar modifier)
+ {
+-  PosEmojiPicker *self = POS_EMOJI_PICKER (data);
+   g_autofree char *text = NULL;
+-  GtkWidget *label;
+-  GVariant *item;
+-  gunichar modifier;
+-
+-  label = gtk_bin_get_child (GTK_BIN (child));
+-  text = g_strdup (gtk_label_get_label (GTK_LABEL (label)));
+ 
+-  item = get_recent_emoji_data (GTK_WIDGET (child));
+-  modifier = (gunichar) GPOINTER_TO_UINT (g_object_get_data (G_OBJECT (child), "modifier"));
+-  add_recent_item (self, item, modifier);
++  if (emoji->tones)
++    text = emoji_text (emoji->data, modifier, NULL);
++  else
++    text = g_strdup (emoji->text);
+ 
+-  g_signal_emit (data, signals[EMOJI_PICKED], 0, text);
++  remember (self, emoji, emoji->tones ? modifier : 0);
++  g_signal_emit (self, signals[EMOJI_PICKED], 0, text);
+ }
+ 
+-static gboolean
+-has_variations (GVariant *emoji_data)
++/*
++ * Where things are
++ */
++
++static void
++emoji_metrics (PosEmojiPicker *self, int width)
+ {
+-  GVariant *codes;
+-  int i;
+-  gboolean has_variations;
++  gboolean wide = width > PT_WIDE_FROM;
+ 
+-  has_variations = FALSE;
+-  codes = g_variant_get_child_value (emoji_data, 0);
+-  for (i = 0; i < g_variant_n_children (codes); i++) {
+-    gunichar code;
+-    g_variant_get_child (codes, i, "u", &code);
+-    if (code == 0) {
+-      has_variations = TRUE;
+-      break;
+-    }
++  self->s = width / PT_WIDTH;
++  self->vs = MIN (width, PT_WIDTH_MAX) / PT_WIDTH;
++  self->rows = wide ? E_ROWS_WIDE : E_ROWS;
++  self->pitch = E_PITCH * self->vs;
++  self->col0 = E_COL0 * self->vs;
++  self->row0 = (E_FIELD_TOP + E_FIELD_H + E_ROW0) * self->vs;
++  self->bar_y = self->row0 + (self->rows - 1) * self->pitch + E_BAR_BELOW * self->vs;
++  if (wide) {
++    self->abc_y = self->bar_y + 36.0 * self->vs;
++    self->mic_y = self->bar_y + 33.0 * self->vs;
++  } else {
++    self->abc_y = self->bar_y + E_ABC_BELOW * self->vs;
++    self->mic_y = self->bar_y + E_MIC_BELOW * self->vs;
+   }
+-  g_variant_unref (codes);
++}
++
++
++static int
++emoji_height_for_width (PosEmojiPicker *self, int width)
++{
++  int keep = self->width, height;
+ 
+-  return has_variations;
++  emoji_metrics (self, width);
++  height = ceil (self->bar_y + (width > PT_WIDE_FROM ? E_STRIP_WIDE : E_STRIP) * self->vs);
++  if (keep > 0)
++    emoji_metrics (self, keep);
++  return height;
+ }
+ 
++/* Where each kind starts in the row of emoji, and how long the row is */
+ static void
+-show_variations (PosEmojiPicker *self, GtkWidget *child)
++emoji_layout (PosEmojiPicker *self)
+ {
+-  GtkWidget *popover;
+-  GtkWidget *view;
+-  GtkWidget *box;
+-  GVariant *emoji_data;
+-  GtkWidget *parent;
+-  gunichar modifier;
++  double x = 0.0;
+ 
+-  if (!child)
+-    return;
++  for (int k = 0; k < TACTUS_N_KINDS; k++) {
++    guint n = self->kinds[k]->len;
++    guint cols = (n + self->rows - 1) / self->rows;
++
++    self->kind_x[k] = x;
++    if (cols > 0)
++      x += cols * self->pitch + E_GAP * self->vs;
++  }
++  self->kind_x[TACTUS_N_KINDS] = x;
++  /* as much room after the last column as before the first */
++  self->content = MAX (x - E_GAP * self->vs + 2 * (self->col0 - self->pitch / 2), 0.0);
++}
+ 
+-  emoji_data = (GVariant*) g_object_get_data (G_OBJECT (child), "emoji-data");
+-  if (!emoji_data)
+-    return;
+ 
+-  if (!has_variations (emoji_data))
+-    return;
++static double
++scroll_max (PosEmojiPicker *self)
++{
++  return MAX (self->content - self->width, 0.0);
++}
+ 
+-  parent = gtk_widget_get_ancestor (child, POS_TYPE_EMOJI_PICKER);
+-  popover = gtk_popover_new (child);
+-  view = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
+-  gtk_style_context_add_class (gtk_widget_get_style_context (view), "view");
+-  box = gtk_flow_box_new ();
+-  gtk_flow_box_set_homogeneous (GTK_FLOW_BOX (box), TRUE);
+-  gtk_flow_box_set_min_children_per_line (GTK_FLOW_BOX (box), 6);
+-  gtk_flow_box_set_max_children_per_line (GTK_FLOW_BOX (box), 6);
+-  gtk_flow_box_set_activate_on_single_click (GTK_FLOW_BOX (box), TRUE);
+-  gtk_flow_box_set_selection_mode (GTK_FLOW_BOX (box), GTK_SELECTION_NONE);
+-  gtk_container_add (GTK_CONTAINER (popover), view);
+-  gtk_container_add (GTK_CONTAINER (view), box);
++/* Where the row of emoji is drawn: pulled past an end, it follows the finger by less */
++static double
++scroll_shown (PosEmojiPicker *self)
++{
++  double max = scroll_max (self);
+ 
+-  g_signal_connect (box, "child-activated", G_CALLBACK (on_emoji_activated), parent);
++  if (self->scroll < 0.0)
++    return self->scroll * 0.4;
++  if (self->scroll > max)
++    return max + (self->scroll - max) * 0.4;
++  return self->scroll;
++}
+ 
+-  add_emoji (box, FALSE, emoji_data, 0, self);
+-  for (modifier = 0x1f3fb; modifier <= 0x1f3ff; modifier++)
+-    add_emoji (box, FALSE, emoji_data, modifier, self);
++/* The kind in view: the one the first column on screen belongs to */
++static TactusKind
++kind_in_view (PosEmojiPicker *self)
++{
++  double x = CLAMP (self->scroll, 0.0, scroll_max (self)) + self->pitch * 0.6;
++  TactusKind found = TACTUS_KIND_RECENT;
+ 
+-  gtk_widget_show_all (view);
+-  gtk_popover_popup (GTK_POPOVER (popover));
++  for (int k = 0; k < TACTUS_N_KINDS; k++) {
++    if (self->kinds[k]->len == 0)
++      continue;
++    if (found == TACTUS_KIND_RECENT && self->kinds[TACTUS_KIND_RECENT]->len == 0)
++      found = k;
++    if (self->kind_x[k] <= x)
++      found = k;
++  }
++  return found;
+ }
+ 
++/* The sign of a kind in the row of signs */
++static double
++bar_x (PosEmojiPicker *self, TactusKind kind)
++{
++  double first = E_BAR_X0 * self->s;
++  double last = self->width - E_BAR_END * self->s;
+ 
+-static void
+-long_pressed_cb (GtkGesture *gesture, double x, double y, gpointer data)
++  return first + (last - first) * kind / (TACTUS_N_KINDS - 1);
++}
++
++/* The emoji at a place, and where its middle is */
++static EmojiItem *
++emoji_at (PosEmojiPicker *self, double x, double y, double *cx, double *cy)
+ {
+-  PosEmojiPicker *self = data;
+-  GtkWidget *box;
+-  GtkWidget *child;
++  double top = self->row0 - self->pitch / 2;
++  double cx0 = x + scroll_shown (self) - (self->col0 - self->pitch / 2);
++  int row;
++
++  if (y < top || y >= top + self->rows * self->pitch)
++    return NULL;
++  row = (int) ((y - top) / self->pitch);
++
++  for (int k = 0; k < TACTUS_N_KINDS; k++) {
++    guint n = self->kinds[k]->len;
++    guint cols = (n + self->rows - 1) / self->rows;
++    double start = self->kind_x[k];
++    guint col, index;
+ 
+-  box = gtk_event_controller_get_widget (GTK_EVENT_CONTROLLER (gesture));
+-  child = GTK_WIDGET (gtk_flow_box_get_child_at_pos (GTK_FLOW_BOX (box), x, y));
+-  show_variations (self, child);
++    if (cols == 0 || cx0 < start || cx0 >= start + cols * self->pitch)
++      continue;
++    col = (guint) ((cx0 - start) / self->pitch);
++    index = col * self->rows + row;
++    if (index >= n)
++      return NULL;
++    if (cx)
++      *cx = (self->col0 - self->pitch / 2) + start + (col + 0.5) * self->pitch - scroll_shown (self);
++    if (cy)
++      *cy = self->row0 + row * self->pitch;
++    return g_ptr_array_index (self->kinds[k], index);
++  }
++  return NULL;
+ }
+ 
++/*
++ * Sliding
++ */
++
+ static gboolean
+-popup_menu (GtkWidget *widget, gpointer data)
++on_tick (GtkWidget *widget, GdkFrameClock *clock, gpointer data)
+ {
+-  PosEmojiPicker *self = data;
++  PosEmojiPicker *self = POS_EMOJI_PICKER (widget);
++  gint64 now = gdk_frame_clock_get_frame_time (clock);
++  double dt = self->last_frame ? (now - self->last_frame) / 1000.0 : 16.0;
++  double max = scroll_max (self);
++  gboolean more = FALSE;
++
++  self->last_frame = now;
++  dt = CLAMP (dt, 1.0, 50.0);
++
++  if (self->jumping) {
++    double t = (now - self->jump_start) / 1000.0 / JUMP_MS;
++
++    if (t >= 1.0) {
++      self->scroll = self->jump_to;
++      self->jumping = FALSE;
++    } else {
++      /* quick at first, easing in */
++      double e = 1.0 - pow (1.0 - t, 3.0);
+ 
+-  show_variations (self, widget);
+-  return TRUE;
++      self->scroll = self->jump_from + (self->jump_to - self->jump_from) * e;
++      more = TRUE;
++    }
++  } else if (fabs (self->speed) > GLIDE_STOP) {
++    self->scroll += self->speed * dt / 1000.0;
++    self->speed *= pow (GLIDE_KEEP, dt);
++    if (self->scroll < 0.0 || self->scroll > max) {
++      self->scroll = CLAMP (self->scroll, 0.0, max);
++      self->speed = 0.0;
++    } else {
++      more = fabs (self->speed) > GLIDE_STOP;
++    }
++  }
++
++  gtk_widget_queue_draw (widget);
++  if (!more) {
++    self->speed = 0.0;
++    self->tick_id = 0;
++    return G_SOURCE_REMOVE;
++  }
++  return G_SOURCE_CONTINUE;
+ }
+ 
++
+ static void
+-add_emoji (GtkWidget      *box,
+-           gboolean        prepend,
+-           GVariant       *item,
+-           gunichar        modifier,
+-           PosEmojiPicker *self)
+-{
+-  GtkWidget *child;
+-  GtkWidget *label;
+-  g_autoptr (PangoAttrList) attrs = NULL;
+-  GVariant *codes;
+-  char text[64];
+-  char *p = text;
+-  int i;
+-  PangoLayout *layout;
+-  PangoRectangle rect;
++start_ticking (PosEmojiPicker *self)
++{
++  if (self->tick_id == 0) {
++    self->last_frame = 0;
++    self->tick_id = gtk_widget_add_tick_callback (GTK_WIDGET (self), on_tick, NULL, NULL);
++  }
++}
+ 
+-  codes = g_variant_get_child_value (item, 0);
+-  for (i = 0; i < g_variant_n_children (codes); i++) {
+-    gunichar code;
+ 
+-    g_variant_get_child (codes, i, "u", &code);
+-    if (code == 0)
+-      code = modifier;
+-    if (code != 0)
+-      p += g_unichar_to_utf8 (code, p);
++static void
++stop_sliding (PosEmojiPicker *self)
++{
++  if (self->tick_id) {
++    gtk_widget_remove_tick_callback (GTK_WIDGET (self), self->tick_id);
++    self->tick_id = 0;
+   }
+-  g_variant_unref (codes);
+-  p += g_unichar_to_utf8 (0xFE0F, p); /* U+FE0F is the Emoji variation selector */
+-  p[0] = 0;
+-
+-  label = gtk_label_new (text);
+-  attrs = pango_attr_list_new ();
+-  pango_attr_list_insert (attrs, pango_attr_scale_new (PANGO_SCALE_X_LARGE));
+-  gtk_label_set_attributes (GTK_LABEL (label), attrs);
++  self->speed = 0.0;
++  self->jumping = FALSE;
++}
+ 
+-  layout = gtk_label_get_layout (GTK_LABEL (label));
+-  pango_layout_get_extents (layout, &rect, NULL);
+ 
+-  /* Check for fallback rendering that generates too wide items */
+-  if (pango_layout_get_unknown_glyphs_count (layout) > 0 ||
+-      rect.width >= 1.5 * self->emoji_max_width) {
+-    gtk_widget_destroy (label);
++static void
++jump_to (PosEmojiPicker *self, double where)
++{
++  stop_sliding (self);
++  self->jump_from = self->scroll;
++  self->jump_to = CLAMP (where, 0.0, scroll_max (self));
++  if (fabs (self->jump_to - self->jump_from) < 0.5) {
++    self->scroll = self->jump_to;
++    gtk_widget_queue_draw (GTK_WIDGET (self));
+     return;
+   }
++  self->jumping = TRUE;
++  self->jump_start = g_get_monotonic_time ();
++  start_ticking (self);
++}
+ 
+-  child = gtk_flow_box_child_new ();
+-  gtk_style_context_add_class (gtk_widget_get_style_context (child), "emoji");
+-  g_object_set_data_full (G_OBJECT (child), "emoji-data",
+-                          g_variant_ref (item),
+-                          (GDestroyNotify)g_variant_unref);
+-  if (modifier != 0)
+-    g_object_set_data (G_OBJECT (child), "modifier", GUINT_TO_POINTER (modifier));
+-
+-  gtk_container_add (GTK_CONTAINER (child), label);
+-  gtk_widget_show_all (child);
++/*
++ * The skin tones of a held emoji
++ */
+ 
+-  if (self)
+-    g_signal_connect (child, "popup-menu", G_CALLBACK (popup_menu), self);
++static void
++tones_track (PosEmojiPicker *self, double x)
++{
++  int at = (int) floor ((x - self->tones_x - 6.0 * self->vs) / (E_TONES_PITCH * self->vs));
+ 
+-  gtk_flow_box_insert (GTK_FLOW_BOX (box), child, prepend ? 0 : -1);
++  at = CLAMP (at, 0, N_TONES - 1);
++  if (at != self->tones_at) {
++    self->tones_at = at;
++    gtk_widget_queue_draw (GTK_WIDGET (self));
++  }
+ }
+ 
+ 
+ static gboolean
+-populate_emoji_chooser (gpointer data)
++on_long_press (gpointer data)
+ {
+-  PosEmojiPicker *self = data;
+-  GVariant *item;
+-  guint64 start, now;
++  PosEmojiPicker *self = POS_EMOJI_PICKER (data);
++  double cx = 0.0, cy = 0.0, w;
+ 
+-  start = g_get_monotonic_time ();
++  self->long_id = 0;
++  if (!self->touching || self->sliding || self->pressed == NULL || !self->pressed->tones)
++    return G_SOURCE_REMOVE;
++  if (emoji_at (self, self->x, self->y, &cx, &cy) != self->pressed)
++    return G_SOURCE_REMOVE;
++
++  w = (N_TONES * E_TONES_PITCH + 12.0) * self->vs;
++  self->tones_open = TRUE;
++  self->tones_item = self->pressed;
++  self->tones_x = CLAMP (cx - w / 2, 4.0, self->width - w - 4.0);
++  self->tones_y = MAX (cy - self->pitch / 2 - (E_TONES_H + 4.0) * self->vs, 2.0);
++  self->tones_at = -1;
++  tones_track (self, self->x);
++  gtk_widget_queue_draw (GTK_WIDGET (self));
++  return G_SOURCE_REMOVE;
++}
+ 
+-  if (!self->data) {
+-    PosEmojiDb *emoji_db = pos_emoji_db_get_default ();
++/*
++ * The finger
++ */
+ 
+-    self->data = g_variant_ref (pos_emoji_db_get_data (emoji_db));
+-  }
++static gboolean
++on_delete_repeat (gpointer data)
++{
++  PosEmojiPicker *self = POS_EMOJI_PICKER (data);
+ 
+-  if (!self->iter) {
+-    self->iter = g_variant_iter_new (self->data);
+-    self->box = self->people.box;
+-  }
+-  while ((item = g_variant_iter_next_value (self->iter))) {
+-    guint group;
++  g_signal_emit (self, signals[DELETE_LAST], 0);
++  return G_SOURCE_CONTINUE;
++}
+ 
+-    g_variant_get_child (item, 3, "u", &group);
+ 
+-    if (group == self->people.group)
+-      self->box = self->people.box;
+-    else if (group == self->body.group)
+-      self->box = self->body.box;
+-    else if (group == self->nature.group)
+-      self->box = self->nature.box;
+-    else if (group == self->food.group)
+-      self->box = self->food.box;
+-    else if (group == self->travel.group)
+-      self->box = self->travel.box;
+-    else if (group == self->activities.group)
+-      self->box = self->activities.box;
+-    else if (group == self->objects.group)
+-      self->box = self->objects.box;
+-    else if (group == self->symbols.group)
+-      self->box = self->symbols.box;
+-    else if (group == self->flags.group)
+-      self->box = self->flags.box;
++static gboolean
++on_delete_held (gpointer data)
++{
++  PosEmojiPicker *self = POS_EMOJI_PICKER (data);
+ 
+-    add_emoji (self->box, FALSE, item, 0, self);
+-    g_variant_unref (item);
++  g_signal_emit (self, signals[DELETE_LAST], 0);
++  self->delete_id = g_timeout_add (DELETE_EVERY_MS, on_delete_repeat, self);
++  return G_SOURCE_REMOVE;
++}
+ 
+-    now = g_get_monotonic_time ();
+-    if (now > start + 8000)
+-      return G_SOURCE_CONTINUE;
++
++static EmojiZone
++zone_at (PosEmojiPicker *self, double x, double y, TactusKind *kind)
++{
++  double field_bottom = (E_FIELD_TOP + E_FIELD_H) * self->vs;
++  double grid_bottom = self->row0 + (self->rows - 0.5) * self->pitch;
++  double bar_half = 22.0 * self->vs;
++
++  if (y < field_bottom + 3.0 * self->vs)
++    return E_ZONE_FIELD;
++  if (y < grid_bottom)
++    return E_ZONE_GRID;
++  if (y < self->bar_y + bar_half) {
++    double best = G_MAXDOUBLE;
++
++    if (x > self->width - 2 * E_DELETE_X * self->s)
++      return E_ZONE_DELETE;
++    for (int k = 0; k < TACTUS_N_KINDS; k++) {
++      double d = fabs (x - bar_x (self, k));
++
++      if (d < best) {
++        best = d;
++        *kind = k;
++      }
++    }
++    return best < 22.0 * self->vs ? E_ZONE_BAR : E_ZONE_NONE;
+   }
++  if (x < 2 * E_ABC_X * self->s)
++    return E_ZONE_ABC;
++  if (x > self->width - 2 * E_MIC_X * self->s)
++    return E_ZONE_MIC;
++  return E_ZONE_NONE;
++}
+ 
+-  g_variant_iter_free (self->iter);
+-  self->iter = NULL;
+-  self->box = NULL;
+-  self->populate_idle = 0;
+ 
+-  return G_SOURCE_REMOVE;
++static void
++touch_begin (PosEmojiPicker *self, GdkEventSequence *sequence, double x, double y)
++{
++  if (self->touching)
++    return;
++
++  stop_sliding (self);
++  /* stopped past an end by a second finger: back where it belongs */
++  self->scroll = CLAMP (self->scroll, 0.0, scroll_max (self));
++
++  self->touching = TRUE;
++  self->sequence = sequence;
++  self->x0 = self->x = x;
++  self->y0 = self->y = y;
++  self->scroll0 = self->scroll;
++  self->sliding = FALSE;
++  self->pressed = NULL;
++  self->pressed_kind = TACTUS_N_KINDS;
++  for (int i = 0; i < 4; i++) {
++    self->track_time[i] = g_get_monotonic_time ();
++    self->track_x[i] = x;
++  }
++
++  self->zone = zone_at (self, x, y, &self->pressed_kind);
++  switch (self->zone) {
++  case E_ZONE_GRID:
++    self->pressed = emoji_at (self, x, y, NULL, NULL);
++    if (self->pressed && self->pressed->tones)
++      self->long_id = g_timeout_add (LONG_PRESS_MS, on_long_press, self);
++    break;
++  case E_ZONE_DELETE:
++    g_signal_emit (self, signals[DELETE_LAST], 0);
++    self->delete_id = g_timeout_add (DELETE_DELAY_MS, on_delete_held, self);
++    break;
++  case E_ZONE_BAR:
++    if (self->kinds[self->pressed_kind]->len == 0)
++      self->zone = E_ZONE_NONE;
++    break;
++  case E_ZONE_NONE:
++  case E_ZONE_FIELD:
++  case E_ZONE_ABC:
++  case E_ZONE_MIC:
++  default:
++    break;
++  }
++  gtk_widget_queue_draw (GTK_WIDGET (self));
+ }
+ 
++
+ static void
+-adj_value_changed (GtkAdjustment *adj, gpointer data)
++touch_update (PosEmojiPicker *self, GdkEventSequence *sequence, double x, double y)
+ {
+-  PosEmojiPicker *self = data;
+-  double width, value;
+-  EmojiSection const *sections[] = {
+-    &self->recent,
+-    &self->people,
+-    &self->body,
+-    &self->nature,
+-    &self->food,
+-    &self->travel,
+-    &self->activities,
+-    &self->objects,
+-    &self->symbols,
+-    &self->flags,
+-  };
+-  EmojiSection const *select_section = sections[0];
+-  gsize i;
+-
+-  /* Figure out which section the current scroll position is within */
+-  width = gtk_widget_get_allocated_width (GTK_WIDGET (self));
+-  value = gtk_adjustment_get_value (adj);
+-  for (i = 0; i < G_N_ELEMENTS (sections); ++i) {
+-    EmojiSection const *section = sections[i];
+-    GtkAllocation alloc;
++  if (!self->touching || self->sequence != sequence)
++    return;
+ 
+-    if (!gtk_widget_get_visible (section->box))
+-      continue;
++  self->x = x;
++  self->y = y;
+ 
+-    gtk_widget_get_allocation (section->box, &alloc);
++  if (self->tones_open) {
++    tones_track (self, x);
++    return;
++  }
++  if (self->zone != E_ZONE_GRID)
++    return;
+ 
+-    if (gtk_widget_get_direction (GTK_WIDGET (self)) == GTK_TEXT_DIR_RTL) {
+-      if (alloc.x == -1 || value > alloc.x + alloc.width - width)
+-        break;
+-    } else {
+-      if (alloc.x == -1 || value < alloc.x - BOX_SPACE)
+-        break;
++  if (!self->sliding && fabs (x - self->x0) > DRAG_START) {
++    self->sliding = TRUE;
++    self->pressed = NULL;
++    g_clear_handle_id (&self->long_id, g_source_remove);
++    /* from where the finger is now, not with a jump */
++    self->x0 = x;
++    self->scroll0 = self->scroll;
++  }
++  if (self->sliding) {
++    self->scroll = self->scroll0 - (x - self->x0);
++    for (int i = 3; i > 0; i--) {
++      self->track_time[i] = self->track_time[i - 1];
++      self->track_x[i] = self->track_x[i - 1];
+     }
+-
+-    select_section = section;
++    self->track_time[0] = g_get_monotonic_time ();
++    self->track_x[0] = x;
++    gtk_widget_queue_draw (GTK_WIDGET (self));
+   }
++}
+ 
+-  /* Un/Check the section buttons accordingly */
+-  for (i = 0; i < G_N_ELEMENTS (sections); ++i) {
+-    EmojiSection const *section = sections[i];
+-
+-    /* TODO: scroll button into view */
+-    if (section == select_section) {
+-      GtkAdjustment *adj_sections;
+-      GtkAllocation alloc_btn = { 0 }, alloc_view = { 0 };
+-      double v, pos;
+-
+-      gtk_widget_set_state_flags (section->button, GTK_STATE_FLAG_CHECKED, FALSE);
+-
+-      /* Scroll section button into view */
+-      adj_sections = gtk_scrolled_window_get_hadjustment (self->scrolled_sections);
+-      gtk_widget_get_allocation (section->button, &alloc_btn);
+-      gtk_widget_get_allocation (GTK_WIDGET (self->scrolled_sections), &alloc_view);
+-      v = gtk_adjustment_get_value (adj_sections);
+-
+-      /* Button is out of view to the right */
+-      if (alloc_btn.x + alloc_btn.width > v + alloc_view.width) {
+-        pos = (alloc_btn.x + alloc_btn.width - alloc_view.width);
+-        gtk_adjustment_set_value (adj_sections, pos);
+-      /* Button is out of view to the left */
+-      } else if (alloc_btn.x < v) {
+-        pos = alloc_btn.x;
+-        gtk_adjustment_set_value (adj_sections, alloc_btn.x);
+-      }
+ 
+-    } else {
+-      gtk_widget_unset_state_flags (section->button, GTK_STATE_FLAG_CHECKED);
++static void
++touch_end (PosEmojiPicker *self, GdkEventSequence *sequence, double x, double y, gboolean cancelled)
++{
++  EmojiZone zone;
++  TactusKind kind = TACTUS_N_KINDS;
++
++  if (!self->touching || self->sequence != sequence)
++    return;
++
++  self->touching = FALSE;
++  g_clear_handle_id (&self->long_id, g_source_remove);
++  g_clear_handle_id (&self->delete_id, g_source_remove);
++  zone = self->zone;
++  self->zone = E_ZONE_NONE;
++
++  if (self->tones_open) {
++    self->tones_open = FALSE;
++    if (!cancelled && self->tones_item && self->tones_at >= 0)
++      pick (self, self->tones_item, self->tones_at == 0 ? 0 : 0x1f3fb + self->tones_at - 1);
++    self->tones_item = NULL;
++  } else if (zone == E_ZONE_GRID && self->sliding) {
++    double max = scroll_max (self);
++
++    if (self->scroll < 0.0 || self->scroll > max) {
++      /* let go past an end: back to it */
++      jump_to (self, self->scroll);
++    } else if (!cancelled) {
++      gint64 now = g_get_monotonic_time ();
++      double dt = (self->track_time[0] - self->track_time[3]) / 1e6;
++
++      /* a finger that rested before it lifted has stopped the row */
++      if (dt > 0.005 && now - self->track_time[0] < 80 * G_TIME_SPAN_MILLISECOND) {
++        self->speed = -(self->track_x[0] - self->track_x[3]) / dt;
++        self->speed = CLAMP (self->speed, -6000.0, 6000.0);
++        if (fabs (self->speed) > 60.0)
++          start_ticking (self);
++        else
++          self->speed = 0.0;
++      }
++    }
++  } else if (!cancelled) {
++    switch (zone) {
++    case E_ZONE_GRID:
++      if (self->pressed && emoji_at (self, x, y, NULL, NULL) == self->pressed)
++        pick (self, self->pressed, self->pressed->modifier);
++      break;
++    case E_ZONE_BAR:
++      if (zone_at (self, x, y, &kind) == E_ZONE_BAR && kind == self->pressed_kind)
++        jump_to (self, self->kind_x[kind]);
++      break;
++    case E_ZONE_ABC:
++      if (zone_at (self, x, y, &kind) == E_ZONE_ABC)
++        g_signal_emit (self, signals[DONE], 0);
++      break;
++    case E_ZONE_MIC:
++      if (zone_at (self, x, y, &kind) == E_ZONE_MIC)
++        g_signal_emit (self, signals[MIC], 0);
++      break;
++    case E_ZONE_FIELD:
++      if (zone_at (self, x, y, &kind) == E_ZONE_FIELD)
++        g_signal_emit (self, signals[SEARCH], 0);
++      break;
++    case E_ZONE_NONE:
++    case E_ZONE_DELETE:
++    default:
++      break;
+     }
+   }
++
++  self->sliding = FALSE;
++  self->pressed = NULL;
++  self->pressed_kind = TACTUS_N_KINDS;
++  gtk_widget_queue_draw (GTK_WIDGET (self));
+ }
+ 
+-static void
+-setup_section (PosEmojiPicker *self,
+-               EmojiSection   *section,
+-               int             group,
+-               const char     *icon)
++
++static gboolean
++pos_emoji_picker_touch_event (GtkWidget *widget, GdkEventTouch *event)
++{
++  PosEmojiPicker *self = POS_EMOJI_PICKER (widget);
++
++  if (event->type == GDK_TOUCH_BEGIN)
++    touch_begin (self, event->sequence, event->x, event->y);
++  else if (event->type == GDK_TOUCH_UPDATE)
++    touch_update (self, event->sequence, event->x, event->y);
++  else if (event->type == GDK_TOUCH_END)
++    touch_end (self, event->sequence, event->x, event->y, FALSE);
++  else if (event->type == GDK_TOUCH_CANCEL)
++    touch_end (self, event->sequence, event->x, event->y, TRUE);
++  else
++    return GDK_EVENT_PROPAGATE;
++
++  return GDK_EVENT_STOP;
++}
++
++/* A mouse is a finger too (what touches are turned into for those who don't take them isn't) */
++#define POINTER_SEQUENCE ((GdkEventSequence *) GINT_TO_POINTER (0x706f696e))
++
++static gboolean
++pos_emoji_picker_button_press_event (GtkWidget *widget, GdkEventButton *event)
++{
++  if (event->button != 1 || gdk_event_get_pointer_emulated ((GdkEvent *) event))
++    return GDK_EVENT_PROPAGATE;
++  touch_begin (POS_EMOJI_PICKER (widget), POINTER_SEQUENCE, event->x, event->y);
++  return GDK_EVENT_STOP;
++}
++
++
++static gboolean
++pos_emoji_picker_button_release_event (GtkWidget *widget, GdkEventButton *event)
++{
++  if (event->button != 1 || gdk_event_get_pointer_emulated ((GdkEvent *) event))
++    return GDK_EVENT_PROPAGATE;
++  touch_end (POS_EMOJI_PICKER (widget), POINTER_SEQUENCE, event->x, event->y, FALSE);
++  return GDK_EVENT_STOP;
++}
++
++
++static gboolean
++pos_emoji_picker_motion_notify_event (GtkWidget *widget, GdkEventMotion *event)
+ {
+-  GtkWidget *image;
++  if (!(event->state & GDK_BUTTON1_MASK) || gdk_event_get_pointer_emulated ((GdkEvent *) event))
++    return GDK_EVENT_PROPAGATE;
++  touch_update (POS_EMOJI_PICKER (widget), POINTER_SEQUENCE, event->x, event->y);
++  return GDK_EVENT_STOP;
++}
+ 
+-  section->group = group;
++/*
++ * Drawing
++ */
+ 
+-  image = gtk_bin_get_child (GTK_BIN (section->button));
+-  gtk_image_set_from_icon_name (GTK_IMAGE (image), icon, GTK_ICON_SIZE_BUTTON);
++typedef struct {
++  TactusRgb field, hint, sign, disc, word;
++} EmojiColours;
+ 
+-  g_signal_connect (section->button, "clicked", G_CALLBACK (scroll_to_section), section);
++static void
++emoji_colours (PosEmojiPicker *self, EmojiColours *c)
++{
++  c->field = self->theme.field;
++  c->hint  = self->theme.hint;
++  c->sign  = self->theme.sign;
++  c->disc  = self->theme.disc;
++  c->word  = self->theme.text;
+ }
+ 
++/* Words starting at x, their capitals' middle at cy */
+ static void
+-pos_emoji_picker_init (PosEmojiPicker *self)
++draw_words (cairo_t *cr, const char *text, double x, double cy, double size, const TactusRgb *rgb)
+ {
+-  GtkAdjustment *adj;
++  g_autoptr (PangoLayout) layout = pango_cairo_create_layout (cr);
++  PangoFontDescription *font = pango_font_description_from_string ("Adwaita Sans, Inter, Noto Sans, sans-serif");
++  double baseline;
++
++  pango_font_description_set_absolute_size (font, size * PANGO_SCALE);
++  pango_layout_set_font_description (layout, font);
++  pango_font_description_free (font);
++  pango_layout_set_text (layout, text, -1);
++  baseline = (double) pango_layout_get_baseline (layout) / PANGO_SCALE;
++
++  tactus_set_source (cr, rgb, 1.0);
++  cairo_move_to (cr, x, cy + 0.727 * size / 2.0 - baseline);
++  pango_cairo_show_layout (cr, layout);
++}
+ 
+-  self->settings = g_settings_new ("mobi.phosh.osk.EmojiPicker");
+ 
+-  gtk_widget_init_template (GTK_WIDGET (self));
++static void
++draw_emoji_row (PosEmojiPicker *self, cairo_t *cr, const EmojiColours *colours)
++{
++  g_autoptr (PangoLayout) layout = pango_cairo_create_layout (cr);
++  PangoFontDescription *font = pango_font_description_new ();
++  double shown = scroll_shown (self);
++  double inset = self->col0 - self->pitch / 2;
++  double top = self->row0 - self->pitch / 2;
++
++  if (fabs (self->font_for - self->vs) > 1e-6) {
++    self->font_size = tactus_emoji_font_size (cr, E_EMOJI * self->vs);
++    self->font_for = self->vs;
++  }
++  pango_font_description_set_family (font, "Noto Color Emoji");
++  pango_font_description_set_absolute_size (font, self->font_size * PANGO_SCALE);
++  pango_layout_set_font_description (layout, font);
++  pango_font_description_free (font);
++
++  cairo_save (cr);
++  cairo_rectangle (cr, 0, top - 2, self->width, self->rows * self->pitch + 4);
++  cairo_clip (cr);
++
++  for (int k = 0; k < TACTUS_N_KINDS; k++) {
++    GPtrArray *items = self->kinds[k];
++    guint cols = (items->len + self->rows - 1) / self->rows;
++    double start = inset + self->kind_x[k] - shown;
++    int first, last;
+ 
+-  /* Get a reasonable maximum width for an emoji. We do this to
+-   * skip overly wide fallback rendering for certain emojis the
+-   * font does not contain and therefore end up being rendered
+-   * as multiply glyphs.
+-   */
+-  {
+-    g_autoptr (PangoLayout) layout = gtk_widget_create_pango_layout (GTK_WIDGET (self), "🙂");
+-    g_autoptr (PangoAttrList) attrs = NULL;
+-    PangoRectangle rect;
++    if (cols == 0 || start > self->width || start + cols * self->pitch < 0)
++      continue;
++    first = MAX ((int) floor (-start / self->pitch), 0);
++    last = MIN ((int) ceil ((self->width - start) / self->pitch), (int) cols);
+ 
+-    attrs = pango_attr_list_new ();
+-    pango_attr_list_insert (attrs, pango_attr_scale_new (PANGO_SCALE_X_LARGE));
+-    pango_layout_set_attributes (layout, attrs);
++    for (int col = first; col < last; col++) {
++      for (int row = 0; row < self->rows; row++) {
++        guint index = col * self->rows + row;
++        EmojiItem *emoji;
++        PangoRectangle ink;
++        double cx = start + (col + 0.5) * self->pitch;
++        double cy = self->row0 + row * self->pitch;
++
++        if (index >= items->len)
++          break;
++        emoji = g_ptr_array_index (items, index);
++
++        if (emoji == self->pressed && !self->sliding) {
++          double half = self->pitch / 2 - 2.0 * self->vs;
++
++          tactus_rounded_rect (cr, cx - half, cy - half, 2 * half, 2 * half, 9.0 * self->vs);
++          tactus_set_source (cr, &colours->disc, 1.0);
++          cairo_fill (cr);
++        }
++
++        pango_layout_set_text (layout, emoji->text, -1);
++        pango_layout_get_extents (layout, &ink, NULL);
++        cairo_move_to (cr,
++                       cx - ((double) ink.x + ink.width / 2.0) / PANGO_SCALE,
++                       cy - ((double) ink.y + ink.height / 2.0) / PANGO_SCALE);
++        pango_cairo_show_layout (cr, layout);
++      }
++    }
++  }
++  cairo_new_path (cr);
++  cairo_restore (cr);
++}
+ 
+-    pango_layout_get_extents (layout, &rect, NULL);
+-    self->emoji_max_width = rect.width;
++
++static void
++draw_tones (PosEmojiPicker *self, cairo_t *cr)
++{
++  double w = (N_TONES * E_TONES_PITCH + 12.0) * self->vs;
++  double h = E_TONES_H * self->vs;
++  double cy = self->tones_y + h / 2;
++
++  /* a soft shadow, then the box */
++  for (int i = 3; i >= 1; i--) {
++    tactus_rounded_rect (cr, self->tones_x - i, self->tones_y - i + 1.5, w + 2 * i, h + 2 * i, 18.0 * self->vs + i);
++    cairo_set_source_rgba (cr, 0, 0, 0, 0.035);
++    cairo_fill (cr);
++  }
++  tactus_rounded_rect (cr, self->tones_x, self->tones_y, w, h, 18.0 * self->vs);
++  tactus_set_source (cr, &self->theme.popup, 1.0);
++  cairo_fill (cr);
++
++  for (int i = 0; i < N_TONES; i++) {
++    g_autofree char *text = emoji_text (self->tones_item->data, i == 0 ? 0 : 0x1f3fb + i - 1, NULL);
++    double cx = self->tones_x + (6.0 + (i + 0.5) * E_TONES_PITCH) * self->vs;
++
++    if (i == self->tones_at) {
++      tactus_rounded_rect (cr, cx - 21.0 * self->vs, cy - 24.0 * self->vs, 42.0 * self->vs, 48.0 * self->vs,
++                           10.0 * self->vs);
++      tactus_set_source (cr, &self->theme.popup_selected, 1.0);
++      cairo_fill (cr);
++    }
++    tactus_draw_emoji (cr, text, cx, cy, self->font_size * 0.92, 1.0);
+   }
++}
+ 
+-  self->recent_long_press = gtk_gesture_long_press_new (self->recent.box);
+-  g_signal_connect (self->recent_long_press, "pressed", G_CALLBACK (long_pressed_cb), self);
+ 
+-  self->people_long_press = gtk_gesture_long_press_new (self->people.box);
+-  g_signal_connect (self->people_long_press, "pressed", G_CALLBACK (long_pressed_cb), self);
++static gboolean
++pos_emoji_picker_draw (GtkWidget *widget, cairo_t *cr)
++{
++  PosEmojiPicker *self = POS_EMOJI_PICKER (widget);
++  TactusKind in_view = kind_in_view (self);
++  EmojiColours colours;
++  double field_y = E_FIELD_TOP * self->vs, field_h = E_FIELD_H * self->vs;
++
++  if (self->width <= 0)
++    return FALSE;
++
++  emoji_colours (self, &colours);
++
++  tactus_panel_path (cr, 0, 0, self->width, self->height + 1.0, self->vs);
++  tactus_set_source (cr, &self->theme.panel, 1.0);
++  cairo_fill (cr);
++
++  /* The search field */
++  tactus_rounded_rect (cr, E_FIELD_SIDE * self->s, field_y, self->width - 2 * E_FIELD_SIDE * self->s, field_h,
++                       field_h / 2);
++  tactus_set_source (cr, &colours.field, self->zone == E_ZONE_FIELD ? 0.6 : 1.0);
++  cairo_fill (cr);
++  tactus_icon_magnifier (cr, E_FIELD_ICON_X * self->s, field_y + field_h / 2, self->vs, &colours.hint);
++  draw_words (cr, "Search Emoji", E_FIELD_TEXT_X * self->s, field_y + field_h / 2, E_FIELD_FONT * self->vs,
++              &colours.hint);
++
++  draw_emoji_row (self, cr, &colours);
++
++  /* The signs of the kinds, and the delete key */
++  for (int k = 0; k < TACTUS_N_KINDS; k++) {
++    double x = bar_x (self, k);
++    gboolean none = self->kinds[k]->len == 0;
++
++    if ((TactusKind) k == in_view && !none) {
++      cairo_arc (cr, x, self->bar_y, E_BAR_DISC * self->vs, 0, 2 * G_PI);
++      tactus_set_source (cr, &colours.disc, 1.0);
++      cairo_fill (cr);
++    }
++    cairo_push_group (cr);
++    tactus_icon_kind (cr, k, x, self->bar_y, self->vs, &colours.sign);
++    cairo_pop_group_to_source (cr);
++    cairo_paint_with_alpha (cr, none ? 0.3 : (self->zone == E_ZONE_BAR && self->pressed_kind == (TactusKind) k) ? 0.5 : 1.0);
++  }
++  tactus_set_source (cr, &colours.word, self->zone == E_ZONE_DELETE ? 0.45 : 1.0);
++  tactus_icon_delete (cr, self->width - E_DELETE_X * self->s, self->bar_y, 1.2 * self->vs, FALSE, NULL);
+ 
+-  self->body_long_press = gtk_gesture_long_press_new (self->body.box);
+-  g_signal_connect (self->body_long_press, "pressed", G_CALLBACK (long_pressed_cb), self);
++  /* Back to the letters, and the microphone */
++  cairo_push_group (cr);
++  tactus_draw_label (cr, "ABC", E_ABC_X * self->s, self->abc_y, E_ABC_FONT * self->vs, 400,
++                     TACTUS_BAND_CAP_HEIGHT, &colours.word);
++  cairo_pop_group_to_source (cr);
++  cairo_paint_with_alpha (cr, self->zone == E_ZONE_ABC ? 0.45 : 1.0);
++  tactus_icon_mic (cr, self->width - E_MIC_X * self->s, self->mic_y, self->vs, &self->theme,
++                   self->zone == E_ZONE_MIC ? 0.45 : 1.0);
+ 
+-  adj = gtk_scrolled_window_get_hadjustment (GTK_SCROLLED_WINDOW (self->scrolled_window));
+-  g_signal_connect (adj, "value-changed", G_CALLBACK (adj_value_changed), self);
++  if (self->tones_open && self->tones_item)
++    draw_tones (self, cr);
+ 
+-  setup_section (self, &self->recent, -1, "emoji-recent-symbolic");
+-  setup_section (self, &self->people, 0, "emoji-people-symbolic");
+-  setup_section (self, &self->body, 1, "emoji-body-symbolic");
+-  setup_section (self, &self->nature, 3, "emoji-nature-symbolic");
+-  setup_section (self, &self->food, 4, "emoji-food-symbolic");
+-  setup_section (self, &self->travel, 5, "emoji-travel-symbolic");
+-  setup_section (self, &self->activities, 6, "emoji-activities-symbolic");
+-  setup_section (self, &self->objects, 7, "emoji-objects-symbolic");
+-  setup_section (self, &self->symbols, 8, "emoji-symbols-symbolic");
+-  setup_section (self, &self->flags, 9, "emoji-flags-symbolic");
++  return FALSE;
++}
+ 
+-  populate_recent_section (self);
++/*
++ * Size
++ */
++
++static void
++pos_emoji_picker_size_allocate (GtkWidget *widget, GdkRectangle *allocation)
++{
++  PosEmojiPicker *self = POS_EMOJI_PICKER (widget);
++  gboolean changed = self->width != allocation->width;
+ 
+-  self->populate_idle = g_idle_add (populate_emoji_chooser, self);
+-  g_source_set_name_by_id (self->populate_idle, "[pos] populate_emoji_chooser");
++  self->width = allocation->width;
++  self->height = allocation->height;
++  emoji_metrics (self, self->width);
++  emoji_layout (self);
++  self->scroll = CLAMP (self->scroll, 0.0, scroll_max (self));
++
++  GTK_WIDGET_CLASS (pos_emoji_picker_parent_class)->size_allocate (widget, allocation);
++  if (changed)
++    gtk_widget_queue_resize (widget);
+ }
+ 
++
+ static void
+-pos_emoji_picker_show (GtkWidget *widget)
++pos_emoji_picker_get_preferred_height (GtkWidget *widget, int *minimum, int *natural)
+ {
+   PosEmojiPicker *self = POS_EMOJI_PICKER (widget);
+-  GtkAdjustment *adj;
+ 
+-  GTK_WIDGET_CLASS (pos_emoji_picker_parent_class)->show (widget);
++  *minimum = *natural = emoji_height_for_width (self, self->width > 0 ? self->width : MINIMUM_WIDTH);
++}
+ 
+-  adj = gtk_scrolled_window_get_hadjustment (GTK_SCROLLED_WINDOW (self->scrolled_window));
+-  gtk_adjustment_set_value (adj, 0);
+-  adj_value_changed (adj, self);
++
++static void
++pos_emoji_picker_get_preferred_width (GtkWidget *widget, int *minimum, int *natural)
++{
++  *minimum = *natural = MINIMUM_WIDTH;
+ }
+ 
++/* Each time the page comes up: from the start, with the emoji used since */
++static void
++pos_emoji_picker_map (GtkWidget *widget)
++{
++  PosEmojiPicker *self = POS_EMOJI_PICKER (widget);
++
++  stop_sliding (self);
++  self->touching = FALSE;
++  self->tones_open = FALSE;
++  self->zone = E_ZONE_NONE;
++  g_clear_handle_id (&self->long_id, g_source_remove);
++  g_clear_handle_id (&self->delete_id, g_source_remove);
++  load_recent (self);
++  emoji_layout (self);
++  self->scroll = 0.0;
++
++  GTK_WIDGET_CLASS (pos_emoji_picker_parent_class)->map (widget);
++}
++
++
++static void
++on_color_scheme_changed (PosEmojiPicker *self)
++{
++  g_autofree char *scheme = g_settings_get_string (self->interface_settings, "color-scheme");
++
++  tactus_theme_init (&self->theme, g_strcmp0 (scheme, "prefer-dark") == 0);
++  gtk_widget_queue_draw (GTK_WIDGET (self));
++}
++
++
+ static void
+ pos_emoji_picker_finalize (GObject *object)
+ {
+   PosEmojiPicker *self = POS_EMOJI_PICKER (object);
+ 
+-  if (self->populate_idle)
+-    g_source_remove (self->populate_idle);
+-
++  g_clear_handle_id (&self->populate_id, g_source_remove);
++  g_clear_handle_id (&self->long_id, g_source_remove);
++  g_clear_handle_id (&self->delete_id, g_source_remove);
++  g_clear_pointer (&self->iter, g_variant_iter_free);
+   g_clear_pointer (&self->data, g_variant_unref);
+-  g_object_unref (self->settings);
+-
+-  g_clear_object (&self->recent_long_press);
+-  g_clear_object (&self->recent_multi_press);
+-  g_clear_object (&self->people_long_press);
+-  g_clear_object (&self->people_multi_press);
+-  g_clear_object (&self->body_long_press);
+-  g_clear_object (&self->body_multi_press);
++  for (int k = 0; k < TACTUS_N_KINDS; k++)
++    g_clear_pointer (&self->kinds[k], g_ptr_array_unref);
++  g_clear_object (&self->settings);
++  g_clear_object (&self->interface_settings);
+ 
+   G_OBJECT_CLASS (pos_emoji_picker_parent_class)->finalize (object);
+ }
+ 
++
+ static void
+ pos_emoji_picker_class_init (PosEmojiPickerClass *klass)
+ {
+@@ -642,96 +1231,665 @@
+   GtkWidgetClass *widget_class = GTK_WIDGET_CLASS (klass);
+ 
+   object_class->finalize = pos_emoji_picker_finalize;
+-  widget_class->show = pos_emoji_picker_show;
++
++  widget_class->draw = pos_emoji_picker_draw;
++  widget_class->map = pos_emoji_picker_map;
++  widget_class->size_allocate = pos_emoji_picker_size_allocate;
++  widget_class->get_preferred_height = pos_emoji_picker_get_preferred_height;
++  widget_class->get_preferred_width = pos_emoji_picker_get_preferred_width;
++  widget_class->touch_event = pos_emoji_picker_touch_event;
++  widget_class->button_press_event = pos_emoji_picker_button_press_event;
++  widget_class->button_release_event = pos_emoji_picker_button_release_event;
++  widget_class->motion_notify_event = pos_emoji_picker_motion_notify_event;
+ 
+   /**
+-   * PosEmojiPicker::emoji-picked
+-   * @self: The emoji picker
+-   * @emoji: The emoji picked by the user.
+-   *
+-   * The user picked an emoji.
++   * PosEmojiPicker::emoji-picked:
++   * @self: The emoji page
++   * @emoji: The emoji that was picked
+    */
+-  signals[EMOJI_PICKED] =
+-    g_signal_new ("emoji-picked",
+-                  G_OBJECT_CLASS_TYPE (object_class),
+-                  G_SIGNAL_RUN_LAST,
+-                  0,
+-                  NULL, NULL,
+-                  NULL,
+-                  G_TYPE_NONE, 1, G_TYPE_STRING | G_SIGNAL_TYPE_STATIC_SCOPE);
++  signals[EMOJI_PICKED] = g_signal_new ("emoji-picked",
++                                        G_OBJECT_CLASS_TYPE (object_class),
++                                        G_SIGNAL_RUN_LAST,
++                                        0, NULL, NULL, NULL,
++                                        G_TYPE_NONE, 1, G_TYPE_STRING | G_SIGNAL_TYPE_STATIC_SCOPE);
+   /**
+    * PosEmojiPicker::done:
++   * @self: The emoji page
+    *
+-   * The user is done picking emojis.
++   * "ABC" was tapped: back to the letters.
+    */
+-  signals[DONE] =
+-    g_signal_new ("done",
+-                  G_OBJECT_CLASS_TYPE (object_class),
+-                  G_SIGNAL_RUN_LAST,
+-                  0, NULL, NULL, NULL,
+-                  G_TYPE_NONE, 0);
++  signals[DONE] = g_signal_new ("done",
++                                G_OBJECT_CLASS_TYPE (object_class),
++                                G_SIGNAL_RUN_LAST,
++                                0, NULL, NULL, NULL,
++                                G_TYPE_NONE, 0);
+   /**
+    * PosEmojiPicker::delete-last:
++   * @self: The emoji page
+    *
+-   * Delete the last entered character.
++   * The delete key: once for a tap, on and on while it is held.
++   */
++  signals[DELETE_LAST] = g_signal_new ("delete-last",
++                                       G_OBJECT_CLASS_TYPE (object_class),
++                                       G_SIGNAL_RUN_LAST,
++                                       0, NULL, NULL, NULL,
++                                       G_TYPE_NONE, 0);
++  /**
++   * PosEmojiPicker::mic:
++   * @self: The emoji page
++   *
++   * The microphone was tapped.
++   */
++  signals[MIC] = g_signal_new ("mic",
++                               G_OBJECT_CLASS_TYPE (object_class),
++                               G_SIGNAL_RUN_LAST,
++                               0, NULL, NULL, NULL,
++                               G_TYPE_NONE, 0);
++  /**
++   * PosEmojiPicker::search:
++   * @self: The emoji page
+    *
+-   * TODO: we can make this more flexible by allowing to add
+-   * arbitrary widgets to an `action-box`. This would also make
+-   * it simple to send custom events, use the same key repeat logic
+-   * etc.
++   * The search field was tapped.
+    */
+-  signals[DELETE_LAST] =
+-    g_signal_new ("delete-last",
+-                  G_OBJECT_CLASS_TYPE (object_class),
+-                  G_SIGNAL_RUN_LAST,
+-                  0, NULL, NULL, NULL,
+-                  G_TYPE_NONE, 0);
++  signals[SEARCH] = g_signal_new ("search",
++                                  G_OBJECT_CLASS_TYPE (object_class),
++                                  G_SIGNAL_RUN_LAST,
++                                  0, NULL, NULL, NULL,
++                                  G_TYPE_NONE, 0);
++
++  gtk_widget_class_set_css_name (widget_class, "pos-emoji-picker");
++}
++
++
++static void
++pos_emoji_picker_init (PosEmojiPicker *self)
++{
++  for (int k = 0; k < TACTUS_N_KINDS; k++)
++    self->kinds[k] = g_ptr_array_new_with_free_func (emoji_item_free);
++
++  self->settings = g_settings_new ("mobi.phosh.osk.EmojiPicker");
++  self->interface_settings = g_settings_new ("org.gnome.desktop.interface");
++  g_signal_connect_swapped (self->interface_settings, "changed::color-scheme",
++                            G_CALLBACK (on_color_scheme_changed), self);
++  tactus_theme_watch (self, G_CALLBACK (on_color_scheme_changed));
++  on_color_scheme_changed (self);
++
++  emoji_metrics (self, MINIMUM_WIDTH);
++  self->pressed_kind = TACTUS_N_KINDS;
++
++  gtk_widget_add_events (GTK_WIDGET (self),
++                         GDK_TOUCH_MASK |
++                         GDK_BUTTON_PRESS_MASK |
++                         GDK_BUTTON_RELEASE_MASK |
++                         GDK_BUTTON_MOTION_MASK);
++
++  load_recent (self);
++  self->populate_id = g_idle_add (populate, self);
++  g_source_set_name_by_id (self->populate_id, "[pos] the emoji page's emoji");
++}
+ 
+-  gtk_widget_class_set_template_from_resource (widget_class,
+-                                               "/mobi/phosh/stevia/ui/emoji-picker.ui");
+ 
+-  gtk_widget_class_bind_template_child (widget_class, PosEmojiPicker, scrolled_window);
+-  gtk_widget_class_bind_template_child (widget_class, PosEmojiPicker, scrolled_sections);
++GtkWidget *
++pos_emoji_picker_new (void)
++{
++  return GTK_WIDGET (g_object_new (POS_TYPE_EMOJI_PICKER, NULL));
++}
+ 
+-  gtk_widget_class_bind_template_child (widget_class, PosEmojiPicker, recent.box);
+-  gtk_widget_class_bind_template_child (widget_class, PosEmojiPicker, recent.button);
++/*
++ * Searching for emoji by name: a field with what was typed and, under it, a
++ * row of the emoji it finds. It sits on top of the letters, which type into
++ * the field for as long as it is there.
++ */
+ 
+-  gtk_widget_class_bind_template_child (widget_class, PosEmojiPicker, people.box);
+-  gtk_widget_class_bind_template_child (widget_class, PosEmojiPicker, people.button);
++#define S_ROW_Y        75.0  /* the found emoji's middle */
++#define S_HEIGHT       104.0
++#define S_CLEAR_X      27.0  /* the clear button's middle, from the right */
++#define S_MAX_FOUND    60
+ 
+-  gtk_widget_class_bind_template_child (widget_class, PosEmojiPicker, body.box);
+-  gtk_widget_class_bind_template_child (widget_class, PosEmojiPicker, body.button);
++enum {
++  S_EMOJI_PICKED,
++  S_LAST_SIGNAL
++};
++static int search_signals[S_LAST_SIGNAL];
+ 
+-  gtk_widget_class_bind_template_child (widget_class, PosEmojiPicker, nature.box);
+-  gtk_widget_class_bind_template_child (widget_class, PosEmojiPicker, nature.button);
++struct _PosEmojiSearch {
++  GtkDrawingArea    parent_instance;
+ 
+-  gtk_widget_class_bind_template_child (widget_class, PosEmojiPicker, food.box);
+-  gtk_widget_class_bind_template_child (widget_class, PosEmojiPicker, food.button);
++  GSettings        *settings;
++  GSettings        *interface_settings;
++  TactusTheme       theme;
++
++  GString          *query;
++  GPtrArray        *found; /* EmojiItem */
++  double            usual_width; /* of a face, to tell a missing emoji by */
++
++  int               width, height;
++  double            s, vs;
++  double            font_size, font_for;
++  double            scroll;
++
++  gboolean          touching;
++  GdkEventSequence *sequence;
++  double            x0, x, y;
++  double            scroll0;
++  gboolean          sliding;
++  gboolean          on_clear;
++  EmojiItem        *pressed;
++};
+ 
+-  gtk_widget_class_bind_template_child (widget_class, PosEmojiPicker, travel.box);
+-  gtk_widget_class_bind_template_child (widget_class, PosEmojiPicker, travel.button);
++G_DEFINE_TYPE (PosEmojiSearch, pos_emoji_search, GTK_TYPE_DRAWING_AREA)
+ 
+-  gtk_widget_class_bind_template_child (widget_class, PosEmojiPicker, activities.box);
+-  gtk_widget_class_bind_template_child (widget_class, PosEmojiPicker, activities.button);
++/* Every word of what was typed starts a word of the emoji's name or of what it is known by */
++static gboolean
++search_matches (GVariant *item, char **words)
++{
++  g_autoptr (GVariant) keywords = g_variant_get_child_value (item, 2);
++  const char *name;
+ 
+-  gtk_widget_class_bind_template_child (widget_class, PosEmojiPicker, objects.box);
+-  gtk_widget_class_bind_template_child (widget_class, PosEmojiPicker, objects.button);
++  g_variant_get_child (item, 1, "&s", &name);
++  for (int w = 0; words[w]; w++) {
++    gboolean hit = FALSE;
++    size_t len = strlen (words[w]);
+ 
+-  gtk_widget_class_bind_template_child (widget_class, PosEmojiPicker, symbols.box);
+-  gtk_widget_class_bind_template_child (widget_class, PosEmojiPicker, symbols.button);
++    if (len == 0)
++      continue;
++    for (const char *p = name; p && *p && !hit; ) {
++      hit = g_ascii_strncasecmp (p, words[w], len) == 0;
++      p = strpbrk (p, " -_");
++      if (p)
++        p++;
++    }
++    for (gsize k = 0; k < g_variant_n_children (keywords) && !hit; k++) {
++      const char *keyword;
+ 
+-  gtk_widget_class_bind_template_child (widget_class, PosEmojiPicker, flags.box);
+-  gtk_widget_class_bind_template_child (widget_class, PosEmojiPicker, flags.button);
++      g_variant_get_child (keywords, k, "&s", &keyword);
++      for (const char *p = keyword; p && *p && !hit; ) {
++        hit = g_ascii_strncasecmp (p, words[w], len) == 0;
++        p = strpbrk (p, " -_");
++        if (p)
++          p++;
++      }
++    }
++    if (!hit)
++      return FALSE;
++  }
++  return TRUE;
++}
+ 
+-  gtk_widget_class_bind_template_callback (widget_class, on_emoji_activated);
+-  gtk_widget_class_bind_template_callback (widget_class, on_done_clicked);
+-  gtk_widget_class_bind_template_callback (widget_class, on_backspace_clicked);
+ 
+-  gtk_widget_class_set_css_name (widget_class, "pos-emoji-picker");
++static void
++search_update (PosEmojiSearch *self)
++{
++  g_auto (GStrv) words = g_strsplit (self->query->str, " ", -1);
++  gboolean any = FALSE;
++
++  g_ptr_array_set_size (self->found, 0);
++  self->scroll = 0.0;
++  for (int w = 0; words[w]; w++)
++    any = any || words[w][0] != '\0';
++
++  if (!any) {
++    /* nothing typed yet: the emoji used lately */
++    g_autoptr (GVariant) variant = g_settings_get_value (self->settings, "recent-emoji");
++    GVariantIter iter;
++    GVariant *entry;
++
++    g_variant_iter_init (&iter, variant);
++    while ((entry = g_variant_iter_next_value (&iter))) {
++      EmojiItem *emoji = g_new0 (EmojiItem, 1);
++
++      emoji->data = g_variant_get_child_value (entry, 0);
++      g_variant_get_child (entry, 1, "u", &emoji->modifier);
++      emoji->text = emoji_text (emoji->data, emoji->modifier, &emoji->tones);
++      if (emoji_drawable (GTK_WIDGET (self), &self->usual_width, emoji->text))
++        g_ptr_array_add (self->found, emoji);
++      else
++        emoji_item_free (emoji);
++      g_variant_unref (entry);
++    }
++  } else {
++    GVariant *data = pos_emoji_db_get_data (pos_emoji_db_get_default ());
++    GVariantIter iter;
++    GVariant *item;
++
++    g_variant_iter_init (&iter, data);
++    while ((item = g_variant_iter_next_value (&iter))) {
++      guint group;
++
++      g_variant_get_child (item, 3, "u", &group);
++      if (kind_of_group (group) != TACTUS_N_KINDS && self->found->len < S_MAX_FOUND &&
++          search_matches (item, words)) {
++        EmojiItem *emoji = g_new0 (EmojiItem, 1);
++
++        emoji->data = g_variant_ref (item);
++        emoji->text = emoji_text (item, 0, &emoji->tones);
++        /* as on the page: only what the font has a picture for */
++        if (emoji_drawable (GTK_WIDGET (self), &self->usual_width, emoji->text))
++          g_ptr_array_add (self->found, emoji);
++        else
++          emoji_item_free (emoji);
++      }
++      g_variant_unref (item);
++    }
++  }
++  gtk_widget_queue_draw (GTK_WIDGET (self));
+ }
+ 
++/**
++ * pos_emoji_search_reset:
++ * @self: The search
++ *
++ * Start over: nothing typed.
++ */
++void
++pos_emoji_search_reset (PosEmojiSearch *self)
++{
++  g_return_if_fail (POS_IS_EMOJI_SEARCH (self));
++
++  g_string_truncate (self->query, 0);
++  search_update (self);
++}
++
++
++void
++pos_emoji_search_type (PosEmojiSearch *self, const char *text)
++{
++  g_return_if_fail (POS_IS_EMOJI_SEARCH (self));
++
++  if (text == NULL || self->query->len > 60)
++    return;
++  g_string_append (self->query, text);
++  search_update (self);
++}
++
++
++void
++pos_emoji_search_backspace (PosEmojiSearch *self)
++{
++  const char *prev;
++
++  g_return_if_fail (POS_IS_EMOJI_SEARCH (self));
++
++  if (self->query->len == 0)
++    return;
++  prev = g_utf8_find_prev_char (self->query->str, self->query->str + self->query->len);
++  g_string_truncate (self->query, prev - self->query->str);
++  search_update (self);
++}
++
++
++const char *
++pos_emoji_search_get_query (PosEmojiSearch *self)
++{
++  g_return_val_if_fail (POS_IS_EMOJI_SEARCH (self), NULL);
++
++  return self->query->str;
++}
++
++
++static double
++search_scroll_max (PosEmojiSearch *self)
++{
++  double pitch = E_PITCH * self->vs, inset = (E_COL0 - E_PITCH / 2) * self->vs;
++
++  return MAX (self->found->len * pitch + 2 * inset - self->width, 0.0);
++}
++
++
++static EmojiItem *
++search_at (PosEmojiSearch *self, double x, double y)
++{
++  double pitch = E_PITCH * self->vs, inset = (E_COL0 - E_PITCH / 2) * self->vs;
++  double at = x + self->scroll - inset;
++  int index;
++
++  if (fabs (y - S_ROW_Y * self->vs) > pitch / 2 || at < 0)
++    return NULL;
++  index = (int) (at / pitch);
++  return index < (int) self->found->len ? g_ptr_array_index (self->found, index) : NULL;
++}
++
++
++static gboolean
++search_on_clear (PosEmojiSearch *self, double x, double y)
++{
++  return self->query->len > 0 && y < (E_FIELD_TOP + E_FIELD_H + 4.0) * self->vs &&
++         x > self->width - 2 * S_CLEAR_X * self->s;
++}
++
++
++static void
++search_begin (PosEmojiSearch *self, GdkEventSequence *sequence, double x, double y)
++{
++  if (self->touching)
++    return;
++  self->touching = TRUE;
++  self->sequence = sequence;
++  self->x0 = self->x = x;
++  self->y = y;
++  self->scroll0 = self->scroll;
++  self->sliding = FALSE;
++  self->on_clear = search_on_clear (self, x, y);
++  self->pressed = self->on_clear ? NULL : search_at (self, x, y);
++  gtk_widget_queue_draw (GTK_WIDGET (self));
++}
++
++
++static void
++search_move (PosEmojiSearch *self, GdkEventSequence *sequence, double x, double y)
++{
++  if (!self->touching || self->sequence != sequence)
++    return;
++  self->x = x;
++  self->y = y;
++  if (!self->sliding && !self->on_clear && fabs (x - self->x0) > DRAG_START) {
++    self->sliding = TRUE;
++    self->pressed = NULL;
++    self->x0 = x;
++    self->scroll0 = self->scroll;
++  }
++  if (self->sliding) {
++    self->scroll = CLAMP (self->scroll0 - (x - self->x0), 0.0, search_scroll_max (self));
++    gtk_widget_queue_draw (GTK_WIDGET (self));
++  }
++}
++
++
++static void
++search_end (PosEmojiSearch *self, GdkEventSequence *sequence, double x, double y, gboolean cancelled)
++{
++  if (!self->touching || self->sequence != sequence)
++    return;
++  self->touching = FALSE;
++
++  if (!cancelled && !self->sliding) {
++    if (self->on_clear && search_on_clear (self, x, y)) {
++      pos_emoji_search_reset (self);
++    } else if (self->pressed && search_at (self, x, y) == self->pressed) {
++      EmojiItem *emoji = self->pressed;
++      g_autofree char *text = g_strdup (emoji->text);
++      g_autoptr (GVariant) mine = recent_data (emoji);
++      g_autoptr (GVariant) variant = g_settings_get_value (self->settings, "recent-emoji");
++      GVariantBuilder builder;
++      GVariantIter iter;
++      GVariant *entry;
++      guint n = 1;
++
++      /* it leads the emoji used lately from now on */
++      g_variant_builder_init (&builder, G_VARIANT_TYPE ("a((auss)u)"));
++      g_variant_builder_add (&builder, "(@(auss)u)", mine, emoji->modifier);
++      g_variant_iter_init (&iter, variant);
++      while ((entry = g_variant_iter_next_value (&iter))) {
++        g_autoptr (GVariant) other = g_variant_get_child_value (entry, 0);
++        g_autoptr (GVariant) codes = g_variant_get_child_value (other, 0);
++        g_autoptr (GVariant) my_codes = g_variant_get_child_value (mine, 0);
++        gunichar modifier;
++
++        g_variant_get_child (entry, 1, "u", &modifier);
++        if (n < MAX_RECENT && !(g_variant_equal (codes, my_codes) && modifier == emoji->modifier)) {
++          g_variant_builder_add (&builder, "(@(auss)u)", other, modifier);
++          n++;
++        }
++        g_variant_unref (entry);
++      }
++      self->pressed = NULL;
++      g_settings_set_value (self->settings, "recent-emoji", g_variant_builder_end (&builder));
++      g_signal_emit (self, search_signals[S_EMOJI_PICKED], 0, text);
++    }
++  }
++  self->pressed = NULL;
++  self->on_clear = FALSE;
++  self->sliding = FALSE;
++  gtk_widget_queue_draw (GTK_WIDGET (self));
++}
++
++
++static gboolean
++pos_emoji_search_touch_event (GtkWidget *widget, GdkEventTouch *event)
++{
++  PosEmojiSearch *self = POS_EMOJI_SEARCH (widget);
++
++  if (event->type == GDK_TOUCH_BEGIN)
++    search_begin (self, event->sequence, event->x, event->y);
++  else if (event->type == GDK_TOUCH_UPDATE)
++    search_move (self, event->sequence, event->x, event->y);
++  else if (event->type == GDK_TOUCH_END)
++    search_end (self, event->sequence, event->x, event->y, FALSE);
++  else if (event->type == GDK_TOUCH_CANCEL)
++    search_end (self, event->sequence, event->x, event->y, TRUE);
++  else
++    return GDK_EVENT_PROPAGATE;
++  return GDK_EVENT_STOP;
++}
++
++
++static gboolean
++pos_emoji_search_button_press_event (GtkWidget *widget, GdkEventButton *event)
++{
++  if (event->button != 1 || gdk_event_get_pointer_emulated ((GdkEvent *) event))
++    return GDK_EVENT_PROPAGATE;
++  search_begin (POS_EMOJI_SEARCH (widget), POINTER_SEQUENCE, event->x, event->y);
++  return GDK_EVENT_STOP;
++}
++
++
++static gboolean
++pos_emoji_search_button_release_event (GtkWidget *widget, GdkEventButton *event)
++{
++  if (event->button != 1 || gdk_event_get_pointer_emulated ((GdkEvent *) event))
++    return GDK_EVENT_PROPAGATE;
++  search_end (POS_EMOJI_SEARCH (widget), POINTER_SEQUENCE, event->x, event->y, FALSE);
++  return GDK_EVENT_STOP;
++}
++
++
++static gboolean
++pos_emoji_search_motion_notify_event (GtkWidget *widget, GdkEventMotion *event)
++{
++  if (!(event->state & GDK_BUTTON1_MASK) || gdk_event_get_pointer_emulated ((GdkEvent *) event))
++    return GDK_EVENT_PROPAGATE;
++  search_move (POS_EMOJI_SEARCH (widget), POINTER_SEQUENCE, event->x, event->y);
++  return GDK_EVENT_STOP;
++}
++
++
++static gboolean
++pos_emoji_search_draw (GtkWidget *widget, cairo_t *cr)
++{
++  PosEmojiSearch *self = POS_EMOJI_SEARCH (widget);
++  double field_y = E_FIELD_TOP * self->vs, field_h = E_FIELD_H * self->vs;
++  double pitch = E_PITCH * self->vs, inset = (E_COL0 - E_PITCH / 2) * self->vs;
++  double text_x = E_FIELD_TEXT_X * self->s, size = E_FIELD_FONT * self->vs;
++  TactusRgb field = self->theme.field, hint = self->theme.hint;
++  TactusRgb word = self->theme.text, disc = self->theme.disc;
++
++  if (self->width <= 0)
++    return FALSE;
++
++  tactus_panel_path (cr, 0, 0, self->width, self->height + 1.0, self->vs);
++  tactus_set_source (cr, &self->theme.panel, 1.0);
++  cairo_fill (cr);
++
++  tactus_rounded_rect (cr, E_FIELD_SIDE * self->s, field_y, self->width - 2 * E_FIELD_SIDE * self->s, field_h,
++                       field_h / 2);
++  tactus_set_source (cr, &field, 1.0);
++  cairo_fill (cr);
++  tactus_icon_magnifier (cr, E_FIELD_ICON_X * self->s, field_y + field_h / 2, self->vs, &hint);
++
++  if (self->query->len == 0) {
++    draw_words (cr, "Search Emoji", text_x, field_y + field_h / 2, size, &hint);
++    /* the caret, where the words will go */
++    cairo_rectangle (cr, text_x - 1.5 * self->vs, field_y + field_h / 2 - 11.0 * self->vs, 2.0 * self->vs,
++                     22.0 * self->vs);
++    tactus_set_source (cr, &self->theme.accent, 1.0);
++    cairo_fill (cr);
++  } else {
++    g_autoptr (PangoLayout) layout = pango_cairo_create_layout (cr);
++    PangoFontDescription *font = pango_font_description_from_string ("Adwaita Sans, Inter, Noto Sans, sans-serif");
++    PangoRectangle logical;
++    TactusRgb cross = field;
++    TactusRgb button = hint;
++
++    draw_words (cr, self->query->str, text_x, field_y + field_h / 2, size, &word);
++    pango_font_description_set_absolute_size (font, size * PANGO_SCALE);
++    pango_layout_set_font_description (layout, font);
++    pango_font_description_free (font);
++    pango_layout_set_text (layout, self->query->str, -1);
++    pango_layout_get_extents (layout, NULL, &logical);
++    cairo_rectangle (cr, text_x + (double) logical.width / PANGO_SCALE + 1.5 * self->vs,
++                     field_y + field_h / 2 - 11.0 * self->vs, 2.0 * self->vs, 22.0 * self->vs);
++    tactus_set_source (cr, &self->theme.accent, 1.0);
++    cairo_fill (cr);
++
++    cairo_push_group (cr);
++    tactus_icon_clear (cr, self->width - S_CLEAR_X * self->s, field_y + field_h / 2, self->vs, &button, &cross);
++    cairo_pop_group_to_source (cr);
++    cairo_paint_with_alpha (cr, self->on_clear ? 0.5 : 1.0);
++  }
++
++  /* What was found */
++  if (fabs (self->font_for - self->vs) > 1e-6) {
++    self->font_size = tactus_emoji_font_size (cr, E_EMOJI * self->vs);
++    self->font_for = self->vs;
++  }
++  cairo_save (cr);
++  cairo_rectangle (cr, 0, S_ROW_Y * self->vs - pitch / 2, self->width, pitch);
++  cairo_clip (cr);
++  for (guint i = 0; i < self->found->len; i++) {
++    EmojiItem *emoji = g_ptr_array_index (self->found, i);
++    double cx = inset + (i + 0.5) * pitch - self->scroll;
++
++    if (cx < -pitch || cx > self->width + pitch)
++      continue;
++    if (emoji == self->pressed) {
++      double half = pitch / 2 - 2.0 * self->vs;
++
++      tactus_rounded_rect (cr, cx - half, S_ROW_Y * self->vs - half, 2 * half, 2 * half, 9.0 * self->vs);
++      tactus_set_source (cr, &disc, 1.0);
++      cairo_fill (cr);
++    }
++    tactus_draw_emoji (cr, emoji->text, cx, S_ROW_Y * self->vs, self->font_size, 1.0);
++  }
++  cairo_restore (cr);
++
++  return FALSE;
++}
++
++
++static void
++pos_emoji_search_size_allocate (GtkWidget *widget, GdkRectangle *allocation)
++{
++  PosEmojiSearch *self = POS_EMOJI_SEARCH (widget);
++  gboolean changed = self->width != allocation->width;
++
++  self->width = allocation->width;
++  self->height = allocation->height;
++  self->s = self->width / PT_WIDTH;
++  self->vs = MIN (self->width, PT_WIDTH_MAX) / PT_WIDTH;
++
++  GTK_WIDGET_CLASS (pos_emoji_search_parent_class)->size_allocate (widget, allocation);
++  if (changed)
++    gtk_widget_queue_resize (widget);
++}
++
++
++static void
++pos_emoji_search_get_preferred_height (GtkWidget *widget, int *minimum, int *natural)
++{
++  PosEmojiSearch *self = POS_EMOJI_SEARCH (widget);
++  int width = self->width > 0 ? self->width : MINIMUM_WIDTH;
++
++  *minimum = *natural = ceil (S_HEIGHT * MIN (width, PT_WIDTH_MAX) / PT_WIDTH);
++}
++
++
++static void
++pos_emoji_search_get_preferred_width (GtkWidget *widget, int *minimum, int *natural)
++{
++  *minimum = *natural = MINIMUM_WIDTH;
++}
++
++
++static void
++search_color_scheme_changed (PosEmojiSearch *self)
++{
++  g_autofree char *scheme = g_settings_get_string (self->interface_settings, "color-scheme");
++
++  tactus_theme_init (&self->theme, g_strcmp0 (scheme, "prefer-dark") == 0);
++  gtk_widget_queue_draw (GTK_WIDGET (self));
++}
++
++
++static void
++pos_emoji_search_finalize (GObject *object)
++{
++  PosEmojiSearch *self = POS_EMOJI_SEARCH (object);
++
++  g_clear_pointer (&self->found, g_ptr_array_unref);
++  g_string_free (self->query, TRUE);
++  g_clear_object (&self->settings);
++  g_clear_object (&self->interface_settings);
++
++  G_OBJECT_CLASS (pos_emoji_search_parent_class)->finalize (object);
++}
++
++
++static void
++pos_emoji_search_class_init (PosEmojiSearchClass *klass)
++{
++  GObjectClass *object_class = G_OBJECT_CLASS (klass);
++  GtkWidgetClass *widget_class = GTK_WIDGET_CLASS (klass);
++
++  object_class->finalize = pos_emoji_search_finalize;
++
++  widget_class->draw = pos_emoji_search_draw;
++  widget_class->size_allocate = pos_emoji_search_size_allocate;
++  widget_class->get_preferred_height = pos_emoji_search_get_preferred_height;
++  widget_class->get_preferred_width = pos_emoji_search_get_preferred_width;
++  widget_class->touch_event = pos_emoji_search_touch_event;
++  widget_class->button_press_event = pos_emoji_search_button_press_event;
++  widget_class->button_release_event = pos_emoji_search_button_release_event;
++  widget_class->motion_notify_event = pos_emoji_search_motion_notify_event;
++
++  /**
++   * PosEmojiSearch::emoji-picked:
++   * @self: The search
++   * @emoji: The emoji that was picked among the ones found
++   */
++  search_signals[S_EMOJI_PICKED] = g_signal_new ("emoji-picked",
++                                                 G_OBJECT_CLASS_TYPE (object_class),
++                                                 G_SIGNAL_RUN_LAST,
++                                                 0, NULL, NULL, NULL,
++                                                 G_TYPE_NONE, 1, G_TYPE_STRING | G_SIGNAL_TYPE_STATIC_SCOPE);
++
++  gtk_widget_class_set_css_name (widget_class, "pos-emoji-search");
++}
++
++
++static void
++pos_emoji_search_init (PosEmojiSearch *self)
++{
++  self->query = g_string_new (NULL);
++  self->found = g_ptr_array_new_with_free_func (emoji_item_free);
++  self->s = self->vs = MINIMUM_WIDTH / PT_WIDTH;
++
++  self->settings = g_settings_new ("mobi.phosh.osk.EmojiPicker");
++  self->interface_settings = g_settings_new ("org.gnome.desktop.interface");
++  g_signal_connect_swapped (self->interface_settings, "changed::color-scheme",
++                            G_CALLBACK (search_color_scheme_changed), self);
++  tactus_theme_watch (self, G_CALLBACK (search_color_scheme_changed));
++  search_color_scheme_changed (self);
++
++  gtk_widget_add_events (GTK_WIDGET (self),
++                         GDK_TOUCH_MASK |
++                         GDK_BUTTON_PRESS_MASK |
++                         GDK_BUTTON_RELEASE_MASK |
++                         GDK_BUTTON_MOTION_MASK);
++}
++
++
+ GtkWidget *
+-pos_emoji_picker_new (void)
++pos_emoji_search_new (void)
+ {
+-  return GTK_WIDGET (g_object_new (POS_TYPE_EMOJI_PICKER, NULL));
++  return GTK_WIDGET (g_object_new (POS_TYPE_EMOJI_SEARCH, NULL));
+ }
