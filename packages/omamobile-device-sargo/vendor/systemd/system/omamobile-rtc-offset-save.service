@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: MIT
+# Save the clock's offset from the RTC, so a reboot that stops no unit
+# (reboot-to, a crash, a flat battery) loses at most the last quarter hour's
+# change to the clock.
+[Unit]
+Description=Save the clock's offset from the RTC
+After=omamobile-rtc-offset.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/omamobile-rtc-offset save

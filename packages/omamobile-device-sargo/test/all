@@ -1,0 +1,156 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+t=$(mktemp -d)
+trap 'rm -rf "$t"' EXIT
+./build "$t/build"
+echo 'ok - reboot helper compiles'
+./install "$t/root" "$t/build"
+for file in usr/bin/reboot-to usr/bin/omamobile-setup-system usr/bin/omamobile-rtc-offset usr/bin/omamobile-bt-addr \
+  usr/lib/systemd/system/omamobile-bt-addr@.service usr/lib/udev/rules.d/80-omamobile-bt-addr.rules \
+  usr/lib/systemd/system/omamobile-rtc-offset.service \
+  usr/lib/udev/rules.d/10-omamobile-storage.rules \
+  usr/lib/systemd/network/20-usb-gadget.network \
+  usr/lib/NetworkManager/conf.d/10-omamobile-usb.conf \
+  usr/lib/systemd/sleep.conf.d/20-omamobile-unqualified-sleep.conf \
+  etc/UPower/UPower.conf.d/20-omamobile-critical-power.conf \
+  etc/pacman.d/omamobile-mirrorlist \
+  usr/share/licenses/omamobile-device-sargo/LICENSE; do
+  test -f "$t/root/$file"
+done
+test ! -d "$t/root/usr/lib/systemd/system/multi-user.target.wants"
+# The only enabled units are the clock's offset: restore early, save later.
+diff <(cd "$t/root/usr/lib/systemd/system" && find . -type l | sort) - <<'LINKS'
+./sysinit.target.wants/omamobile-rtc-offset.service
+./timers.target.wants/omamobile-rtc-offset-save.path
+./timers.target.wants/omamobile-rtc-offset-save.timer
+LINKS
+for link in "$t"/root/usr/lib/systemd/system/*.wants/*; do test -f "$link"; done
+# Exercise the same destination refusal without targeting the host root.
+if ./install relative-dir "$t/build" > "$t/refusal" 2>&1; then
+  echo 'not ok - installation must refuse a relative destination' >&2
+  exit 1
+fi
+grep -Fx 'Use an absolute staging directory' "$t/refusal"
+echo 'ok - installation stages policy and helpers; only the clock offset units are enabled'
+
+python3 - "$t/root/usr/lib/systemd/network/20-usb-gadget.network" <<'PY_ROUTE'
+import configparser, sys
+network = configparser.ConfigParser(strict=False)
+network.read(sys.argv[1])
+assert network['Match']['Name'] == 'usb0'
+assert network['Network']['Address'] == '172.16.42.1/24'
+assert 'Gateway' not in network['Network']
+assert network['Route']['Gateway'] == '172.16.42.2'
+assert int(network['Route']['Metric']) > 1024
+print('ok - USB keeps its direct SSH address and a fallback route below Wi-Fi priority')
+PY_ROUTE
+
+python3 - "$t/root" <<'PY_POLICY'
+from pathlib import Path
+import sys
+root = Path(sys.argv[1])
+sleep = (root/'usr/lib/systemd/sleep.conf.d/20-omamobile-unqualified-sleep.conf').read_text().splitlines()
+for mode in ('Suspend', 'Hibernation', 'SuspendThenHibernate', 'HybridSleep'):
+    assert f'Allow{mode}=no' in sleep
+rules = [l for l in (root/'usr/lib/udev/rules.d/10-omamobile-storage.rules').read_text().splitlines()
+         if l and not l.startswith('#')]
+import fnmatch, re
+def kernel_rules(name):
+    return [l for l in rules if 'SUBSYSTEM=="block"' in l
+            and fnmatch.fnmatchcase(name, re.search(r'KERNEL=="([^"]*)"', l).group(1))]
+# Any eMMC index: the whole disk, boot and general-purpose areas inaccessible
+for name in ('mmcblk0', 'mmcblk1', 'mmcblk0boot0', 'mmcblk1boot1', 'mmcblk0gp0', 'mmcblk1gp3'):
+    m = kernel_rules(name)
+    assert len(m) == 1 and 'MODE="0000"' in m[0] and 'UDISKS_IGNORE' in m[0], name
+# Partitions: hidden from automounters except userdata, never made inaccessible
+for name in ('mmcblk0p1', 'mmcblk1p72'):
+    m = kernel_rules(name)
+    assert len(m) == 1 and '!="userdata"' in m[0] and 'UDISKS_IGNORE' in m[0] and 'MODE' not in m[0], name
+assert 'SUBSYSTEM=="mmc_rpmb", MODE="0000"' in rules and 'SUBSYSTEM=="rpmb", MODE="0000"' in rules
+assert not any('KERNEL=="sd' in l for l in rules)
+assert sorted(p.name for p in root.rglob('*.service') if not p.is_symlink()) == [
+    'omamobile-bt-addr@.service', 'omamobile-rtc-offset-save.service', 'omamobile-rtc-offset.service']
+bt = (root/'usr/lib/udev/rules.d/80-omamobile-bt-addr.rules').read_text()
+assert 'DRIVERS=="hci_uart_qca"' in bt and 'omamobile-bt-addr@%k.service' in bt
+# Only the controller: a connection's device (hci0:256) has no DEVTYPE host
+assert 'ENV{DEVTYPE}=="host"' in bt
+assert not (root/'usr/lib/modprobe.d').exists()
+print('ok - eMMC storage policy, disabled sleep modes, and only the clock and Bluetooth address units')
+PY_POLICY
+
+# The clock offset: restore and save against a fake RTC, with no clock set.
+rtc_test() {
+  OMAMOBILE_RTC="$t/rtc" OMAMOBILE_RTC_OFFSET_STATE="$t/state/rtc-offset" \
+    OMAMOBILE_RTC_DRY_RUN=1 OMAMOBILE_RTC_SANE=1000 OMAMOBILE_RTC_TICK_POLLS=1 bin/omamobile-rtc-offset "$@"
+}
+mkdir -p "$t/rtc"
+echo 100 > "$t/rtc/since_epoch"
+rtc_test restore | grep -Fx 'omamobile-rtc-offset: no saved offset yet'
+rtc_test save
+now=$(date -u +%s)
+read -r off last < "$t/state/rtc-offset"
+(( off >= now - 100 - 2 && off <= now - 100 + 2 && last >= now - 2 ))
+# A later boot: the RTC ran on 50 s, so the clock is put 50 s ahead of the save.
+echo 150 > "$t/rtc/since_epoch"
+echo "$off $last" > "$t/state/rtc-offset"
+rtc_test restore | grep -Fx "set @$((off + 150))"
+# An RTC reset (reads below the saved state) starts from the last save.
+echo "$off" $(( last + 999999 )) > "$t/state/rtc-offset"
+echo 5 > "$t/rtc/since_epoch"
+rtc_test restore | grep -Fx "set @$(( last + 999999 ))"
+# Never backwards: a saved time in the past leaves the clock alone.
+echo 0 > "$t/rtc/since_epoch"
+echo "-1099511627776 0" > "$t/state/rtc-offset"
+rtc_test restore | grep -Fx 'omamobile-rtc-offset: clock already at or past RTC + offset; left alone'
+# A clock that was never set is not saved.
+rm -f "$t/state/rtc-offset"
+OMAMOBILE_RTC_TICK_POLLS=1 OMAMOBILE_RTC_SANE=$((now + 99999)) OMAMOBILE_RTC="$t/rtc" OMAMOBILE_RTC_OFFSET_STATE="$t/state/rtc-offset" \
+  bin/omamobile-rtc-offset save | grep -F 'nothing saved'
+test ! -e "$t/state/rtc-offset"
+echo 'ok - the clock offset restores forward only, survives an RTC reset and skips an unset clock'
+
+# The Bluetooth address: a fake btmgmt that answers as an unconfigured
+# WCN3990 (after two polls while hci_qca loads its firmware) and records
+# what it is asked to set. The addresses are fictional, and built from
+# parts so that no address literal is in the tree (tools/pr-check).
+mkdir -p "$t/fakebin"
+cat > "$t/fakebin/btmgmt" <<'FAKE'
+#!/bin/bash
+state=$FAKE_STATE
+case "$*" in
+  "--index 0 config")
+    n=$(cat "$state/polls" 2>/dev/null || echo 0); echo $((n + 1)) > "$state/polls"
+    if [[ -e $state/configured ]]; then exit 1; fi
+    ((n >= 2)) && printf 'hci0:\tUnconfigured controller\n\tmissing options: public-address \n' ;;
+  "--index 0 info") [[ -e $state/configured ]] && echo 'current settings: powered' ;;
+  "--index 0 public-addr "*) echo "${*: -1}" > "$state/set"; : > "$state/configured" ;;
+  *) exit 1 ;;
+esac
+FAKE
+chmod 755 "$t/fakebin/btmgmt"
+bt_test() {
+  PATH="$t/fakebin:$PATH" FAKE_STATE="$t/bt" OMAMOBILE_BT_ADDR_SOURCE="$t/bt_addr" bin/omamobile-bt-addr "$@"
+}
+tail=1a:2b:3c:4d:5e
+mkdir -p "$t/bt"
+printf '00:%s\0' "$tail" > "$t/bt_addr"
+bt_test hci0
+[[ $(cat "$t/bt/set") == "00:${tail^^}" ]]
+rm "$t/bt/set"; bt_test hci0; test ! -e "$t/bt/set"   # already configured: left alone
+rm -rf "$t/bt"; mkdir -p "$t/bt"
+for bad in "02:$tail" "01:$tail" 'not-an-address'; do
+  printf '%s\0' "$bad" > "$t/bt_addr"; bt_test hci0 2>/dev/null; test ! -e "$t/bt/set"
+done
+rm -f "$t/bt_addr"; bt_test hci0 2>/dev/null; test ! -e "$t/bt/set"
+if bt_test notacontroller 2>/dev/null; then echo 'not ok - a bad index must be refused' >&2; exit 1; fi
+echo 'ok - the Bluetooth address is set once the controller is unconfigured, and only a public unicast one'
+
+# Copied policy and helper must track the source package when present.
+for file in src/reboot-to.c vendor/NetworkManager/conf.d/10-omamobile-usb.conf; do
+  if [[ -f ../omamobile-device-cheetah/$file ]]; then
+    cmp "$file" "../omamobile-device-cheetah/$file"
+  fi
+done
+test ! -e "$t/root/usr/bin/omamobile-bootctl"

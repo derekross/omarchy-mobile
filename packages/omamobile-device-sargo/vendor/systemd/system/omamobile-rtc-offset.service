@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: MIT
+# The clock from the RTC plus the saved offset, early in the boot, before
+# anything checks a signature or a certificate; the offset is saved again
+# at shutdown. bin/omamobile-rtc-offset says why.
+[Unit]
+Description=Set the clock from the RTC and the saved offset
+DefaultDependencies=no
+RequiresMountsFor=/var/lib/omamobile
+After=local-fs.target
+Before=time-set.target sysinit.target systemd-timesyncd.service shutdown.target
+Wants=time-set.target
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/omamobile-rtc-offset restore
+ExecStop=/usr/bin/omamobile-rtc-offset save
+TimeoutSec=10s
