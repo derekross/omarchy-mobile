@@ -17,15 +17,17 @@
 #    backported (drop it once Mesa ships it in a release).
 #  - 0004-panfrost-add-Mali-G78-to-the-model-table.patch: the Pixel 6's
 #    Mali-G78, next to the G68 (drop it once Mesa ships the G78 entry).
-#  - aarch64 only, and only the drivers this phone can use: Gallium
-#    panfrost (with kmsro), llvmpipe, softpipe and zink; Vulkan panfrost
-#    (PanVK). Splits: mesa, vulkan-panfrost, vulkan-mesa-implicit-layers
-#    (vulkan-panfrost depends on it). No rusticl, NVK, docs or valgrind,
+#  - aarch64 only, and only the drivers these phones can use: Gallium
+#    panfrost (with kmsro), freedreno (the Adreno GPUs of the Snapdragon
+#    ports: the OnePlus 8T's Adreno 650), llvmpipe, softpipe and zink;
+#    Vulkan panfrost (PanVK) and freedreno (Turnip). Splits: mesa,
+#    vulkan-panfrost, vulkan-freedreno, vulkan-mesa-implicit-layers (both
+#    Vulkan drivers depend on it). No rusticl, NVK, docs or valgrind,
 #    so no Rust crates and a much shorter native build.
 #  - 0005-0010: upstream G715 model and complete v11 support backports.
 #    See README.md for pinned sources and validation limits.
-#  - pkgrel 1.4: makepkg only allows integer[.integer], so the Omamobile
-#    marker lives in the VERSION string (".omamobile4"), which shows up in
+#  - pkgrel 1.5: makepkg only allows integer[.integer], so the Omamobile
+#    marker lives in the VERSION string (".omamobile5"), which shows up in
 #    GL_VERSION and the libgallium file name.
 #
 # Maintainers of the original: Laurent Carlier, Felix Yan, Jan Alexander
@@ -35,14 +37,15 @@ pkgbase=mesa
 pkgname=(
   mesa
   vulkan-panfrost
+  vulkan-freedreno
   vulkan-mesa-implicit-layers
 )
 pkgver=26.2.4
 _pkgver=${pkgver/[a-z]/-&}
-pkgrel=1.4
-_omamobile=omamobile4
+pkgrel=1.5
+_omamobile=omamobile5
 epoch=1
-pkgdesc="Open-source OpenGL drivers (Omamobile: Mali-G710, Mali-G78, Mali-G715)"
+pkgdesc="Open-source OpenGL drivers (Omamobile: Mali-G710, Mali-G78, Mali-G715, Adreno 650)"
 url="https://www.mesa3d.org/"
 arch=(aarch64)
 license=("MIT AND BSD-3-Clause AND SGI-B-2.0")
@@ -165,7 +168,7 @@ build() {
     --optimization 2
     -D android-libbacktrace=disabled
     -D b_ndebug=true
-    -D gallium-drivers=panfrost,llvmpipe,softpipe,zink
+    -D gallium-drivers=panfrost,freedreno,llvmpipe,softpipe,zink
     -D gallium-extra-hud=true
     -D gallium-mediafoundation=disabled
     -D gallium-rusticl=false
@@ -177,7 +180,7 @@ build() {
     -D video-codecs=all
     # VA-API needs a desktop gallium driver (r600, radeonsi, nouveau, virgl)
     -D gallium-va=disabled
-    -D vulkan-drivers=panfrost
+    -D vulkan-drivers=panfrost,freedreno
     -D vulkan-layers=device-select,anti-lag
     -D vulkan-loader-rpath=
     -D vulkan-manifest-per-architecture=false
@@ -245,6 +248,9 @@ package_mesa() {
     _pick vkpfrost $libdir/libvulkan_panfrost.so
     _pick vkpfrost usr/share/vulkan/icd.d/panfrost_icd.json
 
+    _pick vkfdreno $libdir/libvulkan_freedreno.so
+    _pick vkfdreno usr/share/vulkan/icd.d/freedreno_icd.json
+
     _pick vkdevice $libdir/libVkLayer_MESA_anti_lag.so
     _pick vkdevice $libdir/libVkLayer_MESA_device_select.so
     _pick vkdevice usr/share/vulkan/implicit_layer.d
@@ -281,6 +287,35 @@ package_vulkan-panfrost() {
   provides=(vulkan-driver)
 
   mv vkpfrost/* "$pkgdir"
+
+  install -Dm644 mesa-$_pkgver/docs/license.rst -t "$pkgdir/usr/share/licenses/$pkgname"
+}
+
+package_vulkan-freedreno() {
+  pkgdesc="Open-source Vulkan driver for Adreno GPUs (Turnip; Omamobile: Adreno 650)"
+  depends=(
+    expat
+    glibc
+    libdisplay-info
+    libdrm
+    libgcc
+    libstdc++
+    libx11
+    libxcb
+    libxshmfence
+    spirv-tools
+    systemd-libs
+    vulkan-icd-loader
+    vulkan-mesa-implicit-layers
+    wayland
+    xcb-util-keysyms
+    zlib
+    zstd
+  )
+  optdepends=("vulkan-mesa-layers: additional vulkan layers")
+  provides=(vulkan-driver)
+
+  mv vkfdreno/* "$pkgdir"
 
   install -Dm644 mesa-$_pkgver/docs/license.rst -t "$pkgdir/usr/share/licenses/$pkgname"
 }
