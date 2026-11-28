@@ -3,6 +3,25 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-1238. A wrapper that adds a stop signal to helpers is read for what each
+  helper does on that signal, because a cleanup that never ran before now
+  runs.** #998's parent-death TERM reaches `omamobile-bt-agent`, whose
+  `finally` turns Pairable off; before, a crashed shell left the agent running
+  with the pairing window open. *Check:* for each command a wrapper PR wraps,
+  `grep -n 'signal\|SIGTERM\|finally\|atexit' <helper>` and write down what
+  its exit path changes (a radio, a lock, a file), then list which of those
+  used to be skipped on a crash; put the most consequential one in the phone
+  run. Extends L-734 and L-1169. *From:* #998 with #1089, round 69.
+- **L-1184. A change that makes a daemon offer a mode it didn't offer before
+  is read against what upstream's own scripts pick when that mode appears.**
+  #1045's stand-in driver adds `performance`, and Omarchy's
+  `omarchy-powerprofiles-set` picks it on AC by default at every session
+  start; the PR's description and test covered only the owner's explicit
+  choice. *Check:* `bsdtar -xOf` the pinned package's callers of the daemon
+  (`grep -a -l '<daemon CLI>'` over its files), find each default and fallback
+  branch that names the new value, and walk a fresh session on each power
+  source with no saved state. Extends L-1166 and L-818. *From:* #1045, round
+  68, 2026-11-25.
 - **L-1171. A test that reads the real machine (a fixed system path, the real
   `systemctl`) passes on a laptop and fails on a provisioned phone, where
   `tools/phone-install-package` runs `check()`, and a test that leans on the
@@ -394,13 +413,3 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   the event that clears it; if none exists, ask for a bounded re-read while
   the state shows. Extends L-235 and L-614. *From:* #949, round 63,
   2026-11-20.
-- **L-983. A "hardware keyboard" test by device name is checked against the
-  names the phones' own keys have, and against a sibling PR that answers the
-  same question another way.** #949 filters Hyprland's keyboards with a name
-  list (`gpio-keys`, `power-button`, ...) taken from a desktop widget, while
-  #866 from the same author counts real keyboards by bus and key capabilities;
-  a phone key under another name would make the bar label permanent. *Check:*
-  ask for `hyprctl -j devices` keyboard names from each supported phone with
-  nothing attached, and `git grep -n 'ID_INPUT_KEYBOARD\|bustype\|untyped'`
-  over the author's open heads for a second definition. Extends L-469 and
-  L-720. *From:* #949 with #866, round 63, 2026-11-20.

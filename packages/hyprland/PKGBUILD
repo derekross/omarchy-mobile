@@ -34,7 +34,13 @@
 #    upstream guards this.
 #  - pkgrel 3.3: the rotation hold's half turn over Android's 383 ms and the
 #    old frame faded out on Android's alpha-out curve (3.2 is published).
-#  - pkgrel 3.4: the dropped touch (3.3 is published).
+#  - pkgrel 3.4: no source change, a rebuild against Arch Linux ARM's
+#    hyprgraphics 0.7.0 (libhyprgraphics.so=6), which replaced 0.6.x (so=5)
+#    on 2026-11-25; 3.3 still needed so=5, so nothing that installs it could
+#    be resolved any more (3.3 is published; #1098). Arch Linux ARM is at
+#    0.57.2-2 now, so this sorts below its build and wins only by repository
+#    order.
+#  - pkgrel 3.5: the dropped touch (3.4 is the rebuild above).
 #  - arch=(aarch64) only.
 #  - build() runs the two cmake steps of `make release` itself, with
 #    CMAKE_SKIP_RPATH (Arch's Makefile sed) and the job count from MAKEFLAGS
@@ -45,7 +51,7 @@
 
 pkgname=(hyprland hyprpm)
 pkgver=0.57.0
-pkgrel=3.4
+pkgrel=3.5
 pkgdesc='a highly customizable dynamic tiling Wayland compositor (Omamobile: DPMS retry, rotation hold, no touch through a lock without a surface)'
 arch=(aarch64)
 url="https://github.com/hyprwm/Hyprland"

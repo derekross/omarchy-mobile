@@ -4,7 +4,7 @@
 -- layout depends on (TOUCH-PLAN 2.2, 2.3, 3.5) have to be there, with the
 -- later rule winning where two set the same thing, as in Hyprland.
 -- Run from the package directory: lua test/phone-rules.lua
-local config, rules = {}, {}
+local config, rules, animations, curves = {}, {}, {}, {}
 local function merge(into, from)
   for k, v in pairs(from) do
     if type(v) == "table" and type(into[k]) == "table" then
@@ -22,6 +22,15 @@ hl = {
   config = function(t) merge(config, t) end,
   window_rule = function(t) rules[#rules + 1] = t end,
   layer_rule = noop,
+  -- FADE_CASE=refused: a Hyprland that raises an error on both calls
+  animation = function(t)
+    if os.getenv("FADE_CASE") == "refused" then error("no such animation") end
+    animations[#animations + 1] = t
+  end,
+  curve = function(name, t)
+    if os.getenv("FADE_CASE") == "refused" then error("no such curve") end
+    curves[name] = t
+  end,
   device = function(t) devices[#devices + 1] = t end,
   unbind = function(keys)
     local kept = {}
@@ -155,7 +164,11 @@ local function find(keys, release)
 end
 local function device_is(b, inclusive)
   local d = b.opts.device
-  return d ~= nil and d.inclusive == inclusive and #d.list == 1 and d.list[1] == osk
+  if d == nil or d.inclusive ~= inclusive or d.list[1] ~= osk then return false end
+  -- squeekboard's own keys are squeekboard's alone; what is kept from the
+  -- on-screen keyboard is kept from Tactus too
+  if inclusive then return #d.list == 1 end
+  return #d.list == 2 and d.list[2] == "hl-virtual-keyboard-tactus"
 end
 local function one(keys, release, command)
   local f = find(keys, release)
@@ -174,11 +187,27 @@ for _, keys in ipairs({ "CTRL + ALT + DELETE", "ALT + TAB", "ALT + SHIFT + TAB",
   local f = find(keys)
   local ok = #f > 0
   for _, b in ipairs(f) do ok = ok and device_is(b, false) end
-  check(ok, keys .. " is bound for every keyboard but squeekboard")
+  check(ok, keys .. " is bound for every keyboard but the on-screen ones")
 end
 check(#find("ALT + TAB") == 2 and find("ALT + TAB")[1].dispatcher.dsp == "cycle_next", "Alt + Tab keeps both of Omarchy's actions")
 local f9 = find("F9", true)
 check(#f9 == 1 and f9[1].dispatcher == "voxtype record stop", "F9 still stops Voxtype on release")
+
+-- Going home and app switches change workspaces: a short fade, the last
+-- word on the workspaces leaf, and nothing else of Omarchy's animations.
+local ws = nil
+for _, a in ipairs(animations) do if a.leaf == "workspaces" then ws = a end end
+if os.getenv("FADE_CASE") == "refused" then
+  -- every check above and below ran on a phone.lua whose two fade calls raised an error
+  check(#animations == 0 and next(curves) == nil, "a refused fade leaves the cut, and phone.lua loads past it")
+else
+  check(ws ~= nil and ws.enabled == true and ws.style == "fade" and ws.speed > 0 and ws.speed <= 3,
+    "going home and switching apps fade in at most 300 ms")
+  check(#animations == 1, "phone.lua changes no other animation")
+  -- Hyprland rejects an animation whose curve it doesn't know: the fade's is one phone.lua defines itself
+  local curve = ws and curves[ws.bezier]
+  check(curve ~= nil and curve.type == "bezier" and #curve.points == 2, "the fade's curve is defined in phone.lua")
+end
 
 check(omamobile_hook_ran == (hook_case == "valid" or nil),
   "device hook (" .. hook_case .. "): runs only when valid, and the shared rules stand")

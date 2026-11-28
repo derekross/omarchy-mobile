@@ -463,7 +463,7 @@ without changing anything.
 | --- | --- | --- |
 | 2 | `Type yes to go on, or press Enter to stop:` | `yes` only |
 | 3 | `Press Enter when that is done, to check the phone again:` | Enter |
-| 3 | `Press Enter to restart the phone into Fastboot Mode:` | Enter; then `adb reboot bootloader` |
+| 3 | `Press Enter to restart the phone into Fastboot Mode:` | Enter; then `adb reboot bootloader`; anything else stops, with nothing sent to the phone |
 | 3 | `Is this phone already running Omamobile? (yes/no)` | only for an unlocked phone on slot B: `yes` is a reinstall (`--reinstall`); `no` stops; anything else asks again |
 | 3 | `Measure slot B's bootloader now? (yes/no)` | only for an unlocked phone on slot A that reports one bootloader copy's version, where the descriptor says `BOOTLOADER_SLOT_PROBE=yes`, and not in a dry run: `yes` hands `--measure-other-slot` to `install-phone`, which measures before its first write; `no` stops; anything else asks again |
 | 4 | `Type yes to accept Google's terms and download the file, or press Enter to get it yourself from Google's page:` | `yes` only: the terms are accepted and recorded, and the download starts; anything else downloads nothing and goes on to the next question. Asked once per build; not asked when the owner's file is already there |

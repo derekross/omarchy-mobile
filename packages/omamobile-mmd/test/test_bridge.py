@@ -97,9 +97,12 @@ class BridgeTests(unittest.TestCase):
     def setUp(self):
         self.dir, cleanup = tempdir()
         self.addCleanup(cleanup)
+        orig_cwd = os.getcwd()
+        os.chdir(self.dir)
+        self.addCleanup(os.chdir, orig_cwd)
         self.bus = PrivateBus(self.dir)
         self.addCleanup(self.bus.close)
-        self.sitd = FakeSitd(os.path.join(self.dir, 'sitd.sock'))
+        self.sitd = FakeSitd('sitd.sock')
         if self.status:
             self.sitd.status = self.status()
         self.client = Client(self.bus.connection)

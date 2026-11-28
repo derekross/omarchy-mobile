@@ -23,14 +23,14 @@ reviews can cite them, and each number is in exactly one file
 
 | Area | Files | Entries | Read for |
 | --- | --- | --- | --- |
-| Safety model (AGENTS.md section 1) | [`safety.md`](lessons/safety.md), [`safety-2.md`](lessons/safety-2.md), [`safety-3.md`](lessons/safety-3.md), [`safety-4.md`](lessons/safety-4.md) | 159 | every review |
-| Shared code and the reference device | [`shared-code.md`](lessons/shared-code.md), [`shared-code-2.md`](lessons/shared-code-2.md), [`shared-code-3.md`](lessons/shared-code-3.md) | 131 | omamobile and app pull requests |
-| Shell and scripts | [`shell.md`](lessons/shell.md), [`shell-2.md`](lessons/shell-2.md), [`shell-3.md`](lessons/shell-3.md), [`shell-4.md`](lessons/shell-4.md) | 165 | omamobile and app pull requests |
-| Kernel (linux-omamobile) | [`kernel.md`](lessons/kernel.md), [`kernel-2.md`](lessons/kernel-2.md), [`kernel-3.md`](lessons/kernel-3.md), [`kernel-4.md`](lessons/kernel-4.md) | 189 | linux-omamobile pull requests |
-| The gates themselves | [`gates.md`](lessons/gates.md), [`gates-2.md`](lessons/gates-2.md), [`gates-3.md`](lessons/gates-3.md) | 145 | every review |
-| Reviews and merging | [`reviews.md`](lessons/reviews.md), [`reviews-2.md`](lessons/reviews-2.md), [`reviews-3.md`](lessons/reviews-3.md), [`reviews-4.md`](lessons/reviews-4.md) | 165 | every review |
-| Claims and evidence | [`claims.md`](lessons/claims.md), [`claims-2.md`](lessons/claims-2.md), [`claims-3.md`](lessons/claims-3.md), [`claims-4.md`](lessons/claims-4.md) | 226 | every review |
-| Corrections (where a review was wrong) | [`corrections.md`](lessons/corrections.md), [`corrections-2.md`](lessons/corrections-2.md) | 64 | every review |
+| Safety model (AGENTS.md section 1) | [`safety.md`](lessons/safety.md), [`safety-2.md`](lessons/safety-2.md), [`safety-3.md`](lessons/safety-3.md), [`safety-4.md`](lessons/safety-4.md) | 174 | every review |
+| Shared code and the reference device | [`shared-code.md`](lessons/shared-code.md), [`shared-code-2.md`](lessons/shared-code-2.md), [`shared-code-3.md`](lessons/shared-code-3.md) | 136 | omamobile and app pull requests |
+| Shell and scripts | [`shell.md`](lessons/shell.md), [`shell-2.md`](lessons/shell-2.md), [`shell-3.md`](lessons/shell-3.md), [`shell-4.md`](lessons/shell-4.md) | 167 | omamobile and app pull requests |
+| Kernel (linux-omamobile) | [`kernel.md`](lessons/kernel.md), [`kernel-2.md`](lessons/kernel-2.md), [`kernel-3.md`](lessons/kernel-3.md), [`kernel-4.md`](lessons/kernel-4.md) | 199 | linux-omamobile pull requests |
+| The gates themselves | [`gates.md`](lessons/gates.md), [`gates-2.md`](lessons/gates-2.md), [`gates-3.md`](lessons/gates-3.md) | 151 | every review |
+| Reviews and merging | [`reviews.md`](lessons/reviews.md), [`reviews-2.md`](lessons/reviews-2.md), [`reviews-3.md`](lessons/reviews-3.md), [`reviews-4.md`](lessons/reviews-4.md) | 176 | every review |
+| Claims and evidence | [`claims.md`](lessons/claims.md), [`claims-2.md`](lessons/claims-2.md), [`claims-3.md`](lessons/claims-3.md), [`claims-4.md`](lessons/claims-4.md) | 235 | every review |
+| Corrections (where a review was wrong) | [`corrections.md`](lessons/corrections.md), [`corrections-2.md`](lessons/corrections-2.md) | 66 | every review |
 
 A numbered file (`claims-2.md`) continues the one before it; an area's parts
 are read together.

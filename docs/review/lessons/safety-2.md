@@ -3,6 +3,138 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-1012. A kernel module that reaches a protected block past the driver's
+  own tables is a rule question even when AGENTS' wording says
+  "userspace".** #926's bring-up modules map the PMU and make the regmap's
+  EL3 write call directly. *Check:* `grep -n
+  'ioremap\|arm_smccc_smc\|writel'` over the `.c` files of any PR that adds
+  a bring-up module under `device/*/bringup/`, compare each address with
+  AGENTS section 1's blocks (PMU, AoC, modem BAR, GSA pinctrl), and send it
+  to the maintainer apart from the docs verdict. Extends L-2 and L-456.
+  *From:* #926, round 63, 2026-11-20.
+- **L-1007. A run row that names a helper script is grepped for the script.**
+  #912's row cited `touch-log.py`, which was in no tree and ran unattended on
+  its first day. *Check:* `git grep -n '<script>' origin/main <head>`; a
+  helper outside the tree is asked into `device/<x>/bringup/`, and its first
+  run is read against the attended-first rule. Extends L-694 and L-109.
+  *From:* #912, round 63, 2026-11-20.
+- **L-978. When one step of a runbook gets a guard check, the other steps
+  that arm the same thing get it too.** #815's fix put `is-active
+  omamobile-modem` in front of K1b.4's watchdog-armed write; K1b.1 and K1b.2
+  arm the same watchdog two steps earlier with only "(Setup)" to lean on, and
+  a reset there boots with the modem up because the mask comes later.
+  *Check:* list every step that runs the guarded tool (`grep -n` the tool's
+  name in the plan), and for each one the boots that can precede it; the
+  precondition is checked in all of them, or set once before the first.
+  Extends L-319 and L-725. *From:* #815, round 62, 2026-11-18.
+- **L-966. A vendor download's terms are read on the vendor's page before the
+  tool is reviewed as "just a fetch".** #900's tool fetched Google's NDK,
+  whose page asks for agreement before the download; the project already has
+  a rule for Google's factory images. *Check:* open the download page, grep
+  for "terms" and "agree", and compare with how `tools/install-guided`
+  handles the same vendor (the owner accepts, never the tool or an agent).
+  *From:* #900, round 62, 2026-11-18.
+- **L-944. A plan's own "must never" is counted in the results the same PR
+  adds.** #714's BRINGUP-M1 says an NFS boot must never fall through to
+  writable `userdata`, and its notes recorded at least eight such falls in
+  four days, each followed by another attempt. *Check:* grep the plan for
+  `must never\|stop` and the new results for the event's words ("restarted
+  into", "returned to the existing"); a stop rule hit and passed is reported
+  to the maintainer apart from the diff. Extends L-445 and L-663. *From:*
+  #714, round 61, 2026-11-18.
+- **L-937. A bring-up plan written beside a private stack is read for every
+  noun that only the private stack defines.** #872's gate said "the
+  qualified deployment and rollback procedure", "the existing watchdog" and
+  "private address provisioning"; none exists in the public package, so the
+  public runbook had no dead-man and no way to write the image. *Check:* for
+  each definite noun in a runbook step ("the existing X", "the qualified
+  Y"), `git grep` it in the device's package and tools on main; a miss
+  becomes a command from the public tree or a named gap. Extends L-567, L-157
+  and L-82. *From:* #872, round 61, 2026-11-18.
+- **L-930. Editing a secret out of a PR description leaves it in the
+  description's public edit history, and "please delete that revision" is
+  re-read through the API at the next round.** #630's secrets were removed
+  from the text on request; the earlier revision still showed them to anyone
+  who opened the "edited" menu, and two days after we asked it was still
+  listed with no `deletedAt`. *Check:* `gh api graphql` for
+  `pullRequest(number:N){userContentEdits(first:30){nodes{createdAt
+  deletedAt diff}}}`, test each `diff` for the secret's shape with the
+  digits masked (never print it), name the revision by its timestamp, and ask
+  the author to "Delete revision from history"; a repository admin can do it
+  without waiting, and a credential also gets changed. Extends L-324, L-563
+  and L-688. *From:* #630, rounds 61 and 63, 2026-11-20.
+- **L-916. An offer in a thread to "send a script that fetches a pinned X" is
+  answered in the review, not left to arrive.** A new download URL and
+  checksum gets its own pull request and review, the more so while the
+  project's servers are being probed. *Check:* grep the thread for "fetch",
+  "download", "pinned" and "script" in contributors' offers, and say where
+  such a change should go. Extends L-224 and L-632. *From:* #864, round 61,
+  2026-11-18.
+- **L-909. A subprocess timeout is its own exception class: a handler that
+  lists `RuntimeError` and `OSError` doesn't catch it.** #626's speaker
+  switch ran `amixer` through `subprocess.run(timeout=10)` inside a socket
+  request whose handler caught `(ValueError, KeyError, TypeError,
+  RuntimeError, OSError)`; `subprocess.TimeoutExpired` passes through, ends
+  the daemon's loop and hangs up the call (main's mute had the same gap).
+  *Check:* `grep -n 'timeout=' <module>` for `subprocess.run`, then read the
+  `except` tuple of every caller up to the main loop; `python3 -c 'import
+  subprocess; print(subprocess.TimeoutExpired.__mro__)'` settles what it is.
+  Extends L-776. *From:* #626, round 61, 2026-11-18.
+- **L-907. A PR next to a "never restart X" rule is placed on one side of the
+  rule by naming the layer it restarts, and its docs carry that sentence.**
+  #376 restarts the phone service on a live CP; AGENTS forbids restarting the
+  modem profile. The code was on the allowed side, but its unit comment ("a
+  second start-up on the same CP ... sets up again") read across to the modem
+  unit, and the device's own plan still listed "no ... sitd restart".
+  *Check:* grep the diff for the process, unit and power calls the rule names
+  (`omamobile-modem`, `cbd`, `modprobe`, CP power); if none, ask for one
+  sentence in the shipped comment that separates the two, and reconcile the
+  device plan's own rule. Extends L-661, L-662 and L-445. *From:* #376, round
+  61, 2026-11-18.
+- **L-905. A record of a radio's first traffic says what confined its DMA,
+  and the notes PR is where to ask.** #751 and #822 recorded a PCIe Wi-Fi
+  chip associating and carrying HTTPS, with autoconnect on, and neither said
+  the endpoint had no restricted pool; the kernel node (kernel #255) then
+  arrived without one. *Check:* for a notes PR that records a PCIe or other
+  bus-master radio passing traffic, `git grep -n
+  'restricted\|memory-region\|iommus'` in the record and the board node, and
+  ask for the sentence and the gate. Extends L-777 and L-486. *From:* #822
+  with kernel #255, round 61, 2026-11-18.
+- **L-893. An installer PR that removes a fallback is reviewed as a table of
+  what each kind of computer sends the phone before and after.** For #877
+  that table showed one variant removed (the raw `userdata` image from a
+  computer without `img2simg`) and none added, which made "no phone test
+  needed" a finding and not an assumption. *Check:* list the host conditions
+  the changed branch tests, and for each write the exact fastboot lines from
+  the suite's expected output on main and on the head. Extends L-223 and
+  L-668. *From:* #877, round 61, 2026-11-18.
+- **L-885. A backup "taken after the stock boots, before any Trusty start" is
+  placed in UTC next to the author's other threads.** #203's reference backup
+  was dated the night between two days on which the same author's #874 says
+  the phone's first storage proxy start ran. *Check:* convert the backup's
+  time with the zone of the author's commits, search the author's open PRs
+  for dated hardware starts in that window, and ask which came first.
+  Extends L-591, L-168 and L-559. *From:* #203 with #874, round 61,
+  2026-11-18.
+- **L-884. An answer to "what do the slot flags read?" is decoded against the
+  last recorded bytes, and a "successful: yes" where we last agreed "no
+  marking" is a write to find.** #203's reply gave slot B as successful; the
+  earlier record and the restore since meant a new mark had to exist: a hand
+  `devinfo` write three days after "don't write `devinfo` again", disclosed
+  only when asked. *Check:* lay each reported byte of 0x30-0x37 next to the
+  previous record with the layout's bits (0x01 unbootable, 0x02 successful,
+  0x04 active, 0x08 fastboot-ok), list every bit that moved, ask for each
+  what wrote it and when, and compare the dates with every hold in the
+  device issue. Extends L-36, L-359 and L-756. *From:* #203 with issue #143,
+  round 61, 2026-11-18.
+- **L-870. A stop-condition grep that must come back empty is not where an
+  "expected line" goes.** #835 made the UFS `dme-set` line expected, and the
+  contributor offered to add it to the `after` helper's grep, whose Pass is
+  "empty"; that would have failed every later stage. *Check:* when a plan
+  excuses a log line, read each helper that greps for errors and its Pass
+  wording; an excused line gets its own counted check beside the helper,
+  never an entry in the must-be-empty pattern. Extends L-756 and L-183.
+  *From:* #835, round 61, 2026-11-18.
 - **L-868. A raised limit carried in a device tree follows the kernel image
   wherever it boots; a limit raised by a running guard doesn't.** Kernel #267
   put husky's 4.45 V float in the battery node; the author's daily kernel,
@@ -253,124 +385,3 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   stored, write "flashes and erases nothing", and list both slots' flags after
   each `--set-active` and what next marks each. Extends L-36, L-261 and L-363.
   *From:* #639, round 49, 2026-11-10.
-- **L-659. A default-on descriptor key for a phone-changing step reaches every
-  descriptor the tool accepts, and a guarded phone may be kept out only by an
-  unrelated refusal.** #639's `BOOTLOADER_SLOT_PROBE` default covered ten
-  devices; the 9a was out only because its descriptor has no `SOC_*` key.
-  *Check:* run the tool's early refusals (`BOOT_METHOD`,
-  `SOC_IDS`/`SOC_COMPATIBLE`) over `device/*/device.conf`, list who passes,
-  name for each phone with an "ask first" rule the refusal that keeps it out,
-  and prefer opt-in after an attended run. Extends L-44, L-444 and L-601.
-  *From:* #639, round 49, 2026-11-10.
-- **L-658. A check that measures a hazard by doing the hazardous thing is
-  reviewed as that thing.** #639's installer read the other slot's bootloader
-  version by setting that slot active and restarting into its bootloader, the
-  event the "slots must match" check exists to prevent; Google's factory
-  images page warns of an unbootable state for an older bootloader in the
-  inactive slot (Pixel 6 and 8 families). *Check:* for any "measure X by
-  switching to it", write down what the guard protects against and whether the
-  measurement triggers it, and read Google's warnings for the device's family.
-  Extends L-3 and L-284. *From:* #639, round 49, 2026-11-10.
-- **L-324. A review reads the PR thread for identifiers, not only the diff.**
-  A contributor's evidence comments on kernel #98 quoted `bluetoothctl show`
-  with the phone's public Bluetooth address twice, and `tools/pr-check` sees
-  commits only. *Check:* every round, run the MAC pattern
-  (`[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}`) and the serial and IMEI patterns over
-  `gh pr view N --json comments,reviews` and the inline review comments, and
-  ask for an edit. Extends L-29; see C-22. *From:* kernel #98, round 29.
-- **L-323. A device that drops its forked init for the shared one also changes
-  its `INITRAMFS_INIT` to an absolute value.** A value without a leading `/`
-  is relative to `device/<codename>/`, so #111's unchanged `initramfs/init`
-  pointed at the file the same push deleted; `tests/boot-method` passed
-  because `images` stops at "build the kernel first" before the initramfs.
-  *Check:* `grep INITRAMFS_INIT device/<x>/device.conf`, then `git cat-file -e
-  <head>:device/<x>/<value>`, or run `bin/omamobile initramfs` with a scratch
-  `KERNEL_OUT` (it dies at the init check before any download). Extends L-134.
-  *From:* #111, round 29.
-- **L-322. Accepting a new `BOOT_METHOD` in `bin/omamobile` opens `flash` and
-  `push` too, and `flash` switches the slot.** On Qualcomm A/B, `fastboot
-  --set-active` hands slot state to ABL, which (as we understand it) resets
-  the successful flag; with the GPT mark allowed only by hand under a §3.1
-  entry, `flash` forces the next GPT write or a fallback. *Check:* for a new
-  method, list what each of `images`, `flash` and `push` does on that
-  bootloader, and refuse the ones whose follow-up isn't approved. Extends
-  L-284. *From:* #111, round 29.
-- **L-321. "The shared init covers this device" is checked against the LUNs on
-  any non-Pixel UFS.** `initramfs/init` leaves allowlisted partitions writable
-  only on `sda`, `boot_arch` finds `userdata` only there, and `cmd_push` finds
-  slot B's images only there. Pixels keep them on LUN 0; multi-LUN Qualcomm
-  layouts may not. The no-USB-host `sysrq c` fallback is a Tensor-era
-  assumption too. *Check:* ask for the read-only `PARTNAME` to `sdX` map of
-  every `UFS_RW` entry from sysfs before accepting "push updates `boot_b`",
-  and ask what a panic does on that bootloader. Extends L-1 and L-232. *From:*
-  #111, round 29.
-- **L-320. A one-boot helper a PR adds needs install, enable and removal steps
-  in its runbook.** #136's H5 created the early read's marker, but no step
-  installed or enabled the unit, so the run's main reading would silently not
-  happen. *Check:* for each script or unit a PR adds under `device/<x>/`, find
-  the runbook line that copies it and runs `systemctl enable`, and the one
-  that undoes it. *From:* #136, round 29.
-- **L-319. A meter check or stop rule written for one reset applies to every
-  reset that reaches the same state.** #136's "VBUS still up two minutes after
-  the reset" was attached to H5's planned `echo b`, but H4's swap timer and a
-  forced restart with the drive attached are the same crash with host mode on.
-  *Check:* for each stop rule that depends on hardware state, list the other
-  ways the runbook can reach that state (timers, dead-man, forced restart) and
-  state the rule once, at the top. Extends L-296 and L-133. *From:* #136,
-  round 29.
-- **L-318. A step that swaps the cable while no Type-C driver owns the port
-  can't expect its link back.** #136's H5 boots with a USB drive on the port
-  and the boost module blacklisted, so the charger and the TCPC defer and
-  nothing owns the MAX77779, which opens its USB data switch when the drive is
-  unplugged. The runbook said "put the laptop back in" as if SSH would return.
-  *Check:* for every step that ends with a cable swap, list which Type-C
-  driver is bound at that moment; if none, the Expect says "no link" and the
-  way back is a restart with the laptop attached. Extends L-81 and AGENTS
-  "USB". *From:* #136, round 29.
-- **L-298. A retry path is exercised on the phone by holding its dependency
-  down, not by breaking hardware.** #99's screen-on retry can be forced by
-  keeping neard stopped across a screen-on. *Check:* first confirm the daemon
-  isn't D-Bus-activatable (`/usr/share/dbus-1/system-services`, `BusName=`),
-  hold it with `systemctl mask --runtime` (gone at reboot), and give the step
-  an unmask rollback. *From:* #99, round 27.
-- **L-297. A gotcha that adds an unproven alternative to a proven safety step
-  says which one to run.** #137's "the hook should power the adapter off" sat
-  next to a 0-of-1 wake record, while stopping the poll loop was 35 of 35.
-  *Check:* every "should" in a safety gotcha points at the variant with the
-  passing record, and the untested one is marked "under test, attended".
-  Extends L-188 and L-284. *From:* #137, round 28.
-- **L-296. A crash-survival measurement uses a reset that skips shutdown, and
-  guards the replug.** #124's `.shutdown` turns the boost off, so the
-  runbook's `systemctl reboot` couldn't answer what a crash leaves behind, and
-  a boost that does survive meets the laptop's VBUS on replug. *Check:* for
-  every "measure after a reboot" step, list the `.shutdown` hooks of the
-  drivers involved and reset with `echo b > /proc/sysrq-trigger`; if the state
-  under test can source VBUS, a meter check with a stop condition comes before
-  any replug. Extends L-88 and L-81. *From:* #136 with kernel #124, round 28.
-- **L-295. `tools/usbc-deadman` is cheetah's MAX77759 tool,** with that
-  phone's I2C bus and registers built in. For another phone's USB-C step, the
-  dead-man we name is the generic `systemd-run --on-active=… systemctl reboot`
-  plus a `tools/phone-ssh --fresh` login. *Check:* any draft that names a
-  device tool for a step on another phone reads the tool for hard-coded buses,
-  addresses and compatibles. Extends L-276 and L-81. *From:* #131, round 27.
-- **L-294. A regulator that sources VBUS is checked for every path that
-  enables it outside the Type-C state machine.** Those are DT
-  `regulator-boot-on` or `regulator-always-on` (the core enables it at
-  registration), fast role swap (no vSafe0V wait), and state left over from a
-  warm reset (a boost whose watchdog is off). *Check:* the binding forbids the
-  two properties, the TCPC sets `vbus_vsafe0v`, and we ask for a warm-reboot
-  read of the boost before any driver loads. *From:* kernel #124, round 27.
-- **L-285. "The approved tool did the write" is checked for what made the
-  target writable.** `omamobile-bootctl` only opens `devinfo` for writing; the
-  guard bypass (`--setrw` on the partition and its parent for 30 s) was in the
-  owner's laptop script around it. An approval that names the tool leaves the
-  wrapper unreviewed. *Check:* for any write outside the allowlist, find who
-  lifts the read-only flag and whether that code was reviewed. Extends L-2 and
-  L-261. *From:* #125, round 26.
-- **L-284. A hold on a safety step is checked for what it forces next.**
-  Telling the 9a owner "don't mark B" without also saying "don't `flash`"
-  would have led straight to the next fallback, because `flash` unmarks B and
-  the marking is what keeps the root. *Check:* for any "don't do X until I
-  decide", walk the owner's next routine step with X missing, and give the
-  safe interim path (here, `push` only). Extends L-81 and L-158. *From:* #125,
-  round 26 (a near miss in drafting).

@@ -3,6 +3,22 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-716. A check whose input can fail to be read is walked for what the
+  failed read decides.** #596's `cpio -it 2>/dev/null | grep -c … || true`
+  read a broken archive as "no keys" (key appended, then flashed) and a late
+  failure as "keys present"; `extract-vendor-firmware` compares
+  `ro.product.vendor.device` only `if` `build.prop` could be read, so a failed
+  read stages another phone's firmware. *Check:* take the producer's status
+  alone (`out=$(cmd) || die`), test the text from a here-string, try a
+  truncated input, and grep `if get_file` and `2>/dev/null` above each
+  compare. Extends L-161 and L-635. *From:* #623 (after #596) and #625, round
+  50.
+- **L-715. Folding independent once-only steps into one helper makes them all
+  wait for its precondition.** #581 moved `--no-first-run`, the user agent and
+  the input-method flags, which need no geometry, into a helper that returns
+  early when geometry is unknown. *Check:* list each step's own inputs and
+  confirm an early return for one input skips only the steps that need it.
+  Extends L-468. *From:* #581, round 50.
 - **L-714. A "learn the user's choice" feature is probed with the sensor at
   its floor and its ceiling.** The 7 Pro's light sensor is under the panel, so
   a covered reading is common; one slider move while covered taught #636's
@@ -157,7 +173,14 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   every `udevadm trigger` change event; systemd.device(5) says change events
   don't act on `Wants=`. *Check:* read systemd.device(5) before flagging
   repeat starts; a replay with `--action=add` is the test. *From:* #113, round
-  25 (a near miss).
+  25 (a near miss). *Open question (2026-11-26):* #1068's Pixel 8 Pro journal
+  contradicts this: its unit started 6,968 times in a boot from charger change
+  events, and once from a `udevadm trigger --action=change`. This entry will
+  be corrected when a phone's journal settles it; until then, for a rule that
+  wants a unit on a power-supply or other frequently changing device, ask for
+  `journalctl -b -o short-monotonic -u <unit>` next to `udevadm monitor
+  --property` for the same window, and read which event precedes each start
+  before relying on either statement (#1068, round 69).
 - **L-235. An edge-triggered "stop when X" is undone by every other actor
   that restarts the thing.** #99 stops neard polling once on the lit-to-dark
   transition; the sleep hook, its own unblock path and a neard restart all
@@ -383,29 +406,3 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   host CPU state, `mem` and `port` host memory and I/O), and ask for a failing
   Android feature without it before it goes in. Extends L-540 and L-454.
   *From:* #493, round 45, 2026-11-08.
-- **L-572. A lock added to an input handler is checked for what a holder that
-  hangs does to every later press.** #508's `flock` without `-w` made a stuck
-  short-press action freeze the power key for the session, where main would
-  have let the next press through. *Check:* for any new `flock`, mutex or
-  queue in a key, touch or wake path, run the PR's harness with the slowest
-  helper made to sleep past the press interval, measure when the next press
-  acts on main and on the head, and ask for a bound. Extends L-161 (fail
-  towards the user being able to act). *From:* #508, round 45, 2026-11-08.
-- **L-573. Deferring a surface's "on open" reads is checked against what the
-  surface shows first and what refreshes it while it's closed.** #518 queued
-  the shade's notification read ninth, behind the reveal, and the shade's
-  periodic read runs only while it's open (`running: root.opened`, first tick
-  at 3 s), so every open showed the previous open's list for about 0.65 s.
-  *Check:* for each read moved off the open path, `grep -n` its function for
-  the timers and watchers that call it, note their `running:` condition, and
-  compute when the first fresh value appears after opening; ask that what the
-  first screen shows goes first. Extends L-235. *From:* #518, round 45,
-  2026-11-08.
-- **L-574. (Provisional, not yet checked on a phone.) A network-sharing
-  feature is checked against the firewall the image turns on.** #525 makes the
-  hotspot's dnsmasq start, but firstboot's ufw denies incoming and forwarded
-  traffic, so a client's DHCP and DNS may never reach it, and the PR's test
-  (the server side came up) can't show that. *Check:* `git grep -n 'ufw '
-  packages/omamobile-firstboot` for the defaults, and ask for one client test
-  (an address, then a ping out) before a "hotspot works" claim. Confirm or
-  drop once a client test has run. *From:* #525, round 45, 2026-11-08.

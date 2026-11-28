@@ -11,7 +11,8 @@
 #     Assisted-by and a human co-author with Co-developed-by plus a sign-off,
 #     but what matters is the human sign-off above: AI may assist; a human
 #     tests, verifies and signs off;
-#   - every subject has a subsystem prefix ("clk: samsung: ...");
+#   - every subject has a subsystem prefix ("clk: samsung: ...", and
+#     mainline PM / devfreq: with spaces only around /);
 #   - scripts/checkpatch.pl --strict on each commit, against that commit's
 #     bindings and MAINTAINERS: errors fail, warnings
 #     are listed, and a checker that is missing or doesn't run to the end
@@ -168,7 +169,11 @@ for c in $commits; do
   grep -qiE "$ai" <<<"$sobs" && sob_bad+="  $short: a Signed-off-by from an AI agent"$'\n'
   git log -1 --format=%B "$c" | grep -ciE '^Co-authored-by:' >/dev/null && coauthor_bad+="  $short"$'\n'
   subject=$(git log -1 --format=%s "$c")
-  [[ $subject =~ ^[A-Za-z0-9_./,+-]+(:[[:space:]][A-Za-z0-9_./,+-]+)*:[[:space:]] ]] || prefix_bad+="  $short"$'\n'
+  # A prefix token is path-like pieces; spaces are allowed only around '/',
+  # so mainline PM / devfreq: passes (L-1147) while "Fix the thing",
+  # PM  devfreq: (spaces without a slash), and a bare leading " / " piece fail.
+  prefix_re='^[A-Za-z0-9_.,+-]+([[:space:]]*/[[:space:]]*[A-Za-z0-9_.,+-]+)*(:[[:space:]][A-Za-z0-9_.,+-]+([[:space:]]*/[[:space:]]*[A-Za-z0-9_.,+-]+)*)*:[[:space:]]'
+  [[ $subject =~ $prefix_re ]] || prefix_bad+="  $short"$'\n'
 done
 n=$(wc -w <<<"$commits")
 [[ -z $sob_bad ]] && pass "$n commits signed off by their authors, none by an AI" || fail "sign-offs (Documentation/process/submitting-patches.rst, coding-assistants.rst):

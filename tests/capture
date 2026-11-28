@@ -1,0 +1,61 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# bin/omamobile capture finds root as adb's own (id -u 0) or through
+# Magisk's su, and takes the root-only reads through whichever it found.
+# Without either it skips them. A fake adb plays each phone.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+t=$(mktemp -d); trap 'rm -rf "$t"' EXIT
+mkdir -p "$t/repo/bin" "$t/bin"
+cp bin/omamobile "$t/repo/bin/"
+printf 'DEVICE=probe\nSRC_DIR=/no-sources-needed\n' > "$t/repo/omamobile.conf"
+fail() { echo "not ok - $*" >&2; cat "$t/log" >&2; exit 1; }
+printf '#!/bin/sh\nexit 0\n' > "$t/bin/fastboot"   # no phone in fastboot
+# PHONE: adbroot (adb shell is uid 0), magisk (su answers once granted),
+# ungranted (su is there but refuses), none (no su). Every call is logged.
+cat > "$t/bin/adb" <<'FAKE'
+#!/bin/bash
+printf '%s\n' "$*" >> "$ADB_LOG"
+[[ $1 == get-state ]] && { echo device; exit 0; }
+[[ $1 == shell ]] || exit 1
+shift; cmd="$*"
+case $cmd in
+  'id -u') [[ $PHONE == adbroot ]] && echo 0 || echo 2000 ;;
+  "su -c 'id -u'") case $PHONE in magisk) echo 0 ;; ungranted) echo 'Permission denied' >&2; exit 1 ;; *) exit 127 ;; esac ;;
+  'command -v su') [[ $PHONE == magisk || $PHONE == ungranted ]] && echo /system/bin/su || exit 1 ;;
+  "su -c 'cat /sys/firmware/fdt'"|'cat /sys/firmware/fdt') printf 'FDT' ;;
+  *) echo "out: $cmd" ;;
+esac
+FAKE
+chmod +x "$t/bin/adb" "$t/bin/fastboot"
+export ADB_LOG="$t/adb.log"
+run() { # phone
+  rm -rf "$t/ref" "$ADB_LOG"
+  PATH="$t/bin:$PATH" PHONE=$1 REFERENCE_DIR="$t/ref" "$t/repo/bin/omamobile" capture snap > "$t/log" 2>&1 ||
+    fail "capture fails for $1"
+}
+
+run adbroot
+[[ $(cat "$t/ref/snap/live.dtb") == FDT ]] || fail "adb root: no live.dtb"
+grep -c '^shell su ' "$ADB_LOG" >/dev/null && fail "adb root: went through su"
+grep -c 'revoke Shell' "$t/log" >/dev/null && fail "adb root: asks to revoke a Magisk grant"
+echo 'ok - adb root: the root reads run in adb shell, no su'
+
+run magisk
+[[ $(cat "$t/ref/snap/live.dtb") == FDT ]] || fail "magisk: no live.dtb"
+grep -c "^shell su -c 'dmesg'" "$ADB_LOG" >/dev/null || fail "magisk: dmesg not read through su"
+grep -c '^shell dmesg' "$ADB_LOG" >/dev/null && fail "magisk: dmesg read without su"
+grep -c 'Root available' "$t/log" >/dev/null || fail "magisk: root not reported"
+grep -c "revoke Shell in Magisk's Superuser tab" "$t/log" >/dev/null || fail "magisk: no reminder to revoke the grant"
+echo 'ok - Magisk: root found through su, the root reads go through su -c, then a reminder to revoke the grant'
+
+for phone in ungranted none; do
+  run $phone
+  [[ ! -e $t/ref/snap/live.dtb ]] || fail "$phone: root reads ran without root"
+  grep -c 'no root: skipping' "$t/log" >/dev/null || fail "$phone: no skip message"
+  [[ -s $t/ref/snap/getprop.txt ]] || fail "$phone: the plain reads did not run"
+done
+grep -c "grant Shell in Magisk" "$t/log" >/dev/null && fail "none: points at Magisk without su"
+run ungranted
+grep -c "grant Shell in Magisk.*revoke it there" "$t/log" >/dev/null || fail "ungranted: no hint to grant and then revoke"
+echo 'ok - without root (no su, or su not granted) the root reads are skipped, with a hint to grant and then revoke where su refuses'
