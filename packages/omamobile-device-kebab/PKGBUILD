@@ -2,11 +2,11 @@
 pkgname=omamobile-device-kebab
 pkgver=$(cat "${startdir:-.}/version")
 pkgrel=1
-pkgdesc="Omamobile support for the OnePlus 8T (kebab): reboot-to-fastboot and USB networking"
+pkgdesc="Omamobile support for the OnePlus 8T (kebab): reboot-to-fastboot, USB networking, speaker UCM"
 arch=(aarch64)
 url="https://github.com/derekross/omamobile"
 license=(MIT)
-depends=(bash systemd)
+depends=(bash systemd alsa-ucm-conf)
 
 build() {
   # Same syscall as device/kebab/initramfs/reboot-to.c. No libc.
@@ -34,6 +34,15 @@ package() {
     "$pkgdir/etc/pacman.d/omamobile-mirrorlist"
   install -Dm644 "$startdir/LICENSE" \
     "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  # ALSA UCM for the sound card ("OnePlus 8T", driver sm8250): UCM looks for
+  # conf.d/<driver>/<card name>.conf
+  install -Dm644 "$startdir/ucm2/OnePlus/kebab/kebab.conf" \
+    "$pkgdir/usr/share/alsa/ucm2/OnePlus/kebab/kebab.conf"
+  install -Dm644 "$startdir/ucm2/OnePlus/kebab/HiFi.conf" \
+    "$pkgdir/usr/share/alsa/ucm2/OnePlus/kebab/HiFi.conf"
+  install -d "$pkgdir/usr/share/alsa/ucm2/conf.d/sm8250"
+  ln -s ../../OnePlus/kebab/kebab.conf \
+    "$pkgdir/usr/share/alsa/ucm2/conf.d/sm8250/OnePlus 8T.conf"
   # Enable sshd and networkd. Nothing else starts.
   local wants="$pkgdir/usr/lib/systemd/system/multi-user.target.wants"
   install -d "$wants"

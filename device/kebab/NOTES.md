@@ -54,6 +54,40 @@ peripheral, no panel node and the wrong touch controller (S6SY761).
 [tree72]: https://gitlab.postmarketos.org/soc/qualcomm-sm8250/linux
 [tree]: https://gitlab.com/sm8250-mainline/linux
 
+## 2026-11-28: DSPs and speakers (`fastboot boot`, Arch root on `userdata`)
+
+Same kernel, with `SND_SOC_TFA987X`, `CHARGER_QCOM_SMB5`,
+`BATTERY_QCOM_FG`, `CHARGER_BQ25970` and `INPUT_AW8695_HAPTICS` added as
+modules (no MODVERSIONS, so they load into the running kernel of the same
+release; the charger, gauge and haptics are built, not yet tried, and
+`CHARGER_QCOM_SMB5` builds no module in this tree).
+
+- **Firmware.** The ADSP, CDSP, SLPI and venus images come from the
+  phone's own `modem` partition (`/image/<name>.mdt` and `.bNN`), each
+  `.mdt` installed as `qcom/sm8250/OnePlus/kebab/<name>.mbn` (the DTS
+  names) with its segments beside it. Not in this repository.
+- **ADSP:** starts (`remote processor adsp is now up`), its APR audio
+  services register, the LPASS SoundWire buses come up and the WCD9380
+  codec binds on both. The sound card then waits on `Speaker Playback:
+  codec dai not found` until the TFA9874 driver (`snd-soc-tfa987x`,
+  "tfa987x" in this tree, not `tfa989x`) binds both amplifiers (I2C 0x34
+  and 0x35, revision 0x0c74). Then card 0 is "OnePlus 8T" (driver
+  sm8250).
+- **Speakers:** `TERT_MI2S_RX Audio Mixer MultiMedia1` on routes PCM 0 to
+  the amplifiers; a -20 dB tone played from `hw:0,0` and through PipeWire
+  was heard. `omamobile-device-kebab` 0.1.1 ships an ALSA UCM profile
+  (`conf.d/sm8250/OnePlus 8T.conf`, verb HiFi, device Speaker) and
+  PipeWire shows "Built-in Audio Speakers". Microphones (WCD9380 ADCs, TX
+  macro) are not in the profile yet; neither are the earpiece or headset.
+- **SLPI:** starts; `/dev/fastrpc-sdsp` appears. The motion, light and
+  proximity sensors sit behind the SLPI's sensor core and need a userspace
+  stack this image doesn't have: a fastrpc daemon serving the SLPI's files
+  (from the phone's `dsp` partition), a QMI client for the sensor core,
+  and iio-sensor-proxy built against it. `iio:device0-2` are the PMIC ADCs.
+- **CDSP:** `can't start rproc cdsp: -22`; not needed for audio or sensors.
+- **venus:** with its firmware the `qcom-iris` "firmware download failed"
+  messages stop.
+
 ## 2026-11-28: Wi-Fi (`fastboot boot`, Arch root on `userdata`)
 
 Same kernel. With `linux-firmware-atheros` (20261124) in the root,
