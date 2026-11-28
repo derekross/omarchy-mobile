@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: MIT
+# Installs the phone's own GPU zap shader and DSP firmware from its Android
+# partitions (read-only) when any is missing: on a fresh install's first
+# boot, and never again after. Before the panel wait and Plymouth, so the
+# GPU has its zap shader when the session starts.
+[Unit]
+Description=Install the OnePlus 8T's own firmware from its Android partitions
+DefaultDependencies=no
+After=local-fs.target systemd-udev-trigger.service
+Before=omamobile-kebab-display.service plymouth-start.service sysinit.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/omamobile-kebab-firmware
+RemainAfterExit=yes
+TimeoutStartSec=60
+
+[Install]
+WantedBy=sysinit.target

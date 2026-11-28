@@ -1,0 +1,37 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+set -eu
+cd "$(dirname "$0")/.."
+cmp reboot-to.c ../../device/kebab/initramfs/reboot-to.c
+cmp reboot ../../device/kebab/reboot
+sh -n reboot
+echo ok wrapper
+echo ok sources
+for f in ucm2/OnePlus/kebab/kebab.conf ucm2/OnePlus/kebab/HiFi.conf; do
+  [ -s "$f" ] || { echo "missing $f"; exit 1; }
+done
+grep -q "TERT_MI2S_RX Audio Mixer MultiMedia1" ucm2/OnePlus/kebab/HiFi.conf
+grep -q "VA DMIC MUX0' DMIC3" ucm2/OnePlus/kebab/HiFi.conf
+grep -q 'audio.format = "S16LE"' wireplumber/51-omamobile-kebab-speaker.conf
+echo ok ucm
+sh -n bin/omamobile-kebab-display-wait
+grep -q "^Before=.*plymouth-start.service.*display-manager.service" systemd/omamobile-kebab-display.service
+grep -q "^After=omamobile-kebab-display.service" systemd/10-omamobile-kebab.conf
+grep -q "^After=omamobile-kebab-display.service" systemd/plymouth-start/10-omamobile-kebab.conf
+grep -q "^DefaultDependencies=no" systemd/omamobile-kebab-display.service
+echo ok display-wait
+bash -n bin/omamobile-kebab-firmware
+grep -q "^ExecStart=/usr/bin/omamobile-kebab-firmware" systemd/omamobile-kebab-firmware.service
+grep -q "^Before=omamobile-kebab-display.service" systemd/omamobile-kebab-firmware.service
+grep -q "losetup -r" bin/omamobile-kebab-firmware
+grep -q "mount -t vfat -o ro" bin/omamobile-kebab-firmware
+grep -q "debugfs -R \"rdump /sensors/registry/registry" bin/omamobile-kebab-firmware
+grep -q "sensors_complete" bin/omamobile-kebab-firmware
+echo ok sensor-files
+grep -q 'IIO_SENSOR_PROXY_TYPE}+="ssc-accel ssc-proximity"' udev/81-omamobile-kebab-sensors.rules
+grep -q "ACCEL_MOUNT_MATRIX" udev/81-omamobile-kebab-sensors.rules
+grep -q "hexagonrpcd-sdsp.service" PKGBUILD
+echo ok sensors
+echo ok firmware
+python3 -c 'import json,sys; v=json.load(open("shell/bar-cutout.json")); sys.exit(0 if isinstance(v.get("left"), (int, float)) and v["left"] > 0 else 1)'
+echo ok bar-cutout

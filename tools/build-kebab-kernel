@@ -1,0 +1,93 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Build the sm8250 kernel tree's 7.2.0 tag for the OnePlus 8T (kebab) in a
+# native arm64 Ubuntu container: Image.gz, the tree's own kebab DTB, modules.
+# Touches no phone. Source and objects live in Docker volumes (bind mounts are
+# too slow for a kernel build, and a case-insensitive host file system breaks
+# it); only the artifacts are copied to OUT.
+#
+# The source is mainline's v7.2 from GitHub plus the sm8250 tree's commits
+# since then: the tree's own server is slow, and fetching only what v7.2
+# lacks moves a few MB instead of the whole history.
+#   tools/build-kebab-kernel            # build
+#   OUT=/some/dir tools/build-kebab-kernel
+set -euo pipefail
+ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+OUT=${OUT:-$ROOT/out/kebab/kernel}
+BASE_TAG=${BASE_TAG:-v7.2}
+BASE_DATE=${BASE_DATE:-2026-08-15}
+TAG=${TAG:-sm8250-7.2.0_git20261010}
+SRC_VOLUME=${SRC_VOLUME:-kebab72_src}
+OBJ_VOLUME=${OBJ_VOLUME:-kebab72_obj}
+JOBS=${JOBS:-8}
+mkdir -p "$OUT"
+docker run --rm \
+  -v "$SRC_VOLUME":/src -v "$OBJ_VOLUME":/obj \
+  -v "$ROOT":/repo:ro -v "$OUT":/out \
+  -e BASE_TAG="$BASE_TAG" -e BASE_DATE="$BASE_DATE" -e TAG="$TAG" -e JOBS="$JOBS" \
+  ubuntu:24.04 bash -euxo pipefail -c '
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update -qq
+    apt-get install -y -qq --no-install-recommends build-essential bc bison flex git ca-certificates \
+      libssl-dev libelf-dev libdw-dev lz4 zstd xz-utils kmod cpio rsync python3 perl >/dev/null
+    if [ ! -d /src/linux/.git ]; then
+      git init -q /src/linux
+      git -C /src/linux remote add gh https://github.com/torvalds/linux.git
+      git -C /src/linux remote add sm https://gitlab.postmarketos.org/soc/qualcomm-sm8250/linux.git
+    fi
+    cd /src/linux
+    if ! git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+      git fetch -q --depth 1 gh tag "$BASE_TAG"
+      git fetch -q --shallow-since="$BASE_DATE" sm tag "$TAG"
+    fi
+    dts=arch/arm64/boot/dts/qcom/sm8250-oneplus-kebab.dts
+    git update-index --no-assume-unchanged "$dts"
+    git checkout -q -f "$TAG"
+    # Omamobile additions (device/kebab/dts/omamobile.dtsi) go on the end of
+    # the board DTS in the tree; the checkout above restores the pristine
+    # file. assume-unchanged keeps the edit out of the release name (no
+    # -dirty), which the modules on the phone are installed under.
+    cat /repo/device/kebab/dts/omamobile.dtsi >> "$dts"
+    git update-index --assume-unchanged "$dts"
+    make ARCH=arm64 O=/obj defconfig
+    scripts/kconfig/merge_config.sh -m -O /obj /obj/.config /repo/kernel/configs/omamobile.config
+    scripts/kconfig/merge_config.sh -m -O /obj /obj/.config /repo/device/kebab/kernel.config
+    make ARCH=arm64 O=/obj olddefconfig
+    # report kebab options that olddefconfig dropped (a wrong symbol name) or
+    # changed: a =y that came out =m (a dependency that is a module) leaves a
+    # boot-path driver out of the initramfs
+    grep -E "^CONFIG_[A-Z0-9_]+=" /repo/device/kebab/kernel.config | while IFS== read -r o want; do
+      got=$(sed -n "s/^$o=//p" /obj/.config)
+      [ -n "$got" ] || { echo "DROPPED: $o"; continue; }
+      [ "$got" = "$want" ] || echo "CHANGED: $o=$want is $o=$got"
+    done | tee /obj/dropped-options.txt
+    make ARCH=arm64 O=/obj -j"$JOBS" Image.gz qcom/sm8250-oneplus-kebab.dtb modules
+    # Out-of-tree modules of this port (device/kebab/kernel/*), built from a
+    # copy: Kbuild writes its objects next to the sources and /repo is
+    # read-only. They install under updates/, beside the tree modules.
+    rm -rf /obj/omamobile-ext
+    cp -r /repo/device/kebab/kernel /obj/omamobile-ext
+    for m in /obj/omamobile-ext/*/; do make ARCH=arm64 O=/obj M="$m" -j"$JOBS" modules; done
+    # OUT is laid out as a kernel build directory (KERNEL_OUT) for
+    # bin/omamobile initramfs, tools/build-kebab-images and tools/build-rootfs:
+    # the release, Image.gz, the DTB and modules-<release>.tar.zst
+    rel=$(make -s ARCH=arm64 O=/obj kernelrelease)
+    mkdir -p /out/include/config /out/arch/arm64/boot/dts/qcom
+    echo "$rel" > /out/include/config/kernel.release
+    echo "$rel" > /out/kernelrelease
+    cp /obj/arch/arm64/boot/Image.gz /out/arch/arm64/boot/
+    cp /obj/arch/arm64/boot/dts/qcom/sm8250-oneplus-kebab.dtb /out/arch/arm64/boot/dts/qcom/
+    cp /obj/.config /out/config
+    cp /obj/dropped-options.txt /out/
+    rm -rf /out/modroot "/out/modules-$rel.tar.zst"
+    make ARCH=arm64 O=/obj INSTALL_MOD_PATH=/out/modroot INSTALL_MOD_STRIP=1 modules_install >/dev/null
+    for m in /obj/omamobile-ext/*/; do
+      make ARCH=arm64 O=/obj M="$m" INSTALL_MOD_PATH=/out/modroot INSTALL_MOD_STRIP=1 modules_install >/dev/null
+    done
+    rm -f "/out/modroot/lib/modules/$rel/build" "/out/modroot/lib/modules/$rel/source"
+    # as bin/omamobile modules packs it: paths relative to /usr/lib/modules
+    tar -C /out/modroot/lib/modules --owner=0 --group=0 --numeric-owner -cf - "$rel" |
+      zstd -q -19 -T0 -o "/out/modules-$rel.tar.zst"
+    rm -rf /out/modroot
+    ls -lh /out
+  '

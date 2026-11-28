@@ -1,21 +1,40 @@
 # SPDX-License-Identifier: MIT
 # Maintainer: Derek Ross <derekross@gmail.com>
-pkgname=omamobile-sensors
+pkgbase=omamobile-sensors
+pkgname=(omamobile-sensors omamobile-autorotate)
 pkgver=$(cat "${startdir:-.}/version")
 pkgrel=1
 pkgdesc="Omamobile sensors for the Pixel 7 Pro and 8 Pro: iio-sensor-proxy's D-Bus API from the AoC, auto-rotate for Hyprland"
 arch=(any)
 url="https://github.com/derekross/omamobile"
 license=(MIT)
-depends=(python python-gobject dbus hyprland)
-optdepends=('e2fsprogs: load the factory sensor calibration from persist (debugfs, read-only)')
-provides=(iio-sensor-proxy)
-conflicts=(iio-sensor-proxy)
 
 check() {
   "$startdir/test/all"
 }
 
-package() {
+# Split: auto-rotate is a client of iio-sensor-proxy's D-Bus API and works
+# with any proxy, so a phone with the real iio-sensor-proxy (the OnePlus 8T)
+# installs omamobile-autorotate alone; omamobile-sensors, the Pixels' proxy,
+# conflicts with it. omamobile-sensors depends on omamobile-autorotate, so
+# the Pixels get the same files as before.
+package_omamobile-sensors() {
+  depends=(python python-gobject dbus omamobile-autorotate)
+  optdepends=('e2fsprogs: load the factory sensor calibration from persist (debugfs, read-only)')
+  provides=(iio-sensor-proxy)
+  conflicts=(iio-sensor-proxy)
   "$startdir/install" "$pkgdir"
+  rm "$pkgdir/usr/bin/omamobile-autorotate" "$pkgdir/usr/lib/omamobile-sensors/autorotate.py" \
+    "$pkgdir/usr/lib/systemd/user/omamobile-autorotate.service"
+  rmdir "$pkgdir/usr/lib/systemd/user"
+}
+
+package_omamobile-autorotate() {
+  pkgdesc="Omamobile auto-rotate: turns Hyprland's screen and touch with the phone, from iio-sensor-proxy's D-Bus API"
+  depends=(python python-gobject hyprland)
+  install -Dm755 "$startdir/bin/omamobile-autorotate" "$pkgdir/usr/bin/omamobile-autorotate"
+  install -Dm644 "$startdir/lib/autorotate.py" "$pkgdir/usr/lib/omamobile-sensors/autorotate.py"
+  install -Dm644 "$startdir/systemd/omamobile-autorotate.service" \
+    "$pkgdir/usr/lib/systemd/user/omamobile-autorotate.service"
+  install -Dm644 "$startdir/LICENSE" "$pkgdir/usr/share/licenses/omamobile-autorotate/LICENSE"
 }

@@ -1,0 +1,174 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Install the OnePlus 8T's own firmware and sensor files from its Android
+# partitions, which are read, never written:
+#  - the GPU's zap shader from vendor_a (an EROFS logical partition inside
+#    super) and the ADSP, CDSP, SLPI and venus images from modem_a (FAT).
+#    Each .mdt goes in as the .mbn name the board DTS asks for, with its
+#    .bNN segments beside it (the MDT loader finds them by base name).
+#  - the files the sensor DSP (SLPI) reads through hexagonrpcd: the sensor
+#    configs from odm_a, sns_reg.conf from vendor_a, the registry and its
+#    version from persist (ext4, through debugfs), the DSP's libraries from
+#    dsp_a (ext4) and socinfo/ from SMEM's platform IDs (debugfs).
+# Run at boot by omamobile-kebab-firmware.service; each part does nothing
+# when its files are already there. linux-firmware supplies the rest
+# (a650_sqe.fw, a650_gmu.bin, ath11k). Nothing of it is in the repository.
+#   omamobile-kebab-firmware [--force] [DEST [SENSORS_DEST]]
+#   (DEST default: the firmware dir; SENSORS_DEST: hexagonrpcd's directory,
+#   or DEST/hexagonfs when only DEST is given, so a test leaves the system be)
+set -euo pipefail
+force=0
+[[ ${1:-} == --force ]] && { force=1; shift; }
+dest=${1:-/usr/lib/firmware/qcom/sm8250/OnePlus/kebab}
+if [[ -n ${1:-} ]]; then sensors=${2:-$dest/hexagonfs}; else sensors=/usr/share/qcom/sm8250/OnePlus/kebab; fi
+names_modem=(adsp cdsp slpi venus)
+say() { echo "omamobile-kebab-firmware: $*"; }
+
+part() {  # the block device of a GPT partition by name
+  local d
+  for d in /sys/class/block/sd*; do
+    grep -qx "PARTNAME=$1" "$d/uevent" 2>/dev/null && { echo "/dev/${d##*/}"; return 0; }
+  done
+  return 1
+}
+firmware_complete() {
+  local n
+  for n in a650_zap "${names_modem[@]}"; do [[ -s $dest/$n.mbn ]] || return 1; done
+}
+sensors_complete() {
+  [[ -s $sensors/sensors/sns_reg.conf && -s $sensors/sensors/sns_reg_version &&
+     -d $sensors/sensors/registry && -d $sensors/sensors/config &&
+     -s $sensors/socinfo/hw_platform ]]
+}
+need_fw=1 need_sensors=1
+((!force)) && firmware_complete && need_fw=0
+((!force)) && sensors_complete && need_sensors=0
+if ((!need_fw && !need_sensors)); then say "already installed"; exit 0; fi
+
+tmp=$(mktemp -d)
+loops=()
+cleanup() {
+  local l
+  mountpoint -q "$tmp/modem" && umount "$tmp/modem"
+  for l in "${loops[@]}"; do losetup -d "$l" 2>/dev/null; done
+  rm -rf "$tmp" "$sensors.new"
+}
+trap cleanup EXIT
+
+# A logical partition inside super, through a read-only loop over its
+# extent (LP metadata parsed here, nothing mounted); sets $loop
+logical() {
+  local super off len
+  super=$(part super) || { say "no super partition"; exit 1; }
+  read -r off len < <(python3 - "$super" "$1" <<'PY'
+import struct, sys
+f = open(sys.argv[1], "rb")
+def rd(o, n): f.seek(o); return f.read(n)
+if struct.unpack_from("<I", rd(4096, 4), 0)[0] != 0x616C4467: sys.exit("no LP geometry")
+h = rd(4096 * 3, 256)
+if struct.unpack_from("<I", h, 0)[0] != 0x414C5030: sys.exit("no LP metadata")
+hsize, tsize = struct.unpack_from("<I", h, 8)[0], struct.unpack_from("<I", h, 44)[0]
+po, pn, ps, eo, en, es = struct.unpack_from("<6I", h, 80)
+t = rd(4096 * 3 + hsize, tsize)
+for i in range(pn):
+    e = t[po + i * ps:po + (i + 1) * ps]
+    if e[:36].split(b"\0")[0].decode() != sys.argv[2]: continue
+    first, num = struct.unpack_from("<II", e, 40)
+    if num != 1: sys.exit("%s has %d extents" % (sys.argv[2], num))
+    ns, tt, td, _ = struct.unpack_from("<QIQI", t, eo + first * es)
+    if tt != 0: sys.exit("not a linear extent")
+    print(td * 512, ns * 512); sys.exit(0)
+sys.exit("no %s in super" % sys.argv[2])
+PY
+)
+  loop=$(losetup -r -f --show -o "$off" --sizelimit "$len" "$super")
+  loops+=("$loop")
+}
+erofs_dir() {  # copy the regular files of an EROFS directory: IMAGE DIR TARGET
+  local f
+  mkdir -p "$3"
+  dump.erofs --ls --path="$2" "$1" | awk '$2 == 1 {print $3}' | while read -r f; do
+    dump.erofs --cat --path="$2/$f" "$1" > "$3/$f"
+  done
+}
+
+if ((need_fw)); then
+  mkdir -p "$tmp/new"
+  # modem_a: FAT, mounted read-only
+  modem=$(part modem_a) || { say "no modem_a partition"; exit 1; }
+  mkdir "$tmp/modem"
+  mount -t vfat -o ro,nodev,nosuid,noexec "$modem" "$tmp/modem"
+  for n in "${names_modem[@]}"; do
+    f=$(find "$tmp/modem" -maxdepth 2 -iname "$n.mdt" | head -1)
+    [[ -n $f ]] || { say "no $n.mdt on modem_a"; exit 1; }
+    cp "$f" "$tmp/new/$n.mbn"
+    for b in "${f%.*}".b[0-9][0-9]; do cp "$b" "$tmp/new/$n.${b##*.}"; done
+  done
+
+  logical vendor_a
+  dump.erofs --cat --path=/firmware/a650_zap.mdt "$loop" > "$tmp/new/a650_zap.mbn"
+  for b in b00 b01 b02 b03 b04; do
+    dump.erofs --cat --path=/firmware/a650_zap.$b "$loop" > "$tmp/new/a650_zap.$b" 2>/dev/null ||
+      rm -f "$tmp/new/a650_zap.$b"
+    [[ -s $tmp/new/a650_zap.$b ]] || rm -f "$tmp/new/a650_zap.$b"
+  done
+  [[ -s $tmp/new/a650_zap.mbn ]] || { say "no a650_zap.mdt in vendor_a"; exit 1; }
+
+  install -d "$dest"
+  install -m644 "$tmp"/new/* "$dest/"
+  say "installed $(ls "$tmp/new" | wc -l) files into $dest"
+fi
+
+if ((need_sensors)); then
+  # Built beside the destination and moved into place, so hexagonrpcd never
+  # serves half a tree. The layout is hexagonrpcd's (packages/hexagonrpcd).
+  s=$sensors.new
+  rm -rf "$s"
+  mkdir -p "$s/sensors" "$s/socinfo" "$s/dsp"
+  logical odm_a
+  erofs_dir "$loop" /etc/sensor/config "$s/sensors/config"
+  [[ -n $(ls "$s/sensors/config") ]] || { say "no sensor configs in odm_a"; exit 1; }
+  logical vendor_a
+  dump.erofs --cat --path=/etc/sensors/sns_reg_config "$loop" > "$s/sensors/sns_reg.conf"
+  # persist and dsp_a: ext4, read with debugfs (opened read-only, nothing mounted)
+  persist=$(part persist) || { say "no persist partition"; exit 1; }
+  debugfs -R "rdump /sensors/registry/registry $s/sensors" "$persist" 2>/dev/null
+  debugfs -R "dump /sensors/registry/sns_reg_version $s/sensors/sns_reg_version" "$persist" 2>/dev/null
+  [[ -d $s/sensors/registry && -s $s/sensors/sns_reg_version ]] ||
+    { say "no sensor registry on persist"; exit 1; }
+  dsp=$(part dsp_a) || { say "no dsp_a partition"; exit 1; }
+  debugfs -R "rdump /sdsp $s/dsp" "$dsp" 2>/dev/null
+  # socinfo: mainline has no /sys/devices/soc0/hw_platform; the names are
+  # the Qualcomm kernel's for SMEM's platform IDs (the configs select on them)
+  si=/sys/kernel/debug/qcom_socinfo
+  mountpoint -q /sys/kernel/debug || mount -t debugfs debugfs /sys/kernel/debug
+  [[ -r $si/hardware_platform ]] || { say "no $si"; exit 1; }
+  platforms=([0]=Unknown [1]=Surf [2]=FFA [3]=Fluid [4]=SVLTE_FFA [5]=SVLTE_SURF
+             [7]=MDM_MTP_NO_DISPLAY [8]=MTP [9]=Liquid [10]=Dragon [11]=QRD
+             [13]=HRD [14]=DTV [21]=RCM [23]=STP [24]=SBC [30]=ADP [31]=HDK
+             [32]=ATP [33]=IDP)
+  subtypes=(Unknown charm strange strange_2a)
+  hw=$(cat "$si/hardware_platform") sub=$(cat "$si/hardware_platform_subtype")
+  echo "${platforms[$hw]:-Unknown}" > "$s/socinfo/hw_platform"
+  echo "${subtypes[$sub]:-Invalid}" > "$s/socinfo/platform_subtype"
+  echo "$sub" > "$s/socinfo/platform_subtype_id"
+  cat "$si/platform_version" > "$s/socinfo/platform_version"
+  cat /sys/devices/soc0/soc_id > "$s/socinfo/soc_id"
+  cat /sys/devices/soc0/revision > "$s/socinfo/revision"
+
+  chown -R 0:0 "$s"
+  find "$s" -type d -exec chmod 755 {} +
+  find "$s" -type f -exec chmod 644 {} +
+  rm -rf "$sensors"
+  mv "$s" "$sensors"
+  say "installed the sensor files into $sensors (hw_platform $(cat "$sensors/socinfo/hw_platform"))"
+fi
+
+# Remote processors that came up before their firmware was there (only for
+# the system's firmware directory: a test DEST leaves the running phone alone)
+[[ $dest == /usr/lib/firmware/qcom/sm8250/OnePlus/kebab ]] || exit 0
+for r in /sys/class/remoteproc/remoteproc*; do
+  [[ $(cat "$r/state" 2>/dev/null) == offline ]] || continue
+  [[ $(cat "$r/firmware" 2>/dev/null) == qcom/sm8250/OnePlus/kebab/* ]] || continue
+  echo start > "$r/state" 2>/dev/null && say "started $(cat "$r/name")" || say "$(cat "$r/name") did not start"
+done

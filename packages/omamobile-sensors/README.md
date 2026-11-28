@@ -14,6 +14,11 @@ iio-sensor-proxy's D-Bus API, and rotates Hyprland with the phone.
 | `omamobile-gyro` | test client of the gyroscope stream: samples, `--stats` (rate, jitter, latency, drops), `--integrate` (angle turned per axis) |
 | `omamobile-usf` | the USF client, for bring-up: sensor list, registry load, sampling |
 
+The PKGBUILD builds two packages: `omamobile-autorotate` (auto-rotate
+alone, a client of any proxy with this API; the OnePlus 8T uses it with
+the real iio-sensor-proxy) and `omamobile-sensors` (the rest, which depends
+on it).
+
 It provides and conflicts with `iio-sensor-proxy`, whose daemon would take
 the same bus name. `monitor-sensor` (from iio-sensor-proxy's source) works
 against it.

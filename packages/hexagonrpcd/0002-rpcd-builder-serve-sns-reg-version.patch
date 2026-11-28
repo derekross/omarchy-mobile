@@ -1,0 +1,76 @@
+Subject: hexagonrpcd: rpcd_builder: serve sns_reg_version next to the registry
+
+The sensors PD opens persist/sensors/registry/sns_reg_version (and
+parsed_file_list.csv) beside the registry directory. When it cannot read
+the version, it treats the registry as stale and rebuilds it from the
+JSON configs, writing temp.json and the registry files back, which the
+read-only file service refuses: the rebuild fails and the PD registers no
+physical sensors. Serving the version a phone's persist partition already
+holds lets the PD use that registry as it is, and write nothing.
+
+Both files come from the sensors directory of the served tree
+(sensors/sns_reg_version, sensors/parsed_file_list.csv), not from inside
+sensors/registry/, which the PD lists as registry groups.
+
+Same idea as linux-msm/hexagonrpc#31 (commit 894ef56f), which keeps the
+parent's entry count at 1 so hfs_mkdir() never adds the two new entries.
+---
+diff --git a/hexagonrpcd/rpcd_builder.c b/hexagonrpcd/rpcd_builder.c
+--- a/hexagonrpcd/rpcd_builder.c
++++ b/hexagonrpcd/rpcd_builder.c
+@@ -31,6 +31,8 @@
+ #define SENSORS_CONFIG		"/sensors/config/"
+ #define SENSORS_REGISTRY	"/sensors/registry/"
+ #define SNS_REG_CONFIG		"/sensors/sns_reg.conf"
++#define SNS_REG_VERSION		"/sensors/sns_reg_version"
++#define SNS_REG_FILE_LIST	"/sensors/parsed_file_list.csv"
+ #define SYSFS_SOCINFO		"/socinfo/"
+ 
+ static struct hexagonfs_dirent *hfs_mkdir(const char *name, size_t n_ents, ...)
+@@ -112,6 +114,7 @@
+ struct hexagonfs_dirent *construct_root_dir(const char *prefix, const char *dsp)
+ {
+ 	char *acdbdata, *dsp_libs, *sns_cfg, *sns_reg, *sns_reg_config, *socinfo;
++	char *sns_reg_version, *sns_reg_file_list;
+ 	size_t n_prefix;
+ 	struct hexagonfs_dirent *persist_dir, *vendor_dir;
+ 
+@@ -121,6 +124,8 @@
+ 	sns_cfg = malloc(n_prefix + strlen(SENSORS_CONFIG) + 1);
+ 	sns_reg = malloc(n_prefix + strlen(SENSORS_REGISTRY) + 1);
+ 	sns_reg_config = malloc(n_prefix + strlen(SNS_REG_CONFIG) + 1);
++	sns_reg_version = malloc(n_prefix + strlen(SNS_REG_VERSION) + 1);
++	sns_reg_file_list = malloc(n_prefix + strlen(SNS_REG_FILE_LIST) + 1);
+ 	socinfo = malloc(n_prefix + strlen(SYSFS_SOCINFO) + 1);
+ 
+ 	dsp_libs = malloc(n_prefix + strlen(DSP_LIBS) + strlen(dsp) + 1);
+@@ -145,6 +150,16 @@
+ 		strcat(sns_reg_config, SNS_REG_CONFIG);
+ 	}
+ 
++	if (sns_reg_version != NULL) {
++		strcpy(sns_reg_version, prefix);
++		strcat(sns_reg_version, SNS_REG_VERSION);
++	}
++
++	if (sns_reg_file_list != NULL) {
++		strcpy(sns_reg_file_list, prefix);
++		strcat(sns_reg_file_list, SNS_REG_FILE_LIST);
++	}
++
+ 	if (socinfo != NULL) {
+ 		strcpy(socinfo, prefix);
+ 		strcat(socinfo, SYSFS_SOCINFO);
+@@ -162,8 +177,10 @@
+ 	 */
+ 	persist_dir = hfs_mkdir("persist", 1,
+ 				hfs_mkdir("sensors", 1,
+-					hfs_mkdir("registry", 1,
+-						hfs_map("registry", sns_reg)
++					hfs_mkdir("registry", 3,
++						hfs_map("registry", sns_reg),
++						hfs_map("sns_reg_version", sns_reg_version),
++						hfs_map("parsed_file_list.csv", sns_reg_file_list)
+ 					)
+ 				)
+ 		      );

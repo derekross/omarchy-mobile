@@ -1,0 +1,86 @@
+# SPDX-License-Identifier: MIT
+pkgname=omamobile-device-kebab
+pkgver=$(cat "${startdir:-.}/version")
+pkgrel=1
+pkgdesc="Omamobile support for the OnePlus 8T (kebab): firmware and sensor files from its own partitions, reboot-to-fastboot, USB networking, display start, audio UCM, sensors"
+arch=(aarch64)
+url="https://github.com/derekross/omamobile"
+license=(MIT)
+# linux-firmware: the GPU's SQE and GMU, ath11k; erofs-utils, e2fsprogs and
+# python: omamobile-kebab-firmware reads vendor_a, odm_a, persist and dsp_a;
+# hexagonrpcd, libssc and iio-sensor-proxy: the sensors on the SLPI;
+# omamobile-autorotate: the rotation tile and auto-rotate
+depends=(bash systemd alsa-ucm-conf linux-firmware-qcom linux-firmware-atheros
+         erofs-utils e2fsprogs python util-linux
+         hexagonrpcd libssc iio-sensor-proxy omamobile-autorotate)
+
+build() {
+  # Same syscall as device/kebab/initramfs/reboot-to.c. No libc.
+  gcc -nostdlib -static -ffreestanding -fno-stack-protector \
+    -fno-asynchronous-unwind-tables -Oz \
+    -o "$srcdir/reboot-to" "$startdir/reboot-to.c"
+}
+
+package() {
+  install -Dm755 "$srcdir/reboot-to" "$pkgdir/usr/local/bin/reboot-to"
+  install -Dm755 "$startdir/reboot" "$pkgdir/usr/local/bin/reboot"
+  install -Dm644 "$startdir/20-usb-gadget.network" \
+    "$pkgdir/usr/lib/systemd/network/20-usb-gadget.network"
+  install -Dm644 "$startdir/10-omamobile-usb.conf" \
+    "$pkgdir/usr/lib/NetworkManager/conf.d/10-omamobile-usb.conf"
+  install -Dm644 "$startdir/sshd-omamobile.conf" \
+    "$pkgdir/etc/ssh/sshd_config.d/omamobile.conf"
+  install -Dm644 "$startdir/sshd.sysusers" \
+    "$pkgdir/usr/lib/sysusers.d/sshd.conf"
+  # The console prompt has no keyboard on this phone, and it is
+  # Before=sysinit, so it holds the boot ahead of sshd.
+  install -d "$pkgdir/etc/systemd/system"
+  ln -s /dev/null "$pkgdir/etc/systemd/system/systemd-firstboot.service"
+  install -Dm644 "$startdir/omamobile-mirrorlist" \
+    "$pkgdir/etc/pacman.d/omamobile-mirrorlist"
+  install -Dm644 "$startdir/LICENSE" \
+    "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  # The phone's own firmware from its Android partitions, at boot
+  install -Dm755 "$startdir/bin/omamobile-kebab-firmware" \
+    "$pkgdir/usr/bin/omamobile-kebab-firmware"
+  install -Dm644 "$startdir/systemd/omamobile-kebab-firmware.service" \
+    "$pkgdir/usr/lib/systemd/system/omamobile-kebab-firmware.service"
+  install -d "$pkgdir/usr/lib/systemd/system/sysinit.target.wants"
+  ln -s ../omamobile-kebab-firmware.service \
+    "$pkgdir/usr/lib/systemd/system/sysinit.target.wants/omamobile-kebab-firmware.service"
+  # Sensors: hexagonrpcd serves the SLPI the files staged above; the udev
+  # rule gives iio-sensor-proxy the accelerometer and proximity sensor
+  install -Dm644 "$startdir/udev/81-omamobile-kebab-sensors.rules" \
+    "$pkgdir/usr/lib/udev/rules.d/81-omamobile-kebab-sensors.rules"
+  # The display manager waits for msm DRM to take the panel
+  install -Dm755 "$startdir/bin/omamobile-kebab-display-wait" \
+    "$pkgdir/usr/bin/omamobile-kebab-display-wait"
+  install -Dm644 "$startdir/systemd/omamobile-kebab-display.service" \
+    "$pkgdir/usr/lib/systemd/system/omamobile-kebab-display.service"
+  install -Dm644 "$startdir/systemd/10-omamobile-kebab.conf" \
+    "$pkgdir/usr/lib/systemd/system/display-manager.service.d/10-omamobile-kebab.conf"
+  install -Dm644 "$startdir/systemd/plymouth-start/10-omamobile-kebab.conf" \
+    "$pkgdir/usr/lib/systemd/system/plymouth-start.service.d/10-omamobile-kebab.conf"
+  # ALSA UCM for the sound card ("OnePlus 8T", driver sm8250): UCM looks for
+  # conf.d/<driver>/<card name>.conf
+  install -Dm644 "$startdir/ucm2/OnePlus/kebab/kebab.conf" \
+    "$pkgdir/usr/share/alsa/ucm2/OnePlus/kebab/kebab.conf"
+  install -Dm644 "$startdir/ucm2/OnePlus/kebab/HiFi.conf" \
+    "$pkgdir/usr/share/alsa/ucm2/OnePlus/kebab/HiFi.conf"
+  install -d "$pkgdir/usr/share/alsa/ucm2/conf.d/sm8250"
+  ln -s ../../OnePlus/kebab/kebab.conf \
+    "$pkgdir/usr/share/alsa/ucm2/conf.d/sm8250/OnePlus 8T.conf"
+  # PipeWire: the speaker sink at 16 bits, or the bottom speaker stays silent
+  install -Dm644 "$startdir/wireplumber/51-omamobile-kebab-speaker.conf" \
+    "$pkgdir/usr/share/wireplumber/wireplumber.conf.d/51-omamobile-kebab-speaker.conf"
+  # The status bar's clock clear of the top-left camera hole (56 logical px
+  # at scale 3); read by omamobile-shell 0.2.159 and later (#1143)
+  install -Dm644 "$startdir/shell/bar-cutout.json" \
+    "$pkgdir/usr/share/omamobile/shell/bar-cutout.json"
+  # Enable sshd, networkd and the SLPI file server. Nothing else starts.
+  local wants="$pkgdir/usr/lib/systemd/system/multi-user.target.wants"
+  install -d "$wants"
+  ln -s ../systemd-networkd.service "$wants/systemd-networkd.service"
+  ln -s ../sshd.service "$wants/sshd.service"
+  ln -s ../hexagonrpcd-sdsp.service "$wants/hexagonrpcd-sdsp.service"
+}

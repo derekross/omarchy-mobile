@@ -1,0 +1,23 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+# Hold the display manager until msm DRM has taken the panel from simpledrm.
+# udev loads msm and the AMB655X panel driver from the root, but SDDM could
+# start Hyprland first, on simpledrm, which msm then took away: the first
+# session died ("sddm-helper exited with 9") and SDDM started another.
+# Always exits 0: if msm never binds, the display manager still starts on
+# simpledrm rather than leaving the panel black.
+modprobe -q msm 2>/dev/null
+modprobe -q panel_samsung_amb655x 2>/dev/null
+i=0
+while [ "$i" -lt 150 ]; do
+  for c in /sys/class/drm/card*-DSI-1; do
+    if [ -e "$c/status" ] && [ "$(cat "$c/status")" = connected ]; then
+      echo "msm DRM has the panel after $((i / 10)).$((i % 10)) s"
+      exit 0
+    fi
+  done
+  sleep 0.1
+  i=$((i + 1))
+done
+echo "msm DRM didn't take the panel in 15 s; starting the display manager anyway"
+exit 0

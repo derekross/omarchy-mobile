@@ -1,0 +1,63 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Pack the OnePlus 8T's boot image: an Android boot image header v2 with the
+# DTB in its own section at 0x01f00000 and a gzip kernel, which this ABL
+# needs (device/kebab/NOTES.md, first light) and `bin/omamobile images`
+# can't pack yet (BOOT_METHOD stays android-v0 so flash and the installer
+# keep refusing the phone). Offsets, page size and the command line come
+# from device/kebab/device.conf; the kernel, DTB and initramfs from a
+# kernel build directory:
+#   tools/build-kebab-kernel                    -> KERNEL_OUT
+#   DEVICE=kebab KERNEL_OUT=... bin/omamobile initramfs
+#   KERNEL_OUT=... tools/build-kebab-images     -> KERNEL_OUT/images/boot.img
+# mkbootimg.py is the pinned one (tools/toolchain.lock), fetched on its own
+# if tools/fetch-toolchain hasn't put it in the toolchain directory, and
+# checked against the lock's SHA-256 either way. Touches no phone.
+set -euo pipefail
+ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+KERNEL_OUT=${KERNEL_OUT:-$ROOT/out/kebab/kernel}
+TOOLCHAIN_DIR=${OMAMOBILE_TOOLCHAIN:-${XDG_CACHE_HOME:-$HOME/.cache}/omamobile/toolchain}
+die() { printf 'error: %s\n' "$*" >&2; exit 1; }
+sha256() { if command -v sha256sum >/dev/null; then sha256sum "$1"; else shasum -a 256 "$1"; fi | cut -d' ' -f1; }
+
+conf=$ROOT/device/kebab/device.conf
+val() { sed -n "s/^$1=\"\{0,1\}\([^\"]*\)\"\{0,1\}$/\1/p" "$conf" | tail -1; }
+for k in PAGESIZE BASE KERNEL_OFFSET RAMDISK_OFFSET SECOND_OFFSET TAGS_OFFSET CMDLINE DTB; do
+  [[ -n $(val "$k") ]] || die "$conf has no $k"
+done
+
+rel=$(cat "$KERNEL_OUT/include/config/kernel.release" 2>/dev/null) || die "no kernel build in $KERNEL_OUT"
+kernel=$KERNEL_OUT/arch/arm64/boot/Image.gz
+dtb=$KERNEL_OUT/arch/arm64/boot/dts/$(val DTB)
+ramdisk=$KERNEL_OUT/initramfs.cpio.lz4
+for f in "$kernel" "$dtb" "$ramdisk"; do [[ -s $f ]] || die "missing $f"; done
+# An initramfs that carries modules records their release; kebab's carries
+# none (all built in), so it has no release to match
+if [[ -f $KERNEL_OUT/initramfs.release && $(cat "$KERNEL_OUT/initramfs.release") != "$rel" ]]; then
+  die "the initramfs's modules aren't $rel's: DEVICE=kebab KERNEL_OUT=$KERNEL_OUT bin/omamobile initramfs"
+fi
+
+# The pinned mkbootimg.py and the module it imports
+mkb=$TOOLCHAIN_DIR/mkbootimg
+mkdir -p "$mkb/gki"
+while read -r kind path want url; do
+  [[ $kind == b64 && $path == mkbootimg/* ]] || continue
+  f=$TOOLCHAIN_DIR/$path
+  if [[ ! -f $f || $(sha256 "$f") != "$want" ]]; then
+    curl -fsSL "$url" | base64 -d > "$f.part" || die "could not fetch $path"
+    [[ $(sha256 "$f.part") == "$want" ]] || { rm -f "$f.part"; die "$path doesn't match tools/toolchain.lock"; }
+    mv "$f.part" "$f"
+  fi
+done < "$ROOT/tools/toolchain.lock"
+[[ -f $mkb/mkbootimg.py ]] || die "no mkbootimg in tools/toolchain.lock"
+
+out=$KERNEL_OUT/images
+mkdir -p "$out"
+PYTHONPATH=$mkb python3 "$mkb/mkbootimg.py" --header_version 2 \
+  --kernel "$kernel" --ramdisk "$ramdisk" --dtb "$dtb" --cmdline "$(val CMDLINE)" \
+  --pagesize "$(val PAGESIZE)" --base "$(val BASE)" --kernel_offset "$(val KERNEL_OFFSET)" \
+  --ramdisk_offset "$(val RAMDISK_OFFSET)" --second_offset "$(val SECOND_OFFSET)" \
+  --tags_offset "$(val TAGS_OFFSET)" --dtb_offset 0x01f00000 \
+  --os_version 13.0.0 --os_patch_level 2024-01 -o "$out/boot.img"
+echo "$rel" > "$out/boot.img.release"
+echo "$out/boot.img: $rel, sha256 $(sha256 "$out/boot.img")"
