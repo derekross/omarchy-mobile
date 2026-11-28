@@ -4,7 +4,8 @@
 # factory calibration, as omamobile-audio's omamobile-speaker-protection does on
 # the 7 Pro (steps 4 and 5 there): the protection firmware models the voice
 # coil from its measured resistance. persist is f2fs here, so speaker.cal is
-# read with dump.f2fs while the block device is set read-only, never mounted,
+# read with dump.f2fs only while the storage guard holds the block device
+# read-only (the script never changes that flag), never mounted,
 # and only that one file is kept (in a private tmpfs directory, then deleted).
 #
 # While a DSP is not running, the driver keeps CAL_* writes in its control
@@ -139,6 +140,8 @@ STOP_BUDGET=${OMAMOBILE_SPK_STOP_BUDGET:-12}
 cut_short() { exec 1>&3; log "putting the cache back was cut short: reboot before any speaker stream"; exit 1; }
 stop_post() {
   local rc=0 a l
+  # a SIGKILL during dump.f2fs leaves the private copy of persist in /run
+  rm -rf "$RUNDIR"/omamobile-spk-cal.*
   [[ -e $writing ]] || return 0
   exec 3>&1
   trap cut_short TERM INT HUP
@@ -205,9 +208,8 @@ sync -f "$marker" 2>/dev/null || sync
 
 # On every exit (a hang or SIGKILL never gets here, so its marker stays): the
 # cached values an unfinished amplifier had before its writes go back, a
-# Preload Switch this run turned off goes back on, persist's read-only flag
-# goes back, the private copy goes, and the marker goes.
-tmp= dev= ro_set= preload_off=
+# Preload Switch this run turned off goes back on, the private copy goes, and the marker goes.
+tmp= dev= preload_off=
 undo=()      # "control=value it held", for the amplifier being written
 written=()   # the amplifiers whose four writes are done
 # the cleanup's messages must not land in a `>/dev/null` that a trap
@@ -225,7 +227,6 @@ cleanup() {
   if [[ -n $preload_off ]]; then
     ctl cset "name=$preload_off DSP1 Preload Switch" on >/dev/null || log "$preload_off: setting DSP1 Preload Switch on again failed"
   fi
-  if [[ -n $ro_set ]]; then blockdev --setrw "$dev"; fi
   if [[ -n $tmp ]]; then rm -rf "$tmp"; fi
   # only now: a SIGKILL during the put-back leaves it for --stop-post
   rm -f "$writing" "$writing.new"
@@ -250,14 +251,11 @@ mm=$(<"$(dirname "$u")/dev"); [[ -n $mm ]] || fail "cannot read the device numbe
 command -v dump.f2fs >/dev/null || fail "no dump.f2fs (f2fs-tools)"
 # mounted under any name? mountinfo's third field is the device number
 while read -r _ _ m _; do [[ $m == "$mm" ]] && fail "$dev is mounted; not reading it"; done < "$MOUNTINFO"
+# the storage guard sets persist read-only at boot; never change that flag here
+[[ $(blockdev --getro "$dev") == 1 ]] || fail "$dev is writable: the storage guard is not in force; not reading it"
 tmp=$(mktemp -d "$RUNDIR/omamobile-spk-cal.XXXXXX") || { tmp=; fail "no tmp dir"; }
 chmod 700 "$tmp"
-if [[ $(blockdev --getro "$dev") != 1 ]]; then
-  ro_set=1
-  blockdev --setro "$dev" || fail "could not set $dev read-only"
-fi
 timeout 60 dump.f2fs -r -f -o "$tmp/p" "$dev" >/dev/null 2>&1; rc=$?
-if [[ -n $ro_set ]]; then blockdev --setrw "$dev"; ro_set=; fi
 cal=$tmp/p/audio/speaker.cal
 [[ $rc == 0 && -f $cal ]] || fail "persist:/audio/speaker.cal not found (dump.f2fs rc $rc)"
 mv "$cal" "$tmp/speaker.cal" && rm -rf "$tmp/p"

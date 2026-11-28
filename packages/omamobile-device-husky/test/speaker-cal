@@ -141,7 +141,7 @@ goodcal() { mkcal 1193046 1 1193047 25 0 0 658188 1 658189 26 0 0; }
 # A sound card with both amplifiers and no firmware loaded yet (Preload off)
 reset() {
   rm -rf "$F" "$st"; mkdir -p "$F/val" "$F/running" "$F/held"
-  : > "$F/log"; : > "$T/mountinfo"; echo 0 > "$F/ro"
+  : > "$F/log"; : > "$T/mountinfo"; echo 1 > "$F/ro"
   printf '%s\n' "Top DSP1 Preload Switch" "Top DSP1 Firmware" "Bottom DSP1 Preload Switch" "Bottom DSP1 Firmware" > "$F/ctls"
   echo off > "$F/val/Top_DSP1_Preload_Switch"; echo off > "$F/val/Bottom_DSP1_Preload_Switch"
   goodcal
@@ -169,11 +169,11 @@ cset Bottom DSP1 Protection cd CAL_AMBIENT = 0x00,0x00,0x00,0x1a
 cset Bottom DSP1 Protection cd CAL_R = 0x00,0x0a,0x0b,0x0c
 cset Bottom DSP1 Protection cd CAL_STATUS = 0x00,0x00,0x00,0x01
 cset Bottom DSP1 Protection cd CAL_CHECKSUM = 0x00,0x0a,0x0b,0x0d"
-# the run left nothing behind: marker, private copy, read-only flag, Preload off
+# the run left nothing behind: marker, private copy, Preload off; persist stays read-only
 clean() {
   [[ ! -e $st/speaker-cal-started ]] || fail "$1: the marker is left behind"
   [[ -z $(ls -A "$T/run") ]] || fail "$1: the private copy of speaker.cal is left in the run dir"
-  [[ $(<"$F/ro") == 0 ]] || fail "$1: persist's read-only flag is not put back"
+  [[ $(<"$F/ro") == 1 ]] || fail "$1: persist's read-only flag was changed"
   [[ $(<"$F/val/Top_DSP1_Preload_Switch") == on && $(<"$F/val/Bottom_DSP1_Preload_Switch") == on ]] \
     || fail "$1: a Preload Switch is left off"
   ! grep -q '^no-marker' "$F/log" || fail "$1: amixer ran before the marker was on disk"
@@ -220,7 +220,8 @@ rc=0; out=$(run) || rc=$?
 [[ $rc == 0 && $out == *"handed to both DSPs"* ]] || fail "a fresh boot passes: $out"
 [[ $(cal_writes) == "$want_writes" ]] || fail "the CAL writes: $(cal_writes)"
 [[ $(grep -c '^load ' "$F/log") == 2 ]] || fail "each firmware loads once"
-grep -q '^blockdev --setro /dev/sda1' "$F/log" || fail "persist is set read-only before dump.f2fs"
+grep -q '^blockdev --getro /dev/sda1' "$F/log" || fail "persist's read-only flag is checked before dump.f2fs"
+! grep -q 'blockdev --set' "$F/log" || fail "persist's read-only flag is never changed"
 ! grep -q 'Preload Switch = off' "$F/log" || fail "a DSP that never ran is not reloaded"
 noreadback "fresh boot"
 clean "fresh boot"; novalues "$out"
@@ -407,6 +408,12 @@ rc=0; out=$(TEST_MARKER= FAIL_CSET=CAL_AMBIENT run --stop-post) || rc=$?
 reset
 rc=0; out=$(TEST_MARKER= run --stop-post) || rc=$?
 [[ $rc == 0 && -z $out && ! -s $F/log ]] || fail "--stop-post without the file does nothing: $out"
+# a SIGKILL during dump.f2fs leaves the private copy of persist: --stop-post removes it
+reset; mkdir -p "$T/run/omamobile-spk-cal.AbC123/p/audio"; cp "$F/speaker.cal" "$T/run/omamobile-spk-cal.AbC123/p/audio/"
+mkdir -p "$T/run/omamobile-spk-cal.Xyz789"; touch "$T/run/other-file"
+rc=0; out=$(TEST_MARKER= run --stop-post) || rc=$?
+[[ $rc == 0 && -z $out && ! -s $F/log && $(ls -A "$T/run") == other-file ]] || fail "--stop-post removes a leftover private copy and nothing else: $out $(ls -A "$T/run")"
+rm -f "$T/run/other-file"
 # the killed run had turned Top's Preload off (stop_if_started): --stop-post turns it on
 reset; loaded_and_run; pre; echo off > "$F/val/Top_DSP1_Preload_Switch"; rm -f "$F/running/Top"
 printf '%s\n' "Top DSP1 Protection cd CAL_AMBIENT=0x00,0x00,0x00,0x07" "Top DSP1 Protection cd CAL_R=0x00,0x11,0x11,0x11" \
@@ -452,7 +459,7 @@ pass "SIGKILL during the writes: the unit's --stop-post puts the cache back (sto
 reset; echo "36 25 8:1 / /mnt/persist ro,relatime shared:1 - f2fs /dev/disk/by-partlabel/persist ro" > "$T/mountinfo"
 rc=0; out=$(run) || rc=$?
 [[ $rc == 1 && $out == *"/dev/sda1 is mounted"* ]] || fail "a mounted persist is refused, whatever name it was mounted by: $out"
-! grep -q 'blockdev --setro\|dump.f2fs' "$F/log" || fail "a mounted persist is not touched"
+! grep -q 'blockdev --set\|dump.f2fs' "$F/log" || fail "a mounted persist is not touched"
 reset; echo "36 25 8:17 / /mnt/x ro,relatime shared:1 - f2fs /dev/sda1x ro" > "$T/mountinfo"
 rc=0; out=$(run) || rc=$?
 [[ $rc == 0 ]] || fail "another device's mount is not persist: $out"
@@ -460,7 +467,7 @@ reset; mkcal 1193046 1 1193048 25 0 0 658188 1 658189 26 0 0
 rc=0; out=$(run) || rc=$?
 [[ $rc == 1 && $out == *"Top: calibration checksum does not match"* ]] || fail "a bad checksum is refused: $out"
 ! grep -q 'Preload Switch\|CAL_' "$F/log" || fail "a bad record changes nothing on the card"
-[[ $(<"$F/ro") == 0 && -z $(ls -A "$T/run") ]] || fail "a bad record leaves no copy and no read-only flag"
+[[ $(<"$F/ro") == 1 && -z $(ls -A "$T/run") ]] || fail "a bad record leaves no copy and persist read-only"
 reset; mkcal 1193046 1 1193047 25 0 0 658188 2 658190 26 0 0
 rc=0; out=$(run) || rc=$?
 [[ $rc == 1 && $out == *"Bottom: calibration status is not 1"* ]] || fail "status 2 in a record is refused: $out"
@@ -479,12 +486,14 @@ rc=0; out=$(run) || rc=$?
 [[ $rc == 1 && $out == *"speaker.cal is short"* ]] || fail "a short file is refused: $out"
 reset; rm "$F/speaker.cal"
 rc=0; out=$(run) || rc=$?
-[[ $rc == 1 && $out == *"speaker.cal not found"* && $(<"$F/ro") == 0 ]] || fail "a dump that fails is refused and the flag goes back: $out"
-reset; echo 1 > "$F/ro"
+[[ $rc == 1 && $out == *"speaker.cal not found"* && $(<"$F/ro") == 1 && -z $(ls -A "$T/run") ]] || fail "a dump that fails is refused and leaves nothing: $out"
+reset; echo 0 > "$F/ro"
 rc=0; out=$(run) || rc=$?
-[[ $rc == 0 && $(<"$F/ro") == 1 ]] || fail "a persist that was read-only already stays read-only: $out"
-! grep -q 'blockdev --setrw' "$F/log" || fail "a flag the script did not set is not cleared"
-pass "persist: mounted, bad or out-of-range records, short or missing file are refused, and the read-only flag is only cleared if the script set it"
+[[ $rc == 1 && $out == *"the storage guard is not in force; not reading it"* ]] || fail "a writable persist is refused: $out"
+! grep -q 'dump.f2fs\|blockdev --set' "$F/log" || fail "a writable persist is not dumped and its flag is not changed"
+[[ $(<"$F/ro") == 0 && -z $(ls -A "$T/run") && ! -e $st/speaker-cal-started ]] || fail "a refused writable persist leaves nothing behind"
+! grep -q 'CAL_' "$F/log" || fail "a refused writable persist writes nothing to the card"
+pass "persist: writable (no storage guard), mounted, bad or out-of-range records, short or missing file are refused; the read-only flag is never changed"
 
 # 10. check: CAL_SET_STATUS 2 on both passes; 1, or not running, fails; nothing is written
 reset; loaded_and_run
