@@ -8190,6 +8190,39 @@ These are userspace observations of configuration and
 presentation. They do not timestamp the kernel modeset,
 DSI transfer, panel scanout or the display interrupt.
 
+###### Offline Composer post-configuration callback
+
+The same trace has two `committing_mode:1280x2856x120@120`
+markers. In `ValidateCompositionPlan`, the marker precedes
+`CommitFrame` at +0.613–0.708 ms. In the first post-call
+`PresentDisplay`, the marker precedes `UpdateConnectorState`
+and `CommitFrame` at +0.791–4.566 ms. Both paths record
+`dispatch_frame_start_fence` after `CommitFrame`. Only the
+presentation path shows the mode-change callback, at +9.164 ms
+under `OnPresentPostCommit` in that same `PresentDisplay`.
+The callback starts 4.598 ms after its `CommitFrame` scope ends.
+
+The capture has userspace `print` markers only. It gives no
+DRM ioctl flags, return value, applied KMS mode blob or kernel
+completion event. The public Google Composer wrapper delegates
+presentation to its display implementation. The inspected public
+graphics source and saved D1 artifacts do not provide the exact
+callback's error branch. The order is consistent with Composer
+finishing a mode-bearing presentation commit. It does not verify
+that the validation attempt was test-only, that the callback
+requires a successful DRM atomic ioctl, or when the kernel latched
+the mode. [Public Composer wrapper](https://android.googlesource.com/platform/hardware/google/graphics/common/+/562ede8d98ea101c3ccbac20a587a673261acfc3/hwc3/impl/HalImpl.cpp#749).
+
+The fence observed in that commit's `wait_present` at +4.409 ms
+matches the earlier submission. The first `PresentDisplay` with
+the new-mode marker has its own fence at +21.091 ms, about
+11.926 ms after the callback began. That is the first observed
+Android presentation boundary associated with a submission for
+the new configuration. The Composer AIDL defines the physical
+present fence near the start of display or panel transfer. This
+trace does not tie the fence to a specific CRTC out-fence, TE
+edge or panel scanout. [Composer present-fence contract](https://android.googlesource.com/platform/hardware/interfaces/+/823ff0c77babffa6dd4c704e49bb1402423db8fe/graphics/composer/aidl/android/hardware/graphics/composer3/CommandResultPayload.aidl).
+
 After this stock Android session, take and verify a fresh
 guarded nine-partition NV backup before the next Linux
 slot B trial. Keep Android off between the rescue and trial.
