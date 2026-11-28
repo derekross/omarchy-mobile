@@ -22,7 +22,8 @@
 # OMAMOBILE_SSH_CONFIG explicitly selects an SSH config file (-F); /dev/null
 # skips normal config files only when the caller requests it. Default unchanged.
 # OMAMOBILE_SSH_HOST_KEY_ALIAS selects the name checked in that file, so
-# native and recovery systems can keep distinct pins at the same USB address.
+# native and recovery systems can keep distinct pins at the same USB address;
+# it only matters with host-key checking on, and phone-ssh warns otherwise.
 # OMAMOBILE_SSH_INTERFACE selects a direct interface for this socket only.
 # OMAMOBILE_SSH_CONNECT_TIMEOUT sets the connection timeout in positive seconds (default 6).
 # With explicit CONFIG=/dev/null, the default USB address automatically uses
@@ -179,6 +180,7 @@ fi
 opts=(-o LogLevel=ERROR -o "ConnectTimeout=$connect_timeout")
 [[ -z $proxy ]] || opts+=(-o "ProxyCommand=$proxy")
 [[ -z $config ]] || opts+=(-F "$config")
+unchecked=0
 if [[ -n $known ]]; then
   # This -o value is parsed again as ssh_config: protect spaces and quotes.
   quoted=${known//\\/\\\\}
@@ -197,12 +199,14 @@ elif ((tofu)); then
   # so, since nothing else would show that the pin was skipped.
   echo 'phone-ssh: OMAMOBILE_SSH_KNOWN_HOSTS=tofu: no pin file could be made, so this call goes out without a host-key check' >&2
   opts+=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null)
+  unchecked=1
 else
   # The default keeps today's behavior (no host-key state): the USB address
   # is answered by several SSH servers by design (the initramfs's dropbear
   # makes a fresh key each boot; the installed system has its own), so a pin
   # keyed on the address would lock our own tools out.
   opts+=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null)
+  unchecked=1
 fi
 [[ -z $key ]] || opts+=(-o IdentitiesOnly=yes -i "$key")
 [[ -z $alias ]] || opts+=(-o "HostKeyAlias=$alias")
@@ -221,4 +225,7 @@ case ${1:-} in
       opts+=(-o ControlMaster=no -o ControlPath=none)
     fi ;;
 esac
+if ((unchecked)) && [[ -n $alias ]]; then
+  echo 'phone-ssh: OMAMOBILE_SSH_HOST_KEY_ALIAS has no effect while host-key checking is off (set OMAMOBILE_SSH_KNOWN_HOSTS to a file, or to tofu)' >&2
+fi
 exec ssh "${opts[@]}" "$target" "$@"

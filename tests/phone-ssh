@@ -25,7 +25,7 @@ chmod +x "$scratch/ip"
 real_ssh=$(command -v ssh || true)
 export PATH="$scratch:$PATH"
 unset OMAMOBILE_SSH_HOST OMAMOBILE_SSH_KEY OMAMOBILE_SSH_KNOWN_HOSTS OMAMOBILE_SSH_SHARE OMAMOBILE_SSH_HOST_KEY_ALIAS OMAMOBILE_SSH_CONFIG OMAMOBILE_SSH_INTERFACE
-tools/phone-ssh 'printf "%s" "$HOME"' >"$scratch/default"
+tools/phone-ssh 'printf "%s" "$HOME"' >"$scratch/default" 2>"$scratch/default.err"
 grep -Fx root@172.16.42.1 "$scratch/default" >/dev/null
 grep -Fx 'printf "%s" "$HOME"' "$scratch/default" >/dev/null
 grep -Fx ConnectTimeout=6 "$scratch/default" >/dev/null
@@ -33,6 +33,7 @@ grep -Fx ConnectTimeout=6 "$scratch/default" >/dev/null
 # several SSH servers by design: the initramfs's dropbear, the installed system).
 grep -Fx StrictHostKeyChecking=no "$scratch/default" >/dev/null
 grep -Fx UserKnownHostsFile=/dev/null "$scratch/default" >/dev/null
+[[ ! -s $scratch/default.err ]]
 echo 'ok - the default has no host-key state (unchanged behavior)'
 
 # OMAMOBILE_SSH_KNOWN_HOSTS=tofu opts in to pinning. Every call here points
@@ -123,6 +124,36 @@ fi
 OMAMOBILE_SSH_KNOWN_HOSTS="$scratch/explicit-hosts" tools/phone-ssh true >"$scratch/strict"
 grep -Fx StrictHostKeyChecking=yes "$scratch/strict" >/dev/null
 echo 'ok - an explicit known_hosts file is checked strictly'
+
+# OMAMOBILE_SSH_HOST_KEY_ALIAS warns once when host-key checking is off
+# (default or tofu fallback), stays silent on --stop or with checking on,
+# and keeps passing HostKeyAlias and the original ssh arguments.
+alias_warn='phone-ssh: OMAMOBILE_SSH_HOST_KEY_ALIAS has no effect while host-key checking is off (set OMAMOBILE_SSH_KNOWN_HOSTS to a file, or to tofu)'
+printf '%s\n' "$alias_warn" >"$scratch/alias-warn.exp"
+printf '%s\n%s\n' "$unpinned" "$alias_warn" >"$scratch/tofu-alias-warn.exp"
+
+OMAMOBILE_SSH_HOST_KEY_ALIAS=phone-native tools/phone-ssh true >"$scratch/aw-default" 2>"$scratch/aw-default.err"
+OMAMOBILE_SSH_HOST_KEY_ALIAS=phone-native tools/phone-ssh --fresh true >"$scratch/aw-fresh" 2>"$scratch/aw-fresh.err"
+OMAMOBILE_SSH_SHARE=1 OMAMOBILE_SSH_HOST_KEY_ALIAS=phone-native tools/phone-ssh true >"$scratch/aw-share" 2>"$scratch/aw-share.err"
+env -u HOME -u XDG_DATA_HOME OMAMOBILE_SSH_KNOWN_HOSTS=tofu OMAMOBILE_SSH_HOST_KEY_ALIAS=phone-native tools/phone-ssh true >"$scratch/aw-tofu-nohome" 2>"$scratch/aw-tofu-nohome.err"
+XDG_DATA_HOME="$scratch/not-a-directory" OMAMOBILE_SSH_KNOWN_HOSTS=tofu OMAMOBILE_SSH_HOST_KEY_ALIAS=phone-native tools/phone-ssh true >"$scratch/aw-tofu-nodir" 2>"$scratch/aw-tofu-nodir.err"
+for f in aw-default aw-fresh aw-share aw-tofu-nohome aw-tofu-nodir; do
+  grep -Fx HostKeyAlias=phone-native "$scratch/$f" >/dev/null
+  grep -Fx StrictHostKeyChecking=no "$scratch/$f" >/dev/null
+  grep -Fx true "$scratch/$f" >/dev/null
+  exp=$scratch/alias-warn.exp
+  [[ $f != aw-tofu-* ]] || exp=$scratch/tofu-alias-warn.exp
+  cmp "$exp" "$scratch/$f.err"
+done
+echo 'ok - OMAMOBILE_SSH_HOST_KEY_ALIAS warns once when host-key checking is off (default, --fresh, shared, tofu fallback)'
+
+OMAMOBILE_SSH_HOST_KEY_ALIAS=phone-native tools/phone-ssh --stop >"$scratch/aw-stop" 2>"$scratch/aw-stop.err"
+[[ ! -s $scratch/aw-stop.err ]]
+OMAMOBILE_SSH_KNOWN_HOSTS="$scratch/explicit-hosts" OMAMOBILE_SSH_HOST_KEY_ALIAS=phone-native tools/phone-ssh true >"$scratch/aw-explicit" 2>"$scratch/aw-explicit.err"
+[[ ! -s $scratch/aw-explicit.err ]]
+XDG_DATA_HOME="$scratch/xdg-data" OMAMOBILE_SSH_KNOWN_HOSTS=tofu OMAMOBILE_SSH_HOST_KEY_ALIAS=phone-native tools/phone-ssh true >"$scratch/aw-tofu" 2>"$scratch/aw-tofu.err"
+[[ ! -s $scratch/aw-tofu.err ]]
+echo 'ok - OMAMOBILE_SSH_HOST_KEY_ALIAS is silent on --stop, explicit known_hosts, and working tofu'
 OMAMOBILE_SSH_CONNECT_TIMEOUT=19 tools/phone-ssh true >"$scratch/timeout-override"
 grep -Fx ConnectTimeout=19 "$scratch/timeout-override" >/dev/null
 for bad_timeout in 0 -1 1.5 invalid 999x; do
