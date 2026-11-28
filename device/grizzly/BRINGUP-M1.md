@@ -8223,6 +8223,48 @@ present fence near the start of display or panel transfer. This
 trace does not tie the fence to a specific CRTC out-fence, TE
 edge or panel scanout. [Composer present-fence contract](https://android.googlesource.com/platform/hardware/interfaces/+/823ff0c77babffa6dd4c704e49bb1402423db8fe/graphics/composer/aidl/android/hardware/graphics/composer3/CommandResultPayload.aidl).
 
+###### Exact D1 Composer callback and CRTC fence
+
+Extracted `vendor/bin/hw/android.hardware.composer.drm-hwc3-service`
+from the `CP4A.261105.040.D1` Grizzly factory `vendor.img`. The member
+passed its ZIP CRC, and the factory vbmeta signatures, chained vendor
+key and vendor SHA-256 hashtree verified. The stripped ARM64 ELF has
+SHA-256 `b8b3b9eaf6bbb2e46661b74656fb2ac1a136491ff26e0acfae65819c90080441`.
+The offsets below are ELF virtual offsets. The binary stays private.
+[Google factory images](https://developers.google.com/android/images#grizzly).
+
+`ValidateCompositionPlan` sets the test-only argument at `0x1187c4`.
+`CommitFrame` translates that argument to `DRM_MODE_ATOMIC_TEST_ONLY`
+at `0xa50b0`–`0xa50d0`. The ordinary DSI presentation branch adds the
+CRTC `MODE_ID` blob (`0xa4af0`–`0xa4af8`) and calls
+`drmModeAtomicCommit` at `0xa529c`. The post-commit update at
+`0xa52bc`–`0xa52e0` requires a zero result and a non-test request.
+The error recovery path at `0xa5c40` can try a cleanup commit but
+returns the original error.
+
+`PresentDisplay` passes the commit status and present fence to
+`OnPresentPostCommit` at `0xe4ef8`. On the traced internal-display
+path, `0x18c81c` skips the configuration callback on nonzero
+status. `0x18c898` also rejects a `-1` present fd before the
+call at `0x18c8fc`. The locked configuration handler checks the
+pending config and calls the mode-change observers (`0x1d9e1c`–
+`0x1d9e84`). A no-op without an atomic submission leaves the present
+fd at `-1`. Thus the callback in the observed mode-bearing
+`PresentDisplay` is a witness of a successful real atomic commit
+with a returned fence. It precedes the signal of that fence.
+
+The CRTC property setup looks up standard `OUT_FENCE_PTR` at
+`0xa7870`–`0xa7888`. The physical path puts the address of its fd
+slot in that property at `0xa49d8`–`0xa49e0`. After ioctl success it
+copies the returned fd to the present slot (`0xa5368`–`0xa53b4`),
+which `PresentDisplay` passes to both the callback and its caller
+(`0xe4edc`–`0xe4f5c`). The optional `FRAME_DONE_OUT_FENCE_PTR`
+uses a distinct fd slot and dispatch. Writeback uses a separate
+selection path. The saved DSI trace's +21.091 ms FrameTimeline
+endpoint therefore matches an Android-observed CRTC out-fence for
+the new-mode submission. No independent TE, DSI transfer or
+optical timestamp was captured.
+
 After this stock Android session, take and verify a fresh
 guarded nine-partition NV backup before the next Linux
 slot B trial. Keep Android off between the rescue and trial.
