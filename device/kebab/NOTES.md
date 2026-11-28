@@ -54,6 +54,37 @@ peripheral, no panel node and the wrong touch controller (S6SY761).
 [tree72]: https://gitlab.postmarketos.org/soc/qualcomm-sm8250/linux
 [tree]: https://gitlab.com/sm8250-mainline/linux
 
+## 2026-11-28: microphones (`fastboot boot`, Arch root on `userdata`)
+
+Same kernel and DSP firmware. The phone's mics are two digital mics on the
+DMIC1 and DMIC3 lines; stock's mixer paths (the vendor partition's
+`mixer_paths.xml`) use DMIC3 as the handset mic and DMIC1 as the second
+mic of its noise-cancelling pair.
+
+- **Which path.** Recording 1.5 s from every candidate input while
+  talking: through the TX macro's own DMIC lines every input read the
+  same noise floor (about -65 dBFS), and through the TX macro's SoundWire
+  inputs nothing at all; through the **VA macro** only DMIC1 and DMIC3
+  picked anything up. Their level follows the decimator gain (VA_DEC0
+  Volume 84/100/110: DMIC3 -65/-50/-38 dBFS while talking), so they are
+  the mics, read through the VA macro.
+- **The profile.** `omamobile-device-kebab` 0.1.2 adds a Mic device to
+  the UCM verb: `VA DEC0 MUX` VA_DMIC, `VA DMIC MUX0` DMIC3, `VA_AIF1_CAP
+  Mixer DEC0`, `MultiMedia3 Mixer VA_CODEC_DMA_TX_0`, `VA_DEC0 Volume` 104
+  (+20 dB), PCM 2. PipeWire shows "Built-in Audio Microphone", and 5 s of
+  speech recorded through it came in at -11.9 dBFS RMS, half-scale peaks.
+- **Not yet:** the second mic (DMIC1, for stereo or noise cancelling) and
+  the TX macro's DMIC path, which stock uses (likely a DMIC clock setting).
+
+**Headset.** The 8T has no jack: a wired headset is an analog USB-C
+headset, switched onto the WCD9385 by the FSA4480 in Type-C audio
+accessory mode. Stock's `headset-mic` path is the WCD's ADC2 (`ADC2 MUX`
+INP2, `TX SMIC MUX0` ADC1, `TX_DEC0 Volume` 84) on `TX_CDC_DMA_TX_4`, and
+its headphones are the WCD's HPHL/HPHR through the RX macro. It can't be
+tried while the USB-C port is the laptop link, so it isn't in the UCM
+profile yet (a device without a working jack control would leave PipeWire
+offering headphones that aren't there).
+
 ## 2026-11-28: battery and charging (`fastboot boot`, Arch root on `userdata`)
 
 Same kernel. No change was needed for either.

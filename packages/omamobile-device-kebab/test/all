@@ -11,4 +11,5 @@ for f in ucm2/OnePlus/kebab/kebab.conf ucm2/OnePlus/kebab/HiFi.conf; do
   [ -s "$f" ] || { echo "missing $f"; exit 1; }
 done
 grep -q "TERT_MI2S_RX Audio Mixer MultiMedia1" ucm2/OnePlus/kebab/HiFi.conf
+grep -q "VA DMIC MUX0' DMIC3" ucm2/OnePlus/kebab/HiFi.conf
 echo ok ucm
