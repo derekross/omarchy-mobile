@@ -328,7 +328,7 @@ down() {
   # cleared only on a clear answer that the profile is down: a NetworkManager that doesn't answer (or no profile found)
   # while ap0 still exists as an access point keeps the table
   if active_on_ap "$hs" || [[ $(cat "$RUN/created" 2>/dev/null) == "$AP" ]] \
-     || { ! timeout 10 nmcli -t -f DEVICE connection show --active >/dev/null 2>&1 && iw dev "$AP" info 2>/dev/null | grep -q 'type AP'; }; then
+     || { ! timeout 10 nmcli -t -f DEVICE connection show --active >/dev/null 2>&1 && iw dev "$AP" info 2>/dev/null | grep -c 'type AP' >/dev/null; }; then
     [[ -e $RUN/iso-state ]] && log "client isolation: $AP may still be up; left in place"
   else
     iso_clear
