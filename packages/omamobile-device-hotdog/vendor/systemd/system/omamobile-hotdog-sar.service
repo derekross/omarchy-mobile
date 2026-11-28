@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: MIT
+# OnePlus 7T Pro: the SAR sensor (Semtech SX9324, on the SLPI's own bus) as a
+# near/far state in /run/omamobile/sar/ (device/hotdog/SENSORS-PLAN.md
+# section 6). It subscribes once over QMI with non-wakeup delivery, so a grip
+# never wakes the phone, and follows SLPI restarts through the QRTR name
+# service. The modem reads the sensor by itself; nothing is sent to it.
+#   systemctl mask omamobile-hotdog-sar   keeps it off
+[Unit]
+Description=OnePlus 7T Pro SAR sensor state (SX9324 through the Sensor Core)
+After=omamobile-hotdog-sensors.service
+
+[Service]
+ExecStart=/usr/lib/omamobile/hotdog/omamobile-hotdog-sar
+Restart=on-failure
+RestartSec=5
+DynamicUser=yes
+RuntimeDirectory=omamobile/sar
+RuntimeDirectoryMode=0755
+RestrictAddressFamilies=AF_QIPCRTR AF_UNIX
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

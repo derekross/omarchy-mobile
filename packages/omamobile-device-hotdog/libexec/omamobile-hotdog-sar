@@ -1,0 +1,297 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""OnePlus 7T Pro: the SAR sensor (Semtech SX9324) as a near/far state.
+
+The SX9324 hangs off the SLPI's own I2C bus and is driven by the Sensor
+Core's `sns_sx9324` driver, which publishes it as data type `sars`
+(device/hotdog/SENSORS-PLAN.md section 6). This daemon subscribes to it over
+QMI (QRTR service 400) and keeps the latest sample in /run/omamobile/sar/:
+
+  state    near | far | unknown (no Sensor Core, or no sample yet)
+  diff     the chip's useful value minus its baseline (about +-60 at rest,
+           1,500-1,800 for a flat palm on the back, 15,000-25,000 for a grip
+           around the bottom edge)
+  offset   the baseline the chip compensated to
+
+Every new subscription makes the chip compensate against whatever touches it
+at that moment, so the daemon subscribes once and keeps the subscription. It
+asks for non-wakeup delivery: a grip never wakes the phone from sleep, and the
+state catches up at the next wake. The modem reads the sensor through the
+Sensor Core by itself (section 6), so nothing here is sent to the modem.
+
+  omamobile-hotdog-sar           run (the unit)
+  omamobile-hotdog-sar --once    print the first sample and exit
+"""
+import os
+import select
+import signal
+import socket
+import struct
+import sys
+import time
+
+AF_QIPCRTR = 42
+QRTR_PORT_CTRL = 0xFFFFFFFE
+QRTR_TYPE_NEW_SERVER, QRTR_TYPE_DEL_SERVER, QRTR_TYPE_NEW_LOOKUP = 4, 5, 10
+SSC_SERVICE = 400
+
+QMI_REQUEST, QMI_RESPONSE, QMI_INDICATION = 0x00, 0x02, 0x04
+QMI_SSC_CONTROL, QMI_SSC_REPORT_SMALL, QMI_SSC_REPORT_LARGE = 0x20, 0x21, 0x22
+
+SUID_UID = (0xABABABABABABABAB, 0xABABABABABABABAB)  # (low, high)
+MSG_SUID_REQUEST, MSG_SUID_RESPONSE = 512, 768
+MSG_ENABLE_ON_CHANGE, MSG_DISABLE = 514, 10
+MSG_CONFIG_EVENT, MSG_SENSOR_EVENT = 768, 1026
+PROCESSOR_APSS, SUSPEND_NO_WAKEUP = 1, 1
+
+RUN = os.environ.get("OMAMOBILE_SAR_DIR", "/run/omamobile/sar")
+
+
+# --- protobuf, just what the Sensor Core's messages need ---------------------
+
+def varint(n):
+    out = bytearray()
+    while True:
+        b = n & 0x7F
+        n >>= 7
+        out.append(b | (0x80 if n else 0))
+        if not n:
+            return bytes(out)
+
+
+def field(num, wire, payload):
+    key = varint(num << 3 | wire)
+    if wire == 0:
+        return key + varint(payload)
+    if wire == 1:
+        return key + struct.pack("<Q", payload)
+    if wire == 5:
+        return key + struct.pack("<I", payload)
+    return key + varint(len(payload)) + payload
+
+
+def parse(buf):
+    """Yield (field number, wire type, value) for one message level."""
+    i, n = 0, len(buf)
+    while i < n:
+        key, sh = 0, 0
+        while True:
+            b = buf[i]; i += 1
+            key |= (b & 0x7F) << sh; sh += 7
+            if not b & 0x80:
+                break
+        num, wire = key >> 3, key & 7
+        if wire == 0:
+            v, sh = 0, 0
+            while True:
+                b = buf[i]; i += 1
+                v |= (b & 0x7F) << sh; sh += 7
+                if not b & 0x80:
+                    break
+        elif wire == 1:
+            v = struct.unpack_from("<Q", buf, i)[0]; i += 8
+        elif wire == 5:
+            v = buf[i:i + 4]; i += 4
+        elif wire == 2:
+            ln, sh = 0, 0
+            while True:
+                b = buf[i]; i += 1
+                ln |= (b & 0x7F) << sh; sh += 7
+                if not b & 0x80:
+                    break
+            v = buf[i:i + ln]; i += ln
+        else:
+            raise ValueError("wire type %d" % wire)
+        yield num, wire, v
+
+
+def client_request(uid, msg_id, body=b""):
+    low, high = uid
+    uid_msg = field(1, 1, low) + field(2, 1, high)
+    config = field(1, 0, PROCESSOR_APSS) + field(2, 0, SUSPEND_NO_WAKEUP)
+    request = field(2, 2, body) if body else b""
+    return (field(1, 2, uid_msg) + field(2, 5, msg_id) + field(3, 2, config)
+            + field(4, 2, request))
+
+
+def responses(data):
+    """Yield (uid, msg_id, payload) from an SscClientResponse."""
+    uid, bodies = None, []
+    for num, _, v in parse(data):
+        if num == 1:
+            u = {n: x for n, _, x in parse(v)}
+            uid = (u.get(1, 0), u.get(2, 0))
+        elif num == 2:
+            bodies.append(v)
+    for b in bodies:
+        msg_id, payload = None, b""
+        for num, wire, v in parse(b):
+            if num == 1:
+                msg_id = struct.unpack("<I", v)[0] if wire == 5 else v
+            elif num == 3:
+                payload = v
+        yield uid, msg_id, payload
+
+
+def sensor_event(payload):
+    """The standard sensor event: floats [state, diff, offset, ...], status."""
+    values, status = [], None
+    for num, wire, v in parse(payload):
+        if num == 1 and wire == 2:
+            values += list(struct.unpack("<%df" % (len(v) // 4), v))
+        elif num == 1 and wire == 5:
+            values.append(struct.unpack("<f", v)[0])
+        elif num == 2:
+            status = v
+    return values, status
+
+
+# --- QRTR and QMI ------------------------------------------------------------
+
+class Ssc:
+    def __init__(self):
+        self.ns = socket.socket(AF_QIPCRTR, socket.SOCK_DGRAM)
+        self.qmi = socket.socket(AF_QIPCRTR, socket.SOCK_DGRAM)
+        self.server = None
+        self.txn = 0
+        # Lookups stay registered: the name service reports the SLPI's
+        # service going away and coming back
+        self.ns.sendto(struct.pack("<5I", QRTR_TYPE_NEW_LOOKUP, SSC_SERVICE, 0, 0, 0),
+                       (1, QRTR_PORT_CTRL))
+
+    def ns_event(self):
+        d = self.ns.recv(64)
+        kind, svc, _inst, node, port = struct.unpack_from("<5I", d)
+        if svc != SSC_SERVICE or (node == 0 and port == 0):
+            return None
+        if kind == QRTR_TYPE_NEW_SERVER:
+            self.server = (node, port)
+            return "up"
+        if kind == QRTR_TYPE_DEL_SERVER and self.server == (node, port):
+            self.server = None
+            return "down"
+        return None
+
+    def control(self, payload):
+        self.txn = (self.txn + 1) & 0xFFFF or 1
+        tlvs = struct.pack("<BHH", 0x01, len(payload) + 2, len(payload)) + payload
+        tlvs += struct.pack("<BHB", 0x10, 1, 1)  # large reports
+        msg = struct.pack("<BHHH", QMI_REQUEST, self.txn, QMI_SSC_CONTROL, len(tlvs)) + tlvs
+        self.qmi.sendto(msg, self.server)
+
+    def receive(self):
+        """Return ('response', result) or ('report', data) or None."""
+        d, addr = self.qmi.recvfrom(65536)
+        if len(d) < 7 or addr[:2] != tuple(self.server or ()):
+            return None
+        kind, _txn, msg_id, ln = struct.unpack_from("<BHHH", d)
+        tlv, i = {}, 7
+        while i + 3 <= 7 + ln and i + 3 <= len(d):
+            t, l = struct.unpack_from("<BH", d, i)
+            tlv[t] = d[i + 3:i + 3 + l]
+            i += 3 + l
+        if kind == QMI_RESPONSE and msg_id == QMI_SSC_CONTROL:
+            result = struct.unpack("<HH", tlv[0x02])[0] if 0x02 in tlv else 1
+            return "response", result
+        if kind == QMI_INDICATION and msg_id in (QMI_SSC_REPORT_SMALL, QMI_SSC_REPORT_LARGE):
+            raw = tlv.get(0x02, b"")
+            return "report", raw[2:2 + struct.unpack_from("<H", raw)[0]] if len(raw) >= 2 else b""
+        return None
+
+
+# --- state -------------------------------------------------------------------
+
+def publish(state, diff="", offset=""):
+    os.makedirs(RUN, exist_ok=True)
+    for name, value in (("diff", diff), ("offset", offset), ("state", state)):
+        tmp = os.path.join(RUN, "." + name)
+        with open(tmp, "w") as f:
+            f.write("%s\n" % value)
+        os.replace(tmp, os.path.join(RUN, name))
+
+
+def log(msg):
+    print(msg, flush=True)
+
+
+def main():
+    once = "--once" in sys.argv[1:]
+    ssc = Ssc()
+    sar_uid, last_state, subscribed_at = None, None, 0.0
+    running = True
+
+    def stop(*_):
+        nonlocal running
+        running = False
+
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGINT, stop)
+    if not once:
+        publish("unknown")
+    deadline = time.monotonic() + 30 if once else None
+    try:
+        while running:
+            # (Re)subscribe: SUID lookup first, then the on-change request
+            if ssc.server and sar_uid is None and time.monotonic() - subscribed_at > 5:
+                subscribed_at = time.monotonic()
+                body = field(1, 2, b"sars") + field(2, 0, 1)
+                ssc.control(client_request(SUID_UID, MSG_SUID_REQUEST, body))
+            r, _, _ = select.select([ssc.ns, ssc.qmi], [], [], 1.0)
+            if deadline and time.monotonic() > deadline:
+                log("no SAR sample in 30 s")
+                return 1
+            if ssc.ns in r:
+                ev = ssc.ns_event()
+                if ev == "up":
+                    log("Sensor Core at %d:%d" % ssc.server)
+                    sar_uid, subscribed_at = None, 0.0
+                elif ev == "down":
+                    log("Sensor Core gone (SLPI restart?)")
+                    sar_uid, last_state = None, None
+                    if not once:
+                        publish("unknown")
+            if ssc.qmi in r and ssc.server:
+                got = ssc.receive()
+                if not got or got[0] != "report":
+                    continue
+                for uid, msg_id, payload in responses(got[1]):
+                    if uid == SUID_UID and msg_id == MSG_SUID_RESPONSE and sar_uid is None:
+                        dtype, uids = b"", []
+                        for num, _, v in parse(payload):
+                            if num == 1:
+                                dtype = v
+                            elif num == 2:
+                                u = {n: x for n, _, x in parse(v)}
+                                uids.append((u.get(1, 0), u.get(2, 0)))
+                        if dtype == b"sars" and uids:
+                            sar_uid = uids[0]
+                            log("SAR sensor %016x%016x, subscribing" % (sar_uid[1], sar_uid[0]))
+                            ssc.control(client_request(sar_uid, MSG_ENABLE_ON_CHANGE))
+                        elif dtype == b"sars":
+                            log("no SAR sensor published yet")
+                    elif uid == sar_uid and msg_id == MSG_SENSOR_EVENT:
+                        values, _status = sensor_event(payload)
+                        if len(values) < 3:
+                            continue
+                        state = "near" if values[0] >= 0.5 else "far"
+                        diff, offset = int(values[1]), int(values[2])
+                        if once:
+                            print("%s diff=%d offset=%d" % (state, diff, offset))
+                            return 0
+                        publish(state, diff, offset)
+                        if state != last_state:
+                            log("%s (diff %d, offset %d)" % (state, diff, offset))
+                            last_state = state
+    finally:
+        if sar_uid and ssc.server:
+            try:
+                ssc.control(client_request(sar_uid, MSG_DISABLE))
+            except OSError:
+                pass
+        if not once:
+            publish("unknown")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

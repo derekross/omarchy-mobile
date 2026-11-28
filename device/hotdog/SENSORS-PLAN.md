@@ -2,7 +2,8 @@
 # Sensors plan (hotdog / SM8150): ambient light and proximity through the SLPI
 
 **Status (2026-11-18): ambient light works, and the screen turns off at
-the ear in calls; on `boot_a`, slot A marked.** The SLPI starts from the
+the ear in calls; on `boot_a`, slot A marked. The SAR sensor (SX9324) works
+since 2026-11-28 (§6).** The SLPI starts from the
 device tree and the fastrpc fix is in the kernel; the TCS3701's light reaches
 iio-sensor-proxy from boot (`monitor-sensor --light`: about 700-1,300 lux
 indoors, 100 covered, 12,300 at a lamp). The TCS3701's proximity is listed
@@ -190,6 +191,10 @@ wake. Then flash `boot_a` as [KEYS-PLAN](KEYS-PLAN.md) K6, re-mark slot A
   is lost at its next start, and its write-back burst at every start is
   only rate-limited in the journal.
 - `sleepstate` is never driven: the SSC always sees the APPS as awake.
+- SAR (§6): the sensors PD's crash at every resume makes the SAR daemon
+  resubscribe, which re-zeroes the chip against the hand holding the phone.
+- SAR (§6): whether the modem subscribes to the SX9324 by itself under
+  Linux is read from its firmware strings only, not seen at run time.
 
 ## 5. Proximity from the touchscreen's ear mode
 
@@ -233,3 +238,74 @@ Results, 2026-11-18:
 Open: a touch the face starts before the grab may stay down in the
 compositor until the next touch (not seen); the in-call keypad is far by the
 finger test above, but not measured with the panel off.
+
+## 6. SAR sensor (Semtech SX9324)
+
+**Status (2026-11-28): fitted and working, near/far from the SSC;
+device-hotdog 0.1.24 keeps it in `/run/omamobile/sar/`.**
+
+| What | Source |
+| --- | --- |
+| The SX9324 is not on a Linux bus: stock's DT overlays (all 38 in `dtbo`) have no node for it. It sits on the SSC's I2C bus 3 at 0x28, interrupt on TLMM GPIO 96 (`msmnile_sx9324.json`; an SX932x variant at 0x2c on GPIO 87 is configured too and absent) | the owner's OxygenOS image |
+| The SLPI firmware's `sns_sx9324` driver publishes it as data type **`sars`** (`SX9324_SAR`, vendor Semtech), not `sar`: a lookup of `sar` returns nothing, which first read as "not fitted" | `strings` of `slpi.mbn` (`SX9324_SAR` next to `sars`); a SUID lookup on the phone |
+| The full 61-file config pool the root builder serves is enough: nothing else needs changing | SUID lookup on boot_a, `7.3.0-rc6-omamobile-crypt1-gf3a11a5f5062` |
+| The sample (message 1026) is a standard sensor event: floats `[state, diff, offset, 0, 0]`, status 3. `state` 1 is near; `diff` is the chip's useful value against its baseline, `offset` its compensation offset | ssc-probe, below |
+| Every new subscription makes the chip compensate against whatever touches it: with a hand on the phone at that moment the offset went to 16383 (its maximum), `diff` read 0 and it never reported near | hand test, below |
+| Mainline's SM8150 DT gives `sdhc_2` (the SD card controller, which this phone lacks) `cd-gpios = <&tlmm 96>`, the SAR's interrupt line. The hotdog DT keeps `sdhc_2` disabled, so the line stays free; a DT that enables it takes the interrupt from the SSC | `/sys/kernel/debug/gpio`, `/proc/device-tree` |
+| Stock Android never sends the sensor to the modem: no QMI SAR (`rf_set_state`) caller outside Qualcomm's test tool, AOSP Wi-Fi body-SAR off (`config_wifi_framework_enable_body_proximity_sar_tx_power_limit` false, no overlay), and the OEM hook `AP_2_MODEM_SAR_SENSOR_OPERATE` only in the factory app. The modem's OnePlus OEM service names the SSC data type `sars` itself, next to an NV switch `/oem/oem_sar_disable`: the modem most likely subscribes to the sensor through the SSC on its own | `dexdump` of stock's `framework.jar`, `wifi-service.jar`, `qcnvitems.jar`; `aapt2` of `framework-res.apk` and the vendor overlays; `strings` of `modem.mbn` |
+| The modem's QMI SAR service answers over QRTR: `qmicli -d qrtr://0 --sar-rf-get-state` reads 0 | on the phone |
+
+Hand test, 2026-11-28 (owner; phone on its stand, the subscription started
+with nothing near it, then the hand put on):
+
+| Position | Result |
+| --- | --- |
+| Nothing within about 60 cm | far, `diff` within +-60 |
+| Palm flat on the back, bottom half | near at 1716-1772, back to far at 890 while still touching |
+| Palm flat on the back, top half | near at 1522-1756, far at 1283 and 676 while still touching |
+| Fingers around the bottom edge (USB-C end) | near, 24611, steady |
+| Fingers around the top edge | near, 17709, then far at -466 after 1.6 s (grip loosened or compensated, not settled) |
+
+The electrode follows the frame by the main antenna at the bottom; a flat
+palm sits at the threshold (near above about 1,500, far below about 1,300).
+On-change events arrive by themselves, so the chip's interrupt reaches the
+SSC.
+
+**Design.** `omamobile-hotdog-sar` (device-hotdog 0.1.24) is a small QMI
+client in Python: it looks up `sars`, subscribes once on change, and writes
+`state` (`near`/`far`/`unknown`), `diff` and `offset` to
+`/run/omamobile/sar/`. It asks for non-wakeup delivery (libssc and
+iio-sensor-proxy always ask for wakeup), so a grip never wakes the phone from
+sleep, and keeps its one subscription because a new one re-zeroes the chip. It
+follows SLPI restarts through the QRTR name service and runs with a dynamic
+user. Nothing is sent to the modem: stock sends nothing either, and a second
+backoff on top of the modem's own would cost signal for no gain.
+
+**R1. The service by hand (phone, read-only).**
+`/usr/lib/omamobile/hotdog/omamobile-hotdog-sar --once`. Expect: the Sensor
+Core's address, the SAR UID, `far diff=... offset=...`. Stop: no sample in
+30 s. Risk: low (one SSC subscription, closed at exit).
+*2026-11-28: pass from the script, `far diff=6 offset=11863`; as a daemon with
+non-wakeup delivery, grip and release reported near (24381) and far (512)
+within a second.*
+
+**R2. Installed (phone).** `tools/phone-install-package
+packages/omamobile-device-hotdog`, then `systemctl status
+omamobile-hotdog-sar`, `cat /run/omamobile/sar/state`, a grip. Pass: active
+under its dynamic user, `far` at rest, `near` while gripped. Rollback:
+`systemctl mask omamobile-hotdog-sar`, or reinstall 0.1.23. Risk: low.
+*2026-11-28: pass on `7.3.0-rc6-omamobile-crypt1-gf3a11a5f5062` (built on the
+phone, fingerprint programs included): active as `omamobile-hotdog-sar`'s
+dynamic user, `far -3` at rest, a grip `near 18289` and the release `far 882`
+15 s later. Fingerprint, sensors and ModemManager stayed active.*
+
+**R3. Sleep.** `systemctl suspend`, grip the bottom edge while asleep, wake
+with the power key. Pass: no wake from the grip; the state catches up after
+the wake. Risk: low.
+*2026-11-28: pass. 28 s of s2idle, woken by the power key only
+(`omamobile-sleepd`: IRQ 111, `pm8941_pwrkey`); the grip during the sleep was
+delivered at the wake (near 24402, far 224). The SLPI's sensors PD then
+crashed as after every resume (§4, `frpc_dsp`), the daemon saw the service go,
+resubscribed 2 s later and read near/far again. That resubscription
+re-zeroes the chip against whatever touches it at that moment, often the hand
+that pressed the power key; it clears at the next release and grip.*

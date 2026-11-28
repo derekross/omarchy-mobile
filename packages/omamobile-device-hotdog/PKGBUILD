@@ -2,7 +2,7 @@
 pkgname=omamobile-device-hotdog
 pkgver=$(cat "${startdir:-.}/version")
 pkgrel=1
-pkgdesc="Omamobile support for the OnePlus 7T Pro (hotdog): storage guard, USB networking, modem (rmtfs, tqftpserv, ModemManager), call audio, Bluetooth address, sound profile, alert slider, fingerprint, pop-up camera, GNSS through the modem, suspend, light and proximity (SLPI sensors)"
+pkgdesc="Omamobile support for the OnePlus 7T Pro (hotdog): storage guard, USB networking, modem (rmtfs, tqftpserv, ModemManager), call audio, Bluetooth address, sound profile, alert slider, fingerprint, pop-up camera, GNSS through the modem, suspend, light, proximity and SAR (SLPI sensors)"
 arch=(aarch64)
 url="https://github.com/derekross/omamobile"
 # The package's own files are MIT; the Bluetooth address helper is

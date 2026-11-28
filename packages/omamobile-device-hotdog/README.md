@@ -21,6 +21,7 @@ each part is described in the plan it came from under
 | `libexec/omamobile-hotdog-popup`, `omamobile-hotdog-popup.service` | system | The pop-up front camera's motor (CAMERA-PLAN P0-P5) |
 | `libcamera/configuration.yaml`, `70-omamobile-dma-heap.rules` | `/usr/share/libcamera/`, udev | The cameras' software ISP settings and DMA heap access (CAMERA-PLAN C8) |
 | `libexec/omamobile-hotdog-sensors-*`, `omamobile-hotdog-sensors.service`, `81-omamobile-hotdog-sensors.rules` | system | hexagonrpcd for the SLPI's Sensor Core, on a read-only root built from the phone's own partitions, started when the SLPI's FastRPC node appears (SENSORS-PLAN) |
+| `libexec/omamobile-hotdog-sar`, `omamobile-hotdog-sar.service` | system | The SAR sensor (Semtech SX9324 through the Sensor Core, data type `sars`) as `near`/`far` in `/run/omamobile/sar/`: one QMI subscription with non-wakeup delivery, kept across SLPI restarts; nothing is sent to the modem, which reads the sensor itself (SENSORS-PLAN §6) |
 | `lib/omamobile-fp-hotdog-chroot`, `omamobile-fp-hotdog.service`, `fprintd.service.d`, `modprobe.d/omamobile-fp-hotdog.conf`, `etc/pam.d/omarchy-lock-fingerprint` | system | The optical fingerprint sensor through the stock trusted app (FINGERPRINT-PLAN); the bionic programs come from `device/hotdog/fingerprint/` (`prebuilt/`, gitignored), and the owner's own files are never packaged. RPMB is off as packaged: the owner's `omamobile-fp-hotdog-chroot rpmb allow` turns the module option and the consent file on together, from the next boot (FINGERPRINT-PLAN F7) |
 | `bin/omamobile-hotdog-bt-addr`, its unit | system | A stable, locally administered Bluetooth address derived from the SoC serial, which it never exposes |
 | `ucm2/`, `wireplumber/51-omamobile-hotdog-mic.conf` | ALSA, WirePlumber | The speakers' and microphones' UCM profile, and the microphones' capture format (MIC-PLAN) |
@@ -54,7 +55,7 @@ Nothing in the package fails the boot for want of one.
 | s6sy761's ear detection | fork `07-touch` | the shell's screen off at the ear (`call-proximity`) |
 | WCN399x board ID, ath10k fixes | fork `08-bluetooth`, `09-wifi` | Bluetooth (`omamobile-hotdog-bt-addr`) and Wi-Fi |
 | OnePlus project info (the RF test cable state the modem reads from SMEM) | fork `12-modem` | nothing is inert, but without it the modem assumes cables in its RF test connectors (MODEM-PLAN) |
-| The SLPI and a fastrpc fix | fork `13-sensors` | `omamobile-hotdog-sensors` and its udev rule |
+| The SLPI and a fastrpc fix | fork `13-sensors` | `omamobile-hotdog-sensors` and its udev rule, and `omamobile-hotdog-sar` |
 | SM8150 CAMSS, the sensor and lens drivers (`sony-fwtable` for the IMX481 and IMX586) | fork `14-camss`, `15-camera` | the cameras (`libcamera/configuration.yaml`, the DMA heap rule) and the pop-up camera's motor (`omamobile-hotdog-popup`) |
 | The PM8150B charger | fork `16-power` | charging |
 | The SM8150 sound card, TFA9872, WCD9340 | fork `17-audio` | the speakers' and microphones' UCM profile and WirePlumber file |

@@ -30,6 +30,7 @@ grep -cx 'install -Dm755 lib/omamobile-fp-hotdog-chroot "$fp/omamobile-fp-hotdog
 echo "ok - the shell finds the fingerprint runner"
 python3 -B test/call-audio.py
 echo "ok - call audio routes and restores"
+python3 -B test/sar.py
 # The SIM selection against a recorded card status (no ICCID in it): it
 # activates slot 1's USIM, and does nothing (exit 2: look again later) when a
 # session exists or no SIM is inserted
@@ -75,7 +76,7 @@ rc=0; PATH=$fake:$PATH FAKE_STATUS=$fake/status FAKE_LOG=$fake/log libexec/omamo
 [[ ! -s $fake/log && $rc == 2 ]] || { echo "not ok - SIM selection with no SIM"; exit 1; }
 rm -rf "$fake"
 echo "ok - SIM selection"
-for f in libexec/omamobile-hotdog-popup libexec/omamobile-hotdog-call-audio; do
+for f in libexec/omamobile-hotdog-popup libexec/omamobile-hotdog-call-audio libexec/omamobile-hotdog-sar; do
   python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read(), sys.argv[1])' "$f"
 done
 grep -c "ALLOWED_HALL_WRITES = {0x00, 0x01, 0x07, 0x08}" libexec/omamobile-hotdog-popup >/dev/null ||
@@ -193,6 +194,12 @@ grep -cx 'After=omamobile-rmtfs.service omamobile-tqftpserv.service' \
 [[ -x $stage/usr/lib/omamobile/hotdog/omamobile-hotdog-call-audio && \
    $(readlink "$stage/usr/lib/systemd/user/default.target.wants/omamobile-hotdog-call-audio.service") == ../omamobile-hotdog-call-audio.service ]] ||
   { echo "not ok - call audio service"; exit 1; }
+# The SAR sensor's state service starts at boot, unprivileged
+[[ -x $stage/usr/lib/omamobile/hotdog/omamobile-hotdog-sar && \
+   $(readlink "$stage/usr/lib/systemd/system/multi-user.target.wants/omamobile-hotdog-sar.service") == ../omamobile-hotdog-sar.service ]] &&
+  grep -cx 'DynamicUser=yes' "$stage/usr/lib/systemd/system/omamobile-hotdog-sar.service" >/dev/null ||
+  { echo "not ok - SAR service"; exit 1; }
+echo "ok - the SAR service starts at boot, unprivileged"
 # The sensors: hexagonrpcd follows the SLPI's FastRPC node (udev starts it,
 # the device's removal stops it), and its root is built read-only
 grep -cx 'BindsTo=dev-fastrpc\\x2dsdsp.device' "$stage/usr/lib/systemd/system/omamobile-hotdog-sensors.service" >/dev/null &&
