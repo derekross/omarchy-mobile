@@ -7,7 +7,9 @@
 [Unit]
 Description=OnePlus 7T Pro pop-up camera
 ConditionPathExists=/etc/omamobile/popup-hotdog-enable
-After=systemd-modules-load.service
+# The drop protection reads the accelerometer from the SLPI (ssccli); without
+# it the camera still rises, with a warning in the log
+After=systemd-modules-load.service omamobile-hotdog-sensors.service
 
 [Service]
 Type=simple

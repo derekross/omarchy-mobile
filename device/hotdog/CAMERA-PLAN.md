@@ -491,6 +491,35 @@ decision 5.
 
 ## 7. Results
 
+**2026-11-28, P3-P5 and drop protection (`7.3.0-rc6-omamobile-crypt1-gf3a11a5f5062`,
+device-hotdog 0.1.25 with the tool from 0.1.26 run from `/root`): pass.**
+
+- **P3:** the first move up reached the sensor in 550 ms, down in 441 ms,
+  but the owner saw the camera 0.5-1 mm short at both ends (bottom reading
+  -179 against -322 at rest). Stopping 10 ms after the threshold was too
+  early. Traced (`POPUP_TRACE=1`): the field levels off at the end stop
+  about 655 ms (up, |field| ~270) and 660 ms (down, ~310) after the start,
+  40 ms past stock's 618/626 ms timer. The tool now keeps stepping past the
+  threshold until the field stops rising (50 ms, 3 LSB) plus 20 ms, with
+  160 ms of headroom over stock's timer; `down` always runs, so it seats a
+  camera that reads down but stands proud.
+- **P4:** five cycles, every move ended at the end stop (705-716 ms),
+  top -266 to -273, bottom -310 to -314; the owner saw it fully up and
+  flush each time.
+- **P5:** `/etc/omamobile/popup-hotdog-enable` created, the daemon run as a
+  transient unit (`omamobile-popup-test`, not enabled at boot): opening the
+  front camera in omacam raised it (the owner: "rises and looks good").
+- **Drop protection (new):** stock's free-fall interrupt has no Linux
+  source, so the daemon reads the accelerometer from the SSC
+  (`ssccli --sensor accelerometer` through a pty, about 26 Hz, 38 ms apart)
+  while the camera is up or rising. A fall is |a| < 3 m/s^2 for 60 ms and
+  3 samples; it aborts a move up and lowers the camera, which stays down
+  until the front camera closes. Two drops onto a cushion from about
+  50-80 cm with the camera up: detected, lowered (776 and 743 ms, end
+  stop), and raised again after the camera was reopened. The owner:
+  "the cam closes nicely when dropped". `watch-fall` (read-only) gave no
+  false alarm on the table.
+
 **2026-11-05, RAM boot 1 (`7.3.0-rc6-omamobile-push1-g43b7e8ece3ad`,
 overlays torch, camera and popup): T1, C0-C6 pass; the D-PHY cameras give
 images.**

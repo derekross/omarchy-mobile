@@ -15,18 +15,26 @@ Hardware (stock device tree, dtbo entry 18; OnePlus's GPL motor driver):
   150) means "there".
 
 A move: wake the driver, 100 ms of slow steps, then fast steps until the
-target's hall sensor reads "there" (plus a few ms to seat), never longer
+target's hall sensor reads "there" and then stops rising (the end stop;
+the threshold alone is 0.5-1 mm short), plus a few ms to seat, never longer
 than stock's timed move, then stop and sleep the driver. Stock stops on its
 timer alone; this stops earlier when the sensor says so.
 
   status          read-only: both hall readings and what they mean
-  up | down       one move (refused toward an end the camera is at)
+  up | down       one move; "up" is refused when the camera is up, "down"
+                  always runs (it seats a camera that stands proud)
   daemon          raise the camera while the front sensor streams, lower it
                   1.5 s after; lower it at once if it is pushed in while up
-                  and leave it down until the sensor has been idle; needs
-                  /etc/omamobile/popup-hotdog-enable. No free-fall
-                  protection: stock's free-fall interrupt (TLMM gpio163)
-                  has no known source on Linux yet
+                  or if the phone falls, and leave it down until the sensor
+                  has been idle; needs /etc/omamobile/popup-hotdog-enable
+  watch-fall      read-only: print the accelerometer's free-fall verdicts,
+                  nothing moves (to test the detection on a soft landing)
+
+Free fall: stock's interrupt (TLMM gpio163) has no source on Linux, so the
+daemon reads the accelerometer from the SLPI's sensor core (ssccli, about
+26 Hz) while the camera is up or rising. A fall is |a| below FALL_MMS2
+(milli m/s^2) for FALL_MS and at least FALL_SAMPLES samples in a row; it
+cuts a move up short and lowers the camera at once.
 Nothing here writes a hall sensor register other than its reset, interrupt
 and measurement setup (0x00, 0x01, 0x07, 0x08): 0x06 disables its I2C.
 """
@@ -34,14 +42,20 @@ and measurement setup (0x00, 0x01, 0x07, 0x08): 0x06 disables its I2C.
 import ctypes
 import fcntl
 import glob
+import math
 import os
+import pty
+import re
 import signal
+import subprocess
 import sys
+import threading
 import time
 
 CONF = "/etc/omamobile/popup-hotdog.conf"
 ENABLE = "/etc/omamobile/popup-hotdog-enable"
 STATE = "/run/omamobile/popup-hotdog"
+TRACE = bool(os.environ.get("POPUP_TRACE"))
 
 # Defaults, overridable in CONF (KEY=value lines).
 DEFAULTS = {
@@ -51,9 +65,20 @@ DEFAULTS = {
     "FAST_NS": 13125,        # 76 kHz microsteps (~2400 full steps/s); LPG-exact
     "SLOW_MS": 100,
     "MAX_FAST_MS": 510,      # stock's timed move, about 1244 full steps
-    "DOWN_EXTRA_MS": 9,      # stock moves 20 steps further down
-    "SEAT_MS": 10,           # after the sensor says "there"
+    # The camera reaches the end stop about 655 ms (up) and 660 ms (down)
+    # after the start, 40 ms past stock's timer (P3 2026-11-28, traced):
+    # stopping on that timer left it 0.5-1 mm short. With this margin the
+    # end-stop check (about 70 ms after arrival) ends every move
+    "UP_EXTRA_MS": 160,
+    "DOWN_EXTRA_MS": 160,
+    "SEAT_MS": 20,           # after the end stop (the reading stopped rising)
+    "PLATEAU_MS": 50,        # past the threshold, no rise for this long: at the end stop
+    "PLATEAU_LSB": 3,        # a rise smaller than this is noise
     "IDLE_DOWN_MS": 1500,    # front sensor idle this long: lower the camera
+    "FALL_MMS2": 3000,       # |a| below 3 m/s^2 (g is 9.81): weightless
+    "FALL_MS": 60,           # ... for this long
+    "FALL_SAMPLES": 3,       # ... and at least this many samples in a row
+    "FALL_READY_MS": 600,    # wait this long for the first sample before raising
 }
 
 # --- device-tree paths of the pieces we use ---
@@ -83,6 +108,10 @@ def load_conf():
                         conf[k] = int(v)
     except FileNotFoundError:
         pass
+    # POPUP_<KEY>=value in the environment, for measuring (CAMERA-PLAN P3)
+    for k in conf:
+        if f"POPUP_{k}" in os.environ:
+            conf[k] = int(os.environ[f"POPUP_{k}"])
     return conf
 
 
@@ -270,25 +299,47 @@ class Motor:
         self.boost = Line(pm8150b, 12, 1, "BOOST")
         self.step = Step()
 
-    def move(self, hall, conf, target):
+    def move(self, hall, conf, target, abort=None):
+        """One move; a set abort event (a fall) stops it where it is."""
+        abort = abort or threading.Event()
         sensor = HALL_UP if target == "up" else HALL_DOWN
         limit = conf["UP_THRESHOLD"] if target == "up" else conf["DOWN_THRESHOLD"]
-        fast_ms = conf["MAX_FAST_MS"] + (conf["DOWN_EXTRA_MS"] if target == "down" else 0)
+        fast_ms = conf["MAX_FAST_MS"] + conf["DOWN_EXTRA_MS" if target == "down" else "UP_EXTRA_MS"]
         self.direction.set(0 if target == "up" else 1)
         self.sleep_n.set(1)
         time.sleep(0.002)                      # DRV8834 wake-up
         t0 = time.monotonic()
-        reached = None
+        reached = seated = peak = peak_at = None
+        trace = []
+        aborted = False
         try:
             self.step.run(conf["SLOW_NS"])
-            time.sleep(conf["SLOW_MS"] / 1000)
-            self.step.run(conf["FAST_NS"])
+            aborted = abort.wait(conf["SLOW_MS"] / 1000)
+            if not aborted:
+                self.step.run(conf["FAST_NS"])
             end = time.monotonic() + fast_ms / 1000
-            while time.monotonic() < end:
+            while not aborted and time.monotonic() < end:
+                if abort.is_set():
+                    aborted = True
+                    break
                 v = hall.read(sensor)
-                if v is not None and abs(v) > limit:
-                    reached = time.monotonic()
-                    end = min(end, reached + conf["SEAT_MS"] / 1000)
+                now = time.monotonic()
+                if v is not None:
+                    a = abs(v)
+                    if TRACE:
+                        trace.append(f"{(now - t0) * 1000:.0f}:{a}")
+                    if reached is None and a > limit:
+                        reached = now
+                    # Past the threshold the camera still has 0.5-1 mm to go
+                    # (stopping there left it short at both ends, P3
+                    # 2026-11-28): keep stepping until the field stops
+                    # rising, i.e. the end stop, or stock's timer
+                    if reached is not None:
+                        if peak is None or a >= peak + conf["PLATEAU_LSB"]:
+                            peak, peak_at = a, now
+                        elif seated is None and (now - peak_at) * 1000 >= conf["PLATEAU_MS"]:
+                            seated = now
+                            end = min(end, now + conf["SEAT_MS"] / 1000)
                 time.sleep(0.004)
         finally:
             self.step.stop()
@@ -296,21 +347,144 @@ class Motor:
             self.direction.set(0)
         ms = (time.monotonic() - t0) * 1000
         where, up, down = position(hall, conf)
-        log(f"{target}: {ms:.0f} ms, sensor {'reached' if reached else 'NOT reached'}; "
-            f"now {where} (up {up}, down {down})")
+        how = ("NOT reached" if reached is None else
+               f"reached at {(reached - t0) * 1000:.0f} ms, "
+               + (f"end stop at {(seated - t0) * 1000:.0f} ms" if seated else "stopped by the timer"))
+        log(f"{target}: {ms:.0f} ms, sensor {how}"
+            f"{', ABORTED' if aborted else ''}; now {where} (up {up}, down {down})")
+        if TRACE:
+            log("trace (ms:|field|) " + " ".join(trace))
         os.makedirs(os.path.dirname(STATE), exist_ok=True)
         with open(STATE, "w") as f:
             f.write(where + "\n")
         return where == target
 
 
+class FallDetector:
+    """|a| below a threshold for long enough: the phone is falling."""
+
+    def __init__(self, conf):
+        self.limit = conf["FALL_MMS2"] / 1000
+        self.ms = conf["FALL_MS"]
+        self.samples = conf["FALL_SAMPLES"]
+        self.since = None
+        self.n = 0
+
+    def feed(self, t, x, y, z):
+        if math.sqrt(x * x + y * y + z * z) >= self.limit:
+            self.since, self.n = None, 0
+            return False
+        if self.since is None:
+            self.since = t
+        self.n += 1
+        return self.n >= self.samples and (t - self.since) * 1000 >= self.ms
+
+
+SAMPLE = re.compile(rb"X=(-?[0-9.]+) Y=(-?[0-9.]+) Z=(-?[0-9.]+)")
+
+
+class FallWatch:
+    """ssccli's accelerometer stream, read through a pty (its stdout would
+    otherwise be block-buffered), fed to a FallDetector in a thread.
+    `fell` is set on a fall and stays set until cleared."""
+
+    CMD = ["ssccli", "--sensor", "accelerometer", "--timeout", "86400"]
+
+    def __init__(self, conf):
+        self.conf = conf
+        self.fell = threading.Event()
+        self.ready = threading.Event()
+        self.proc = None
+        self.thread = None
+        self.warned = False
+
+    def running(self):
+        return self.thread is not None and self.thread.is_alive()
+
+    def start(self):
+        if self.running():
+            return
+        self.ready.clear()
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread.start()
+
+    def stop(self):
+        p = self.proc
+        if p and p.poll() is None:
+            p.terminate()
+        if self.thread:
+            self.thread.join(2)
+        self.thread = None
+        self.ready.clear()
+
+    def _run(self):
+        det = FallDetector(self.conf)
+        try:
+            master, slave = pty.openpty()
+            self.proc = subprocess.Popen(self.CMD, stdout=slave, stdin=subprocess.DEVNULL,
+                                         stderr=subprocess.DEVNULL, close_fds=True)
+        except OSError as e:
+            log(f"free-fall watch: cannot start ssccli: {e}")
+            return
+        os.close(slave)
+        buf = b""
+        try:
+            while True:
+                try:
+                    data = os.read(master, 4096)
+                except OSError:
+                    break
+                if not data:
+                    break
+                now = time.monotonic()
+                buf += data
+                *lines, buf = buf.split(b"\n")
+                for line in lines:
+                    m = SAMPLE.search(line)
+                    if not m:
+                        continue
+                    if not self.ready.is_set():
+                        self.ready.set()
+                        if self.warned:
+                            log("free-fall watch: accelerometer back")
+                            self.warned = False
+                    if det.feed(now, *(float(v) for v in m.groups())):
+                        if not self.fell.is_set():
+                            log("free fall detected")
+                        self.fell.set()
+        finally:
+            os.close(master)
+            if self.proc.poll() is None:
+                self.proc.terminate()
+            self.proc.wait()
+            self.ready.clear()
+
+    def ensure(self, want):
+        """Keep the stream running while wanted (restarted if ssccli exits)."""
+        if want and not self.running():
+            self.start()
+        elif not want and self.running():
+            self.stop()
+
+    def wait_ready(self):
+        if self.ready.wait(self.conf["FALL_READY_MS"] / 1000):
+            return True
+        if not self.warned:
+            log("free-fall watch: no accelerometer samples (SLPI sensors down?): "
+                "raising WITHOUT drop protection")
+            self.warned = True
+        return False
+
+
 def cmd_move(target):
     conf = load_conf()
     hall = Hall()
     where, up, down = position(hall, conf)
-    if where == target:
-        log(f"already {target} (up {up}, down {down}); not moving")
+    if where == target == "up":
+        log(f"already up (up {up}, down {down}); not moving")
         return 0
+    # "down" always runs: it seats a camera that reads down but stands proud
+    # (the end-stop check ends it within about 0.2 s when it is home)
     if where == "unknown" and target == "up":
         log(f"position unknown (up {up}, down {down}): only 'down' is allowed")
         return 1
@@ -330,39 +504,80 @@ def cmd_daemon():
     conf = load_conf()
     hall = Hall()
     motor = Motor()
-    stopping = []
-    signal.signal(signal.SIGTERM, lambda *_: stopping.append(1))
-    signal.signal(signal.SIGINT, lambda *_: stopping.append(1))
+    fall = FallWatch(conf)
+    stopping = threading.Event()
+    signal.signal(signal.SIGTERM, lambda *_: stopping.set())
+    signal.signal(signal.SIGINT, lambda *_: stopping.set())
     where, up, down = position(hall, conf)
     log(f"start: {where} (up {up}, down {down})")
     if where != "down":
         motor.move(hall, conf, "down")
     idle_since = None
-    held = False     # pushed in, or a move failed: wait for the camera to go idle
-    while not stopping:
-        state = front_sensor_state()
-        where, up, _ = position(hall, conf)
-        if state == "active":
-            idle_since = None
-            if held:
-                pass
-            elif where == "down":
-                held = not motor.move(hall, conf, "up")
-            elif where == "unknown":
-                # Up, then no longer at the top: pushed in by hand (stock
-                # lowers it too), or it never got there
-                log(f"left the top while in use (up {up}): lowering, not raising again until idle")
-                motor.move(hall, conf, "down")
-                held = True
-        else:
-            held = False
-            idle_since = idle_since or time.monotonic()
-            if where != "down" and (time.monotonic() - idle_since) * 1000 >= conf["IDLE_DOWN_MS"]:
-                motor.move(hall, conf, "down")
-        time.sleep(0.2)
-    where, _, _ = position(hall, conf)
-    if where != "down":
-        motor.move(hall, conf, "down")
+    held = False     # pushed in, fell, or a move failed: wait for the camera to go idle
+    try:
+        while not stopping.is_set():
+            state = front_sensor_state()
+            where, up, _ = position(hall, conf)
+            # The accelerometer only while the camera is out or about to come out
+            fall.ensure(state == "active" or where != "down")
+            if fall.fell.is_set():
+                fall.fell.clear()
+                if where != "down":
+                    log(f"falling with the camera {where}: lowering")
+                    motor.move(hall, conf, "down")
+                    if state == "active":
+                        held = True
+                stopping.wait(0.2)
+                continue
+            if state == "active":
+                idle_since = None
+                if held:
+                    pass
+                elif where == "down":
+                    fall.wait_ready()
+                    held = not motor.move(hall, conf, "up", abort=fall.fell)
+                elif where == "unknown":
+                    # Up, then no longer at the top: pushed in by hand (stock
+                    # lowers it too), or it never got there
+                    log(f"left the top while in use (up {up}): lowering, not raising again until idle")
+                    motor.move(hall, conf, "down")
+                    held = True
+            else:
+                held = False
+                idle_since = idle_since or time.monotonic()
+                if where != "down" and (time.monotonic() - idle_since) * 1000 >= conf["IDLE_DOWN_MS"]:
+                    motor.move(hall, conf, "down")
+            # A fall wakes the loop at once
+            fall.fell.wait(0.2)
+    finally:
+        where, _, _ = position(hall, conf)
+        if where != "down":
+            motor.move(hall, conf, "down")
+        fall.stop()
+    return 0
+
+
+def cmd_watch_fall():
+    conf = load_conf()
+    fall = FallWatch(conf)
+    fall.start()
+    if not fall.ready.wait(3):
+        log("no accelerometer samples")
+        fall.stop()
+        return 1
+    log("watching; Ctrl-C to stop")
+    try:
+        while True:
+            if fall.fell.wait(0.5):
+                print(f"{time.strftime('%H:%M:%S')} FALL", flush=True)
+                fall.fell.clear()
+            if not fall.running():
+                log("ssccli exited")
+                return 1
+    except KeyboardInterrupt:
+        pass
+    finally:
+        fall.stop()
     return 0
 
 
@@ -378,6 +593,8 @@ def main():
         return cmd_move(cmd)
     if cmd == "daemon":
         return cmd_daemon()
+    if cmd == "watch-fall":
+        return cmd_watch_fall()
     print(__doc__)
     return 2
 

@@ -84,6 +84,87 @@ grep -c "ALLOWED_HALL_WRITES = {0x00, 0x01, 0x07, 0x08}" libexec/omamobile-hotdo
 [[ ! -e vendor/systemd/system/multi-user.target.wants/omamobile-hotdog-popup.service ]] ||
   { echo "not ok - the pop-up service must not be enabled by the package"; exit 1; }
 echo "ok - pop-up tool parses, stays off by default"
+# The pop-up's drop protection: a fall is seen within about 0.1 s at
+# ssccli's 26 Hz and not on a shake, a hard tap or a phone lying still, and
+# a fall cuts a move up short.
+python3 -B - <<'PY'
+import importlib.machinery, importlib.util, threading, time
+loader = importlib.machinery.SourceFileLoader("popup", "libexec/omamobile-hotdog-popup")
+spec = importlib.util.spec_from_loader("popup", loader)
+m = importlib.util.module_from_spec(spec); loader.exec_module(m)
+conf = m.load_conf()
+dt = 0.038
+
+def first_fall(samples):
+    d = m.FallDetector(conf)
+    for i, (x, y, z) in enumerate(samples):
+        if d.feed(i * dt, x, y, z):
+            return i
+    return None
+
+still = [(-8.66, -0.04, 3.73)] * 50
+shake = [(15.0, 3.0, -2.0), (2.5, 1.0, 1.0), (-12.0, 4.0, 8.0), (2.0, 0.5, 0.5)] * 20
+tap = still[:10] + [(1.0, 0.5, 0.2), (1.0, 0.5, 0.2)] + still[:10]
+fall = still[:10] + [(0.3, 0.2, 0.4)] * 20 + [(40.0, 0, 0)]
+spin = still[:10] + [(2.1, 1.4, 0.3)] * 20     # falling while tumbling
+assert first_fall(still) is None, "still"
+assert first_fall(shake) is None, "shake"
+assert first_fall(tap) is None, "two low samples"
+i = first_fall(fall)
+assert i is not None and (i - 10) * dt <= 0.1, ("fall", i)
+assert first_fall(spin) is not None, "tumbling fall"
+
+class Step:
+    def __init__(self): self.log = []
+    def run(self, ns): self.log.append(("run", ns))
+    def stop(self): self.log.append(("stop",))
+class Line:
+    def __init__(self): self.v = []
+    def set(self, v): self.v.append(v)
+class Hall:
+    def read(self, addr): return -10
+    def settled(self, addr): return -10
+mo = m.Motor.__new__(m.Motor)
+mo.step, mo.sleep_n, mo.direction, mo.m1, mo.boost = Step(), Line(), Line(), Line(), Line()
+m.STATE = "/dev/null"
+m.os.makedirs = lambda *a, **k: None
+abort = threading.Event()
+threading.Timer(0.25, abort.set).start()
+t0 = time.monotonic()
+ok = mo.move(Hall(), conf, "up", abort=abort)
+took = time.monotonic() - t0
+assert not ok and took < 0.4, ("abort", took)
+assert mo.step.log[-1] == ("stop",) and mo.sleep_n.v[-1] == 0, "driver left running"
+abort.set()
+t0 = time.monotonic(); mo.step.log.clear()
+mo.move(Hall(), conf, "up", abort=abort)
+assert time.monotonic() - t0 < 0.05 and ("run", conf["FAST_NS"]) not in mo.step.log, "fast steps after a fall"
+# Past the threshold it keeps stepping until the field stops rising (the
+# end stop), not 10 ms after the threshold (that left it 0.5-1 mm short)
+class RampHall:
+    def __init__(self): self.t0 = time.monotonic()
+    def read(self, addr):
+        ms = (time.monotonic() - self.t0) * 1000
+        return -min(20 + ms * 0.3, 320) if addr == m.HALL_DOWN else -15
+    def settled(self, addr): return self.read(addr)
+h = RampHall()
+t0 = time.monotonic()
+ok = mo.move(h, conf, "down")
+took = (time.monotonic() - t0) * 1000
+# threshold 150 at ~325 ms, still rising at the 770 ms timer: the timer
+# ends it; now one that levels off early
+assert ok and 740 < took < 900, ("timer", took)
+class FlatHall(RampHall):
+    def read(self, addr):
+        ms = (time.monotonic() - self.t0) * 1000
+        return -min(20 + ms * 0.8, 320) if addr == m.HALL_DOWN else -15
+h = FlatHall(); t0 = time.monotonic()
+ok = mo.move(h, conf, "down")
+took = (time.monotonic() - t0) * 1000
+# 150 at ~160 ms, flat (320) from 375 ms: stops about 375 + 50 + 20 ms
+assert ok and 400 < took < 600, ("end stop", took)
+PY
+echo "ok - pop-up drop protection"
 # The alert slider: top Silent, middle Vibrate, bottom Ring (ABS_SND_PROFILE
 # 0, 1, 2) onto feedbackd's profiles; the ioctl reads ABS_SND_PROFILE; udev
 # gives the device to the seat's user before 73-seat-late.

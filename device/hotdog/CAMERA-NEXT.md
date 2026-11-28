@@ -92,24 +92,19 @@ Follow-ups in the same area:
 - Calibrate `zoom` and `axis` per lens on our own frames (CAMERA-PLAN of
   cheetah describes the method).
 
-## 2. Front camera: the pop-up (P3-P5)
+## 2. Front camera: the pop-up
 
-The IMX471 streams (`cam -c 3`), but it sits in the motorised pop-up, which
-has never been moved under Linux. P0-P2 passed: the hall sensors on i2c-0
-answer and read "down" (`up=-11 down=-325`), the LPG is `pwmchip0`, and the
-pop-up tool (`omamobile-hotdog-popup`, device-hotdog 0.1.6) refuses moves
-from an unknown position.
+P3-P5 passed on 2026-11-28, with drop protection from the accelerometer
+(CAMERA-PLAN §7). Left:
 
-- **To do:** CAMERA-PLAN §6 P3 (first move up), P4 (down, then five
-  cycles), P5 (the front camera follows the pop-up), each announced, with
-  the owner watching, the phone flat and the slot clear. Never write hall
-  register 0x06.
-- **Then:** wire the pop-up to the camera's open and close (omacam's front
-  camera or a libcamera hook), with the camera closed whenever the pop-up
-  is down.
-- **Done when:** opening the front camera in omacam raises the pop-up and
-  closing it lowers it, five times in a row, and the front picture is
-  upright and mirrored.
+- **Make it stay:** install device-hotdog 0.1.26, remove `/root/omamobile-hotdog-popup`,
+  and `systemctl enable --now omamobile-hotdog-popup` (the owner's decision 4;
+  the enable file exists on the phone).
+- **Faster drop detection:** `ssccli` streams at the SSC's default rate
+  (about 26 Hz). libssc has a `sample-rate` property; a small client at
+  100 Hz would cut the detection from about 0.1 s to about 0.06 s.
+- **Done when:** the service starts at boot and the front camera rises and
+  lowers five times in a row in omacam, picture upright and mirrored.
 
 ## 3. The random bad RAM boots
 
