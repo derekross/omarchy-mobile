@@ -8958,6 +8958,75 @@ ownership described above.
 This analysis used saved artifacts. The mainline IRQ stays masked,
 and DSI0 host and PHY TX reads remain disabled.
 
+###### Stock D1 BE clock, isolation and reset prerequisites
+
+The masked mainline binding trial established wrapper and BE
+MBFS votes, IRQ reservation and module removal. It did not
+qualify a read of frame-start status at `0x0f680008`.
+Masking SGIA input 4 prevents IRQ delivery. The MMIO transaction
+still depends on the BE register bus, power, isolation and reset.
+
+**Clock.** Exact D1 ABL clock ID `0x40003` names `dpu_be_clk`
+at descriptor `0x1f50d0`. The factory DT and CPM descriptor `0x6594a` identify
+LPCM `0x23`, selector 4, AP clock cell `0x0f419660`. D1 CPM
+clock-status operation 2 can sample its gate acknowledgment,
+bit 8 of `0x0f41967c`, using command `0x02042302`, argument 1.
+This read-only request runs in CPM. It needs no direct AP access
+to the clock cell or the BE aperture. The earlier 356 MHz
+sample used GET_RATE `0x03042302` and leaves the gate state open.
+BE power-on can request PSM1 4 → 3 and set bit 2 at CPM
+`0x6f40a000`. The MBFS result describes the vote, while the
+clock-status reply would describe the selected clock cell.
+Neither identifies the BE register bus readiness by itself.
+
+**Isolation.** In the exact factory module, `dc_be_pm_runtime_resume`
+at `0x44118` only traces and returns. The parent DC runtime
+resume at `0x2aadc` performs the hardware work. Its transition
+branch issues 30 reads at `0x0f6d4004` and discards the returned
+values, then writes zero to `0x0f680248` to remove clock-domain
+isolation. The corresponding suspend branch clears BE IRQs
+before writing `0x0f` to that control. The resume path records
+completion in software and has no isolation readback. Copying
+the forced reads would itself require a qualified BE bus.
+
+Both D1 factory DTBs give the parent DC four runtime-PM
+suppliers (DSI0, DSI1, FE0 and FE1). `dc_probe` attaches and
+links each at `0x291e0` and `0x29208`. The saved stock wrapper
+trace shows the parent DC resume begin at 6.480963 s, BE ON
+complete at 6.482810 s, and ON replies for all four suppliers
+before the parent reaches RPM_ACTIVE at 6.484812 s. The
+stock CID trace obtained the expected ID with the DSI host
+and PHY nodes disabled, but retained the parent power-domain
+links. Those two captures leave BE-only access unqualified.
+
+**Reset.** The ABL descriptor has reset selector `-1`.
+The generic clock-status reply does not expose
+clock-cell reset acknowledgment bit 12. D1's CPM reset-status
+lookup rejects LPCM `0x23`, and there is no qualified EL1 read
+witness for `0x0f41967c` under the sequencer's `0x30300` rule.
+Stock's internal BE software reset uses an already mapped
+BE aperture. The DC9400 branch enables reset-done bit 20 at
+`0x0f680018`, writes 1 to `0x0f680068`, then waits up to
+100 ms for the ISR to set its completion byte. Both stock DTBs
+route `be_sw_rst_done` to aggregator 2 input `0x0d`, separate
+from the frame-start leaf. This is evidence of the internal
+reset operation after MMIO is usable. It cannot qualify first
+access or verify the external reset state.
+
+Exact D1 GC policy covers `0x0f680000`–`0x0f684fff` and
+`0x0f6d4000`–`0x0f6d4fff` with `0x30303`. Those static
+ranges include the IRQ registers, isolation control and resume
+read. They do not establish the bus response in the mainline
+wrapper-plus-BE state.
+
+Keep the mainline status read and IRQ disabled. A mailbox-only
+selector 4 gate sample can constrain the clock question. A
+passive stock follow-up can correlate the existing BE reads and
+isolation write with runtime PM and the supplier votes, using
+the CID fixture's disabled DSI host and PHY nodes. A passing
+gate sample alone is insufficient to add a BE MMIO read.
+No DSI0 host or PHY TX access is needed for this investigation.
+
 ###### Mainline DSI0 readiness after stock connector registration
 
 The mainline prerequisite fixture at kernel
