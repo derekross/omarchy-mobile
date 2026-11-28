@@ -1,6 +1,6 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# Patch 0034 against the real omarchy-hyprland-session-lock-stranded
+# Patch 0037 against the real omarchy-hyprland-session-lock-stranded
 # (OMARCHY_PKG_ROOT, an extracted omarchy package), with real processes: a
 # lock is stranded when the only other quickshell processes are the caller's
 # own crash processes (its children, one a zombie), a zombie of another
@@ -12,7 +12,7 @@ cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
 pass() { printf 'ok - %s\n' "$1"; }
 package_root=${OMARCHY_PKG_ROOT:?an extracted omarchy package}
-[[ $(sed -n 's/^pkgver = //p' "$package_root/.PKGINFO") == 4.5.0-* ]] || { pass "stranded lock (0034) # SKIP not Omarchy 4.5"; exit 0; }
+[[ $(sed -n 's/^pkgver = //p' "$package_root/.PKGINFO") == 4.5.0-* ]] || { pass "stranded lock (0037) # SKIP not Omarchy 4.5"; exit 0; }
 t=$(mktemp -d)
 pids=()
 cleanup() { kill "${pids[@]}" 2>/dev/null || true; wait 2>/dev/null || true; rm -rf "$t"; }
@@ -20,8 +20,8 @@ trap cleanup EXIT
 
 mkdir -p "$t/omarchy/bin" "$t/fake" "$t/procs"
 cp "$package_root/usr/bin/omarchy-hyprland-session-lock-stranded" "$t/omarchy/bin/"
-(cd "$t/omarchy" && patch -p1 --fuzz=0 -s) <patches/0034-lock-recover-a-stranded-lock-after-a-shell-crash.patch \
-  || fail "0034 applies to the real omarchy-hyprland-session-lock-stranded"
+(cd "$t/omarchy" && patch -p1 --fuzz=0 -s) <patches/0037-lock-recover-a-stranded-lock-after-a-shell-crash.patch \
+  || fail "0037 applies to the real omarchy-hyprland-session-lock-stranded"
 helper=$t/omarchy/bin/omarchy-hyprland-session-lock-stranded
 
 printf '#!/bin/bash\n[[ ${LOCKED:-1} == 1 ]]\n' >"$t/fake/omarchy-hyprland-session-locked"
@@ -66,4 +66,4 @@ list "$own" "$child" "$zombie" "$foreign_zombie" "$voxtype"
 [[ $(run "$own") == 0 ]] || fail "Voxtype's overlay is no other locker"
 list "$own" "$child" "$zombie" "$voxtype" "$other"
 [[ $(run "$own") == 2 ]] || fail "another live shell leaves it undetermined"
-pass "a lock stranded by a shell crash is recovered beside its crash processes and Voxtype (0034)"
+pass "a lock stranded by a shell crash is recovered beside its crash processes and Voxtype (0037)"
