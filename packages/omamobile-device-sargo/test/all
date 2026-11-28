@@ -56,15 +56,26 @@ for mode in ('Suspend', 'Hibernation', 'SuspendThenHibernate', 'HybridSleep'):
     assert f'Allow{mode}=no' in sleep
 rules = [l for l in (root/'usr/lib/udev/rules.d/10-omamobile-storage.rules').read_text().splitlines()
          if l and not l.startswith('#')]
-assert 'SUBSYSTEM=="block", KERNEL=="mmcblk0", MODE="0000", ENV{UDISKS_IGNORE}="1"' in rules
-assert any('mmcblk0boot' in l and 'MODE="0000"' in l for l in rules)
-assert any('rpmb' in l and 'MODE="0000"' in l for l in rules)
-assert any('mmcblk0p' in l and '!="userdata"' in l and 'UDISKS_IGNORE' in l for l in rules)
+import fnmatch, re
+def kernel_rules(name):
+    return [l for l in rules if 'SUBSYSTEM=="block"' in l
+            and fnmatch.fnmatchcase(name, re.search(r'KERNEL=="([^"]*)"', l).group(1))]
+# Any eMMC index: the whole disk, boot and general-purpose areas inaccessible
+for name in ('mmcblk0', 'mmcblk1', 'mmcblk0boot0', 'mmcblk1boot1', 'mmcblk0gp0', 'mmcblk1gp3'):
+    m = kernel_rules(name)
+    assert len(m) == 1 and 'MODE="0000"' in m[0] and 'UDISKS_IGNORE' in m[0], name
+# Partitions: hidden from automounters except userdata, never made inaccessible
+for name in ('mmcblk0p1', 'mmcblk1p72'):
+    m = kernel_rules(name)
+    assert len(m) == 1 and '!="userdata"' in m[0] and 'UDISKS_IGNORE' in m[0] and 'MODE' not in m[0], name
+assert 'SUBSYSTEM=="mmc_rpmb", MODE="0000"' in rules and 'SUBSYSTEM=="rpmb", MODE="0000"' in rules
 assert not any('KERNEL=="sd' in l for l in rules)
 assert sorted(p.name for p in root.rglob('*.service') if not p.is_symlink()) == [
     'omamobile-bt-addr@.service', 'omamobile-rtc-offset-save.service', 'omamobile-rtc-offset.service']
 bt = (root/'usr/lib/udev/rules.d/80-omamobile-bt-addr.rules').read_text()
 assert 'DRIVERS=="hci_uart_qca"' in bt and 'omamobile-bt-addr@%k.service' in bt
+# Only the controller: a connection's device (hci0:256) has no DEVTYPE host
+assert 'ENV{DEVTYPE}=="host"' in bt
 assert not (root/'usr/lib/modprobe.d').exists()
 print('ok - eMMC storage policy, disabled sleep modes, and only the clock and Bluetooth address units')
 PY_POLICY

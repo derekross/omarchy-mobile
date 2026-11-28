@@ -10,9 +10,10 @@ timesyncd. Bring-up and results: [device/sargo](../../device/sargo/NOTES.md).
 
 - **Storage.** The Pixel 3a keeps every partition on eMMC (`mmcblk0`). The
   udev rules continue the initramfs guard in Arch (they do not set anything
-  read-only themselves): the whole-disk node, the hardware boot areas
-  (`mmcblk0boot0/1`) and the RPMB node are made inaccessible, and desktop
-  tools ignore every partition but `userdata`.
+  read-only themselves): on any `mmcblk` disk, the whole-disk node, the
+  hardware boot and general-purpose areas (`boot0/1`, `gp0`-`gp3`) and the
+  RPMB node are made inaccessible, and desktop tools ignore every partition
+  but `userdata`, in the form of the Lenovo Tab M10's rules (#1073).
 - **USB.** The gadget the initramfs creates survives the switch to Arch;
   `usb0` keeps 172.16.42.1 with a fallback route below Wi-Fi's priority.
 - **Clock.** Linux can't set the PM660's RTC, which counts from 1970.
@@ -24,7 +25,8 @@ timesyncd. Bring-up and results: [device/sargo](../../device/sargo/NOTES.md).
   change to the clock.
 - **Bluetooth.** The WCN3990 has no address of its own and comes up
   unconfigured, so BlueZ doesn't see it. `omamobile-bt-addr`, started by
-  udev for the `hci_uart_qca` controller, gives it the phone's address from
+  udev for the `hci_uart_qca` controller itself (not its per-connection
+  devices), gives it the phone's address from
   the bootloader (`/chosen/cdt/cdb2/bt_addr`, a unicast public address
   only), as Android does.
 - **Power.** All four sleep modes are disabled until suspend is qualified on

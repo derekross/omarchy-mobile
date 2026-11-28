@@ -1,12 +1,14 @@
 # SPDX-License-Identifier: MIT
 # Omamobile storage guard, continued in Arch, for the Pixel 3a's eMMC. The
-# initramfs marks every eMMC partition read-only except the running slot's
-# boot and userdata, sets the hardware boot areas mmcblk0boot0/1 read-only,
-# and removes the whole-disk node and the RPMB node. udev would recreate
-# them, so make those nodes inaccessible and keep desktop tools from
-# touching any Android partition.
-SUBSYSTEM=="block", KERNEL=="mmcblk0", MODE="0000", ENV{UDISKS_IGNORE}="1"
-SUBSYSTEM=="block", KERNEL=="mmcblk0boot[0-9]", MODE="0000", ENV{UDISKS_IGNORE}="1"
-SUBSYSTEM=="block", KERNEL=="mmcblk0p[0-9]*", ENV{ID_PART_ENTRY_NAME}!="userdata", ENV{UDISKS_IGNORE}="1"
-KERNEL=="mmcblk0rpmb", MODE="0000"
+# initramfs marks every eMMC partition read-only except the allowlisted
+# ones, sets the hardware boot and general-purpose areas read-only, and
+# removes the whole-disk node and the RPMB node. udev would recreate them,
+# so make those nodes inaccessible (on any mmcblk, as #1072's guard covers
+# any) and keep desktop tools from touching any Android partition. The form
+# follows the Lenovo Tab M10's rules (#1073).
+SUBSYSTEM=="block", KERNEL=="mmcblk[0-9]", MODE="0000", ENV{UDISKS_IGNORE}="1"
+SUBSYSTEM=="block", KERNEL=="mmcblk[0-9]boot[01]", MODE="0000", ENV{UDISKS_IGNORE}="1"
+SUBSYSTEM=="block", KERNEL=="mmcblk[0-9]gp[0-3]", MODE="0000", ENV{UDISKS_IGNORE}="1"
+SUBSYSTEM=="mmc_rpmb", MODE="0000"
 SUBSYSTEM=="rpmb", MODE="0000"
+SUBSYSTEM=="block", KERNEL=="mmcblk[0-9]p[0-9]*", ENV{ID_PART_ENTRY_NAME}!="userdata", ENV{UDISKS_IGNORE}="1"
