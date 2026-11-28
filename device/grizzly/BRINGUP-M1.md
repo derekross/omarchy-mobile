@@ -9027,6 +9027,47 @@ the CID fixture's disabled DSI host and PHY nodes. A passing
 gate sample alone is insufficient to add a BE MMIO read.
 No DSI0 host or PHY TX access is needed for this investigation.
 
+###### Offline BE selector 4 gate fixture
+
+Kernel [`b2895cbb4bc1`](https://github.com/adrienlacombe/linux-omarchy-mobile/commit/b2895cbb4bc19b0c208a03029ab68c802083f887)
+builds as `7.3.0-rc6-omamobile-grizzly-dc9x00-be-gate`.
+Use the same masked DC9x00 binding and three-node overlay, with
+`clk_google_malibu_cpm.display_be_selector4_gate=1` in the
+vendor command line. Build the RAM disk with
+`pack-mainline-inventory.py --dc9x00-binding <module> --require-dc9x00-be-gate`.
+PID 1 verifies the v73 read-only inventory and disk retirement
+before starting the binding check. It requires the gate sampler
+to be enabled before loading the module.
+
+The opt-in sampler sends LPCM clock status `0x02042302` with
+argument `1` before and after each BE vote issued through genpd.
+An inherited BE vote stays unchanged. All four raw firmware
+replies are kept with the matching ON and OFF acknowledgments
+and readbacks. A firmware error is still a recorded reply.
+A transport failure before ON stops the attempt. The OFF path
+still tries to release an owned vote if its observation fails.
+If the shared mailbox stalls, the independent 90-second return
+remains armed and the trace is incomplete.
+
+The gate reply describes the selector 4 clock cell. A result
+of 1 with BE on would leave the register bus, isolation and
+external reset checks open. The fixture reserves frame-start
+with `IRQF_NO_AUTOEN` and performs no BE MMIO, DSI0 host or
+PHY TX reads. No UFS partition is mounted and no private NV
+partition is exposed. A later attended slot B trial requires
+a fresh guarded NV backup and the stock A return plan.
+
+The ARM64 Image linked and the CPM object, DC9x00 module and DTB
+built with `W=1`. Offline checks covered the exact mailbox command,
+the owned vote order, transport errors, firmware error replies,
+and the fixture's masked binding and sample guards.
+The five images passed AVB, DT, ramdisk, handoff and saved
+D1 slot-size checks. The vendor boot image differs from the
+binding fixture only by the new command-line parameter.
+The image manifest SHA-256 is
+`cc34c26d2f64bf51bf9cbdcac724ccbd5682d53eb30401ab101830a0a6dace6e`.
+No phone access, reboot or flash was performed.
+
 ###### Mainline DSI0 readiness after stock connector registration
 
 The mainline prerequisite fixture at kernel

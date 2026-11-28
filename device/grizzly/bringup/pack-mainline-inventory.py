@@ -57,11 +57,14 @@ def build_read_only_root(output, busybox, loader):
 def pack(rescue, output, device_query_only=False, single_lun_only=False,
          single_disk_only=False, gpt_scan_only=False, read_only_test_root=False,
          dsi0_phy_scaffold=None, require_dsi0_sibling_votes=False,
-         require_dsi0_selector3_gate=False, dc9x00_binding=None):
+         require_dsi0_selector3_gate=False, dc9x00_binding=None,
+         require_dc9x00_be_gate=False):
     if require_dsi0_selector3_gate and not require_dsi0_sibling_votes:
         raise ValueError("DSI0 selector 3 gate checks require sibling vote checks")
     if require_dsi0_sibling_votes and dsi0_phy_scaffold is None:
         raise ValueError("DSI0 sibling vote checks require the PHY scaffold")
+    if require_dc9x00_be_gate and dc9x00_binding is None:
+        raise ValueError("DC9x00 BE gate checks require the masked binding fixture")
     busybox = arm64_member(rescue, "bin/busybox")
     loader = arm64_member(rescue, LOADER)
     output.mkdir(mode=0o700)
@@ -107,6 +110,8 @@ def pack(rescue, output, device_query_only=False, single_lun_only=False,
             files["grizzly-inventory/malibu-dc9x00.ko"] = (module, 0o400)
             files["grizzly-inventory/dc9x00-binding.sh"] = (
                 (HERE / "dc9x00-binding.sh").read_bytes(), 0o644)
+        if require_dc9x00_be_gate:
+            files["grizzly-inventory/dc9x00-be-gate"] = (b"", 0o644)
         libc = "lib/libc.musl-aarch64.so.1"
         for name in dirs:
             path = root / name
@@ -159,13 +164,16 @@ def main():
                         help="require sibling MBFS samples around the scaffold vote")
     parser.add_argument("--require-dsi0-selector3-gate", action="store_true",
                         help="require read-only selector 3 gate samples alongside sibling votes")
+    parser.add_argument("--require-dc9x00-be-gate", action="store_true",
+                        help="require selector 4 gate samples around the masked DC9x00 binding")
     parser.add_argument("output", type=Path)
     args = parser.parse_args()
     try:
         pack(args.rescue_cpio, args.output, args.device_query_only,
              args.single_lun_only, args.single_disk_only, args.gpt_scan_only,
              args.read_only_test_root, args.dsi0_phy_scaffold, args.require_dsi0_sibling_votes,
-             args.require_dsi0_selector3_gate, dc9x00_binding=args.dc9x00_binding)
+             args.require_dsi0_selector3_gate, dc9x00_binding=args.dc9x00_binding,
+             require_dc9x00_be_gate=args.require_dc9x00_be_gate)
     except (OSError, ValueError, subprocess.CalledProcessError) as error:
         parser.exit(1, f"mainline inventory packaging failed: {error}\n")
 
