@@ -63,6 +63,9 @@ package() {
   install -d "$pkgdir/usr/share/alsa/ucm2/conf.d/sm8250"
   ln -s ../../OnePlus/kebab/kebab.conf \
     "$pkgdir/usr/share/alsa/ucm2/conf.d/sm8250/OnePlus 8T.conf"
+  # PipeWire: the speaker sink at 16 bits, or the bottom speaker stays silent
+  install -Dm644 "$startdir/wireplumber/51-omamobile-kebab-speaker.conf" \
+    "$pkgdir/usr/share/wireplumber/wireplumber.conf.d/51-omamobile-kebab-speaker.conf"
   # Enable sshd and networkd. Nothing else starts.
   local wants="$pkgdir/usr/lib/systemd/system/multi-user.target.wants"
   install -d "$wants"

@@ -54,6 +54,21 @@ peripheral, no panel node and the wrong touch controller (S6SY761).
 [tree72]: https://gitlab.postmarketos.org/soc/qualcomm-sm8250/linux
 [tree]: https://gitlab.com/sm8250-mainline/linux
 
+## 2026-11-28: the bottom speaker under PipeWire (`boot_b`, Arch root on `userdata`)
+
+Through PipeWire only the earpiece played (YouTube in Chromium, `pw-play`):
+the stream reached the sink with signal, the whole DAPM path to both
+TFA9874s was on and no mixer control differed from a direct playback. A
+direct `speaker-test -D hw:0,0` played on the bottom speaker. The
+difference was the sample format: PipeWire opened PCM 0 as S24_LE, the
+tests as S16_LE. The amplifiers take one 16-bit TDM slot each on the
+tertiary MI2S port (top/earpiece slot 0, bottom slot 1); a 24-bit stream
+widens the port's slots and the bottom amplifier reads the wrong bits.
+`omamobile-device-kebab` 0.1.6 ships a WirePlumber rule that keeps the
+speaker sink at S16LE; with it YouTube plays on the bottom speaker. The
+kernel side (the backend's format fixed at 16 bits for this link) is not
+changed.
+
 ## 2026-11-28: building the boot image from the repository
 
 The boot image no longer needs hand steps:
