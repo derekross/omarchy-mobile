@@ -371,6 +371,16 @@ private slots:
         QTRY_VERIFY(window->findChild<QObject *>("creditsList"));
         QCOMPARE(window->findChild<QObject *>("creditsList")->property("count").toInt(), int(people.size()));
         QVERIFY(window->findChild<QObject *>("creditsList")->property("atYBeginning").toBool());
+        {
+            // The intro is whole and above the list, not clipped in the list's header.
+            auto *intro = window->findChild<QQuickItem *>("creditsIntro");
+            auto *list = window->findChild<QQuickItem *>("creditsList");
+            QVERIFY(intro && list);
+            QTRY_VERIFY(intro->height() > 0 && list->height() > 0);
+            QVERIFY(intro->y() >= 0);
+            QCOMPARE(intro->parentItem(), list->parentItem());
+            QVERIFY(list->y() >= intro->y() + intro->height());
+        }
         QVERIFY(QMetaObject::invokeMethod(window, "goBack"));
         QCOMPARE(backend.page(), QString("about"));
         QTRY_VERIFY(window->findChild<QObject *>("creditsRow"));
