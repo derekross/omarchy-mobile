@@ -41,6 +41,8 @@ package() {
     "$pkgdir/usr/lib/systemd/system/omamobile-kebab-display.service"
   install -Dm644 "$startdir/systemd/10-omamobile-kebab.conf" \
     "$pkgdir/usr/lib/systemd/system/display-manager.service.d/10-omamobile-kebab.conf"
+  install -Dm644 "$startdir/systemd/plymouth-start/10-omamobile-kebab.conf" \
+    "$pkgdir/usr/lib/systemd/system/plymouth-start.service.d/10-omamobile-kebab.conf"
   # ALSA UCM for the sound card ("OnePlus 8T", driver sm8250): UCM looks for
   # conf.d/<driver>/<card name>.conf
   install -Dm644 "$startdir/ucm2/OnePlus/kebab/kebab.conf" \

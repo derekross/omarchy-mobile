@@ -54,6 +54,39 @@ peripheral, no panel node and the wrong touch controller (S6SY761).
 [tree72]: https://gitlab.postmarketos.org/soc/qualcomm-sm8250/linux
 [tree]: https://gitlab.com/sm8250-mainline/linux
 
+## 2026-11-28: boot splash (`boot_b`)
+
+The boot shows Omarchy's logo instead of kernel messages.
+
+- **Command line** (`device.conf` `CMDLINE`): `console=tty0 quiet splash
+  plymouth.graphical plymouth.force-scale=1 vt.global_cursor_default=0
+  clk_ignore_unused pd_ignore_unused panic=10`, the splash words raven,
+  husky and akita use. `quiet` keeps the panel driver's probe warnings off
+  the screen (they stay in the log). `panic=10` replaces the bring-up
+  `panic=0`, so a phone away from the laptop restarts rather than freezes.
+- **The initramfs splash:** the shared init draws `/splash.bgra.gz` on fb0
+  when `splash` is on the command line. The boot framebuffer is 1080x2400
+  a8r8g8b8 (stride 4320), so the frame was rendered on the phone with
+  `bin/omamobile initramfs`'s own command (Omarchy's Plymouth logo centred
+  on #1a1b26, at scale 1, BGRA) and appended to the existing initramfs as a
+  second cpio archive holding only that file, which the kernel unpacks
+  after the first. `bin/omamobile initramfs` with `SPLASH_BGRA_GZ` does the
+  same in one build.
+- **Plymouth crashed** (`plymouth-start.service`: SIGSEGV) when it started
+  on simpledrm and msm then took the panel away. `omamobile-device-kebab`
+  0.1.4 runs the panel wait without default dependencies, after udev and
+  before `plymouth-start.service`, and orders Plymouth after it with a
+  `plymouth-start.service.d` drop-in: msm 5.44 s, Plymouth 6.26 s, no
+  failed units.
+- **Scale:** without `plymouth.force-scale=1` Plymouth picked a HiDPI scale
+  for this 1080x2400 panel and the logo came out stretched; with it the
+  logo matches the initramfs splash.
+
+The logo is up for only about a second: the boot reaches SDDM's lock
+screen that quickly. `boot_b` was rewritten with this image (slot flags
+before and after: B active, not successful, not unbootable, retry-count 7)
+and the next normal boot was clean.
+
 ## 2026-11-28: booting from `boot_b` (no `fastboot boot`)
 
 `boot_b` now holds the same image that was `fastboot boot`ed all day

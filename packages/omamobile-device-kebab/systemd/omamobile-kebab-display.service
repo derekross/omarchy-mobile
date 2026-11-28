@@ -1,10 +1,14 @@
 # SPDX-License-Identifier: MIT
-# Waits for msm DRM to take the panel before the display manager starts
-# (display-manager.service.d/10-omamobile-kebab.conf).
+# Waits for msm DRM to take the panel before Plymouth and the display manager
+# start (plymouth-start.service.d/ and display-manager.service.d/
+# 10-omamobile-kebab.conf). Plymouth starts before sysinit.target, so this
+# runs that early too: no default dependencies, after udev has loaded the
+# drivers from the root.
 [Unit]
 Description=Wait for the OnePlus 8T panel on msm DRM
-After=systemd-udevd.service systemd-modules-load.service
-Before=display-manager.service
+DefaultDependencies=no
+After=systemd-udev-trigger.service systemd-udevd.service systemd-modules-load.service
+Before=plymouth-start.service display-manager.service sysinit.target
 
 [Service]
 Type=oneshot

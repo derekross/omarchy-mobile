@@ -14,6 +14,8 @@ grep -q "TERT_MI2S_RX Audio Mixer MultiMedia1" ucm2/OnePlus/kebab/HiFi.conf
 grep -q "VA DMIC MUX0' DMIC3" ucm2/OnePlus/kebab/HiFi.conf
 echo ok ucm
 sh -n bin/omamobile-kebab-display-wait
-grep -q "^Before=display-manager.service" systemd/omamobile-kebab-display.service
+grep -q "^Before=.*plymouth-start.service.*display-manager.service" systemd/omamobile-kebab-display.service
 grep -q "^After=omamobile-kebab-display.service" systemd/10-omamobile-kebab.conf
+grep -q "^After=omamobile-kebab-display.service" systemd/plymouth-start/10-omamobile-kebab.conf
+grep -q "^DefaultDependencies=no" systemd/omamobile-kebab-display.service
 echo ok display-wait
