@@ -27,27 +27,32 @@ private slots:
             QFile f(stubs(it.key()) + "/charge.sh");
             QVERIFY(f.open(QIODevice::WriteOnly));
             f.write("printf '%s\\n' '" + it.value() + "'\n");
+            QFile sec(stubs(it.key()) + "/security.sh");
+            QVERIFY(sec.open(QIODevice::WriteOnly));
+            sec.write(it.key() == "on"
+                ? "printf '{\"firewall\":\"off\",\"ssh_active\":\"active\",\"ssh_enabled\":\"enabled\",\"ssh_allowed\":[\"USB\"],\"usb_ssh_rule\":true,\"hotspot\":false,\"can_enable\":true,\"why\":\"\",\"args\":\"%s\"}\\n' \"$*\"\n"
+                : "printf '%s\\n' '{\"firewall\":\"not installed\",\"ssh_active\":\"inactive\",\"ssh_enabled\":\"disabled\",\"ssh_allowed\":[],\"usb_ssh_rule\":false,\"hotspot\":false,\"can_enable\":false,\"why\":\"UFW is not installed.\"}'\n");
         }
     }
     void probeShowsTheBatteryRowOnlyWhenTheBackendSaysAvailable() {
         Backend on;
         on.setBackendDir(stubs("on"));
-        QCOMPARE(on.rows().size(), 2);
-        QTRY_COMPARE(on.rows().size(), 3);
+        QCOMPARE(on.rows().size(), 3);
+        QTRY_COMPARE(on.rows().size(), 4);
         Backend off;
         off.setBackendDir(stubs("off"));
         off.setToolAvailable("charge", true);
-        QTRY_COMPARE(off.rows().size(), 2); // the probe's answer clears it
+        QTRY_COMPARE(off.rows().size(), 3); // the probe's answer clears it
     }
     void navigationRejectsUnknownAndHiddenActions() {
         Backend backend;
         backend.setBackendDir(stubs("off"));
         QVERIFY(backend.catalogProblems().isEmpty());
-        QCOMPARE(backend.rows().size(), 2); // the Battery row waits for the charge backend, absent here
+        QCOMPARE(backend.rows().size(), 3); // the Battery row waits for the charge backend, absent here
         backend.setToolAvailable("charge", true);
-        QCOMPARE(backend.rows().size(), 3);
+        QCOMPARE(backend.rows().size(), 4);
         backend.setToolAvailable("charge", false);
-        QCOMPARE(backend.rows().size(), 2);
+        QCOMPARE(backend.rows().size(), 3);
         QVERIFY(!backend.navigate("recording"));
         backend.activate("arbitrary-command");
         QCOMPARE(backend.page(), QString("root"));
@@ -79,6 +84,78 @@ private slots:
         backend.search("charge limit");
         QCOMPARE(backend.rows().size(), 1);
         QCOMPARE(backend.rows().first().toMap()["id"].toString(), QString("battery"));
+    }
+    void securityPageGoesBackToRoot() {
+        Backend backend;
+        backend.setBackendDir(stubs("off"));
+        QVERIFY(backend.navigate("security"));
+        QCOMPARE(backend.page(), QString("security"));
+        backend.back();
+        QCOMPARE(backend.page(), QString("root"));
+        backend.search("firewall");
+        QCOMPARE(backend.rows().size(), 1);
+        QCOMPARE(backend.rows().first().toMap()["id"].toString(), QString("security"));
+    }
+    void runnerTakesTheFirewallSwitch() {
+        ActionRunner runner;
+        runner.setBackendDir(stubs("on"));
+        QSignalSpy done(&runner, &ActionRunner::finished);
+        const int ok = runner.run("security", {"set", "firewall", "on"});
+        const int bad = runner.run("security", {"set", "firewall", "on;x"});
+        QTRY_COMPARE(done.count(), 2);
+        for (const auto &call : done) {
+            if (call.at(2).toInt() == ok) QCOMPARE(call.at(1).toMap().value("args").toString(), QString("set firewall on"));
+            else { QCOMPARE(call.at(2).toInt(), bad); QCOMPARE(call.at(1).toMap().value("error").toString(), QString("bad argument")); }
+        }
+    }
+    void firewallPageShowsTheBackendAnswer_data() {
+        QTest::addColumn<QString>("stub");
+        QTest::newRow("installed") << "on";
+        QTest::newRow("not installed") << "off";
+    }
+    void firewallPageShowsTheBackendAnswer() {
+        QFETCH(QString, stub);
+        ActionRunner runner;
+        runner.setBackendDir(stubs(stub));
+        Backend backend; // outlives the engine: the style singleton reads it until the engine goes
+        backend.setBackendDir(stubs(stub));
+        QQmlEngine engine;
+        engine.rootContext()->setContextProperty("backend", &backend);
+        engine.rootContext()->setContextProperty("actions", &runner);
+        QQmlComponent component(&engine, QUrl("qrc:/FirewallPage.qml"));
+        std::unique_ptr<QObject> page(component.create());
+        QVERIFY2(page, qPrintable(component.errorString()));
+        // the page runs `security get` through the runner (the stub, not an installed backend) and shows its answer
+        QTRY_VERIFY(!page->property("busy").toBool());
+        if (stub == "off") {
+            QCOMPARE(page->property("firewall").toString(), QString("not installed"));
+            QVERIFY(!page->property("canEnable").toBool());
+            QVERIFY(page->property("status").toString().contains("not installed"));
+            return;
+        }
+        QCOMPARE(page->property("firewall").toString(), QString("off"));
+        QVERIFY(page->property("canEnable").toBool());
+        QCOMPARE(page->property("sshAllowed").toList().size(), 1);
+        const QVariantMap on{{"firewall", "on"}, {"ssh_active", "active"}, {"ssh_enabled", "enabled"},
+                             {"ssh_allowed", QVariantList{"USB", "Wi-Fi from 10.0.0.0/24"}}, {"usb_ssh_rule", true}, {"hotspot", false}, {"can_enable", true}, {"why", ""}};
+        QMetaObject::invokeMethod(page.get(), "apply", QVariant(on));
+        QCOMPARE(page->property("firewall").toString(), QString("on"));
+        QCOMPARE(page->property("sshAllowed").toList().size(), 2);
+        QCOMPARE(page->property("status").toString(), QString());
+        // a refused set keeps the state and shows the reason; the confirm is not left armed
+        page->setProperty("confirming", true);
+        page->setProperty("setting", true);
+        QMetaObject::invokeMethod(page.get(), "apply", QVariant(QVariantMap{{"error", "Stop the hotspot first"}}));
+        QCOMPARE(page->property("firewall").toString(), QString("on"));
+        QCOMPARE(page->property("status").toString(), QString("Stop the hotspot first"));
+        QVERIFY(!page->property("confirming").toBool());
+        // off with on refused: the reason is kept for the page's line
+        auto off = on; off["firewall"] = "off"; off["can_enable"] = false; off["why"] = "Stop the hotspot first.";
+        page->setProperty("setting", true);
+        QMetaObject::invokeMethod(page.get(), "apply", QVariant(off));
+        QCOMPARE(page->property("status").toString(), QString("The firewall is off."));
+        QVERIFY(!page->property("canEnable").toBool());
+        QCOMPARE(page->property("why").toString(), QString("Stop the hotspot first."));
     }
     void runnerKnowsChargeAndRejectsOthers() {
         ActionRunner runner;
@@ -212,6 +289,7 @@ private slots:
         backend.setBackendDir(stubs("off"));
         QVERIFY(backend.icon("../catalog").isEmpty());
         QVERIFY(backend.icon("unknown").isEmpty());
+        QVERIFY(backend.icon("pin").startsWith("data:image/svg+xml;base64,"));
         QVERIFY(backend.icon("system").startsWith("data:image/svg+xml;base64,"));
     }
     void atomicThemeReplacementIsObserved() {
@@ -296,8 +374,8 @@ private slots:
 
     }
 private:
-    // Stand-ins for backends/charge.sh, so no test reads the backend installed on the host: "on" answers like a
-    // phone with a declared charge limit, "off" like any other.
+    // Stand-ins for backends/charge.sh and backends/security.sh, so no test reads a backend installed on the host: "on"
+    // answers like a phone with a declared charge limit and UFW (off, SSH allowed over USB), "off" like one with neither.
     QString stubs(const QString &name) const { return m_stubs.filePath(name); }
     QTemporaryDir m_stubs;
 };

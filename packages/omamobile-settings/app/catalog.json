@@ -18,6 +18,13 @@
         "requires": "charge"
       },
       {
+        "id": "security",
+        "title": "Security & privacy",
+        "detail": "Firewall on or off, who may connect over SSH",
+        "icon": "pin",
+        "page": "security"
+      },
+      {
         "id": "about",
         "title": "About this device",
         "detail": "System, software and storage",
@@ -36,6 +43,10 @@
   },
   "battery": {
     "title": "Battery",
+    "rows": []
+  },
+  "security": {
+    "title": "Security & privacy",
     "rows": []
   }
 }
