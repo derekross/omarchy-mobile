@@ -1,0 +1,67 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# The home screen shares the app drawer's application library (0.2.144):
+# the real Home.qml with no library from the host and a stand-in drawer
+# published through the real DrawerLink.js, Omarchy's AppLibrary swapped for
+# a stub that counts how many are made and alive. Checks: with no drawer,
+# none for the first 5 s, then one; none while the drawer's is in reach;
+# none for 5 s after the drawer goes (a reload), then one; none again when
+# it comes back; and six desktop entries written at once bump appsRevision
+# once, not six times. Runs inside the OWL conformance
+# container (tests/owl/Dockerfile), never on a desktop:
+#
+#   docker run --rm --network none -u "$(id -u):$(id -g)" -v "$PWD:/src" \
+#     -v /usr/share/omarchy/themes:/themes:ro -v /usr/share/omarchy/shell:/omarchy-shell:ro \
+#     omamobile-owl-conformance:p1 bash /src/packages/omamobile-shell/test/applib-share
+set -euo pipefail
+here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+[[ -d /omarchy-shell && -d /themes ]] || { echo "applib-share: needs /omarchy-shell and /themes (the container's mounts)" >&2; exit 2; }
+command -v quickshell >/dev/null || { echo "applib-share: no quickshell" >&2; exit 2; }
+mkdir -p /tmp/xdg
+export XDG_RUNTIME_DIR=/tmp/xdg QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software QML_DISABLE_DISK_CACHE=1
+
+h=/tmp/applib-harness
+rm -rf "$h"; mkdir -p "$h"
+for m in Commons Ui services; do cp -r "/omarchy-shell/$m" "$h/$m"; done
+find "$h/Commons" "$h/Ui" "$h/services" -name '*.qml' -exec sed -i -E \
+  -e 's/(^|[^.[:alnum:]_])Color\./\1Commons.Color./g' \
+  -e '0,/^import qs\.Commons$/s//import qs.Commons\nimport qs.Commons as Commons/' {} +
+for f in "$h"/Commons/*.qml; do grep -c '^import qs.Commons as Commons' "$f" >/dev/null || sed -i '0,/^import QtQuick$/s//import QtQuick\nimport qs.Commons as Commons/' "$f"; done
+# The counting stub in place of Omarchy's AppLibrary.
+cat > "$h/services/AppLibraryCount.js" <<'JS'
+.pragma library
+var made = 0
+var live = 0
+JS
+cat > "$h/services/AppLibrary.qml" <<'QML'
+import QtQuick
+import "AppLibraryCount.js" as Count
+Item {
+  property bool stub: true
+  signal appsChanged()
+  function entryName(e) { return e ? String(e.name || e.id || "") : "" }
+  function iconSource(i) { return "" }
+  Component.onCompleted: { Count.made += 1; Count.live += 1 }
+  Component.onDestruction: Count.live -= 1
+}
+QML
+cp -r "$here/../plugins/omamobile.home" "$h/omamobile.home"
+mkdir -p "$h/omamobile.launcher"
+cp "$here/../plugins/omamobile.launcher/"{DrawerLink.js,DrawerLinkClient.qml} "$h/omamobile.launcher/"
+sed -i -E \
+  -e '/^    (screen: Quickshell\.screens|anchors \{ top: true|exclusionMode:|WlrLayershell\.|color: "transparent"|mask: Region)/d' \
+  -e 's/^  PanelWindow \{$/  Item { anchors.fill: parent/' \
+  "$h/omamobile.home/Home.qml"
+grep -c '^  Item { anchors.fill: parent$' "$h/omamobile.home/Home.qml" >/dev/null || { echo "applib-share: no PanelWindow to stand in for" >&2; exit 1; }
+cp "$here/applib-share.qml" "$h/"
+
+home=/tmp/applib-home
+rm -rf "$home"; mkdir -p "$home/.local/state/omarchy/current" "$home/.config/omamobile/widgets" "$home/.local/share/applications"
+ln -sfn /themes/tokyo-night "$home/.local/state/omarchy/current/theme"
+printf '[Desktop Entry]\nType=Application\nName=Terminal\nExec=true\n' > "$home/.local/share/applications/foot.desktop"
+export OMAMOBILE_WIDGETS_DIR=$home/.config/omamobile/widgets XDG_DATA_HOME=$home/.local/share XDG_DATA_DIRS=$home/.local/share
+export PATH=$here/../bin:$PATH OMAMOBILE_SHELL_SHARE=$here/../widgets
+HOME=$home APPS_DIR=$home/.local/share/applications timeout 120 quickshell -p "$h/applib-share.qml" > "$h/log" 2>&1 || true
+grep -oE "(not ok|ok) - .*" "$h/log" || true
+grep -q "applib-share done" "$h/log" || { echo "not ok - the run did not finish"; tail -20 "$h/log"; exit 1; }
+! grep -q "not ok - " "$h/log"

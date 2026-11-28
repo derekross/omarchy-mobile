@@ -964,9 +964,11 @@ Item {
         delegate: Row2 {
           required property var modelData
           width: ListView.view.width
-          image: sheets.home.appLibrary.iconSource(modelData.entry.icon)
-          title: sheets.home.appLibrary.entryName(modelData.entry)
-          subtitle: sheets.home.appLibrary.entrySubtext(modelData.entry) || ""
+          // the library can be gone for a moment (a drawer reload)
+          readonly property var lib: sheets.home ? sheets.home.appLibrary : null
+          image: lib ? lib.iconSource(modelData.entry.icon) : ""
+          title: lib ? lib.entryName(modelData.entry) : ""
+          subtitle: lib ? (lib.entrySubtext(modelData.entry) || "") : ""
           onClicked: sheets.home.addAppHere(modelData.entry.id)
         }
       }

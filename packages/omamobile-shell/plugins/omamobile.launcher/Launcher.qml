@@ -42,11 +42,13 @@ Item {
   // next config change (phone/plugins/README.md has the details). So the
   // launcher declares `panel` and runs Omarchy's own AppLibrary type here: the
   // same entries, hidden-entry filters, icon index and launch path, in a
-  // second instance. If the host ever provides one, that wins.
+  // second instance, which the home screen uses too (through DrawerLink.js).
+  // If the host ever provides one, that wins.
   Loader {
     id: localLibrary
     active: !!root.shell && !root.shell.appLibrary
     sourceComponent: Component { OmarchyServices.AppLibrary { } }
+    onLoaded: console.info("omamobile.launcher: own app library (the home screen shares it)")
   }
 
   // `opened` is the drawer; the dock is always on screen.
