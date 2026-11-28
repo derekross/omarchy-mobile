@@ -30,14 +30,11 @@ case $tile in
     exit 0
     ;;
   hotspot)
-    # NetworkManager makes (or reuses) a connection named "Hotspot" with a
-    # generated password; the Wi-Fi client link drops while it is up.
-    if [ "$want" = on ]; then
-      nmcli radio wifi on
-      exec nmcli device wifi hotspot con-name Hotspot
-    else
-      exec nmcli connection down Hotspot
-    fi
+    # Through hotspot-panel.sh: a device's own hotspot backend when there is
+    # one, else NetworkManager, which makes (or reuses) a connection named
+    # "Hotspot" with a generated password; the Wi-Fi client link drops while
+    # it is up.
+    exec bash "${0%/*}/hotspot-panel.sh" "$want"
     ;;
   battery-saver)
     # Through Omarchy's setter, which remembers the choice for AC or battery.

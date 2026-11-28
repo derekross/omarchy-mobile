@@ -8,7 +8,8 @@
 #
 #   airplane      on when every Wi-Fi, Bluetooth and WWAN rfkill switch is
 #                 soft-blocked (none without such a switch)
-#   hotspot       on while NetworkManager's "Hotspot" connection is up
+#   hotspot       on while NetworkManager's "Hotspot" connection is up, or
+#                 while a device's hotspot backend says so
 #   powerprofile  power-profiles-daemon's active profile
 #   theme_mode    light or dark, as Omarchy resolves the current theme
 #   theme_name    the current theme's directory name
@@ -45,8 +46,16 @@ else
   echo "airplane=none"
 fi
 
-# hotspot
-if have nmcli; then
+# hotspot (a device's own backend answers for its hotspot, through
+# hotspot-panel.sh active)
+hs_panel="${0%/*}/hotspot-panel.sh"
+if t bash "$hs_panel" backend; then
+  if [ "$(t bash "$hs_panel" active)" = on ]; then
+    echo "hotspot=on"
+  else
+    echo "hotspot=off"
+  fi
+elif have nmcli; then
   if t nmcli -t -f NAME connection show --active | grep -cx Hotspot >/dev/null; then
     echo "hotspot=on"
   else

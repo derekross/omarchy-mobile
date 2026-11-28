@@ -1,0 +1,12 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Stage omamobile-hotspot into DESTDIR. Never activates anything.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
+destination=${1:?Usage: ./install DESTDIR}
+[[ $destination == /* && $destination != "/" ]] || { echo "Use an absolute staging directory" >&2; exit 1; }
+install -Dm755 lib/hotspot-ap "$destination/usr/lib/omamobile-hotspot/hotspot-ap"
+install -Dm755 lib/hotspot-backend "$destination/usr/lib/omamobile-hotspot/hotspot-backend"
+install -Dm644 omamobile-hotspot.service "$destination/usr/lib/systemd/system/omamobile-hotspot.service"
+install -Dm644 50-omamobile-hotspot.rules "$destination/usr/share/polkit-1/rules.d/50-omamobile-hotspot.rules"
+install -Dm644 LICENSE "$destination/usr/share/licenses/omamobile-hotspot/LICENSE"

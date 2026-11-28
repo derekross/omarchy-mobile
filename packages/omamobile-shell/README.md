@@ -5,7 +5,7 @@ Omamobile's phone profile for Omarchy's own shell. It isn't a fork: these are or
 | Path | What it is |
 | --- | --- |
 | `plugins/omamobile.bar` | Phone status bar (a full `bar` plugin) |
-| `plugins/omamobile.quicksettings` | Pull-down quick settings |
+| `plugins/omamobile.quicksettings` | Pull-down quick settings; the Wi-Fi, Bluetooth and Hotspot tiles have pages behind their chevrons (the Hotspot page: name, password, a QR code to join, and `hotspot-panel.sh`'s VPN boxes where a device's hotspot backend has them) |
 | `plugins/omamobile.launcher` | Home bar: app search, app grid and a prompt to the user's Omarchy default agent; over an app, the home pill in a 44 px strip that reserves its height, so apps end above it (as on Android it is just the pill: double-tap for the keyboard, hold for the voice bar) |
 | `plugins/omamobile.switcher` | Recent apps: swipe up on the dock, or swipe up and hold on the home pill over an app; hold a card to show the app with another one, or give it its own screen again |
 | `plugins/omamobile.home` | Home screens: pages of apps and widgets on the wallpaper, with an edit mode. The built-ins include every widget in Simon Schubert's [omarchy-widgets](https://github.com/SimonSchubert/omarchy-widgets) `widgets/simonschubert/` (MIT): the OWL originals, from the `omamobile-owl-widgets` package, run by our own OWL runtime (`owl/`, see `owl/SPEC-NOTES.md`). `widgets/OWL.md` is his OWL language guide (MIT, `widgets/LICENSE-owl-guide`) |
@@ -93,6 +93,10 @@ Building `omamobile-voice` needs huggingface.co the first time on a build
 machine: the model comes from a pinned commit of whisper.cpp's model
 repository with a pinned sha256, and makepkg keeps it in its source cache
 afterwards.
+
+## Hotspot page
+
+The page behind the Hotspot tile's chevron talks to `hotspot-panel.sh`. By default that runs NetworkManager's "Hotspot" connection (the one the tile makes with `nmcli device wifi hotspot`): name, password and a QR code to join, and no VPN boxes, since NetworkManager's shared mode has no switch for them; its devices follow the phone's default route. A device that brings its own hotspot (its own hostapd and firewall) installs an executable at `/etc/omamobile/hotspot-backend` from its device package, or the owner puts one at `~/.config/omamobile/hotspot-backend`; it takes the same verbs (`state`, `on`, `off`, `set NAME PASS`, `share on|off`, `alltraffic on|off`) and prints the same lines, and with it come the VPN boxes and, in `uplink_note`, the sentence on where its devices' traffic goes. The tile turns the hotspot on and off through the same script, so with a backend the tile starts the device's hotspot and not NetworkManager's. `OMAMOBILE_HOTSPOT_SYSTEM_BACKEND` moves the system path (the tests use it so they never read `/etc`). The shell itself ships no root helper and no polkit rule for it: phones whose Wi-Fi can't start an access point on its client interface (brcmfmac on the Pixel 8 Pro and 9a, #523) get a shared one from the opt-in package `omamobile-hotspot` (`packages/omamobile-hotspot`), which their device package depends on, together with `/usr/share/omamobile/hotspot.conf` and the `/etc/omamobile/hotspot-backend` link; on other phones the page stays on NetworkManager.
 
 ## File dialogs
 

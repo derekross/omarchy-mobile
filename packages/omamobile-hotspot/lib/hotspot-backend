@@ -1,0 +1,102 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# The hotspot backend for the Hotspot page and tile on phones that need an access point on its own interface (the
+# Pixel 8 Pro, the 9a): hotspot-panel.sh finds it at /etc/omamobile/hotspot-backend, a link the device package ships.
+# Runs as the session user. The hotspot itself is omamobile-hotspot.service
+# (hotspot-ap, as root): an access point on its own interface ap0 beside the client Wi-Fi, NetworkManager's "Hotspot"
+# profile with PMF required. Plain NetworkManager hotspots can't work on those phones: wlp1s0 refuses AP mode (-52),
+# and on ap0 clients only join with pmf 3 (#523).
+#   hotspot-backend state           one JSON line, as hotspot-panel.sh describes (no QR: the panel adds it)
+#   hotspot-backend on|off          start or stop the unit (polkit lets the active local user do just that)
+#   hotspot-backend active          "on" or "off" only, cheap (no secrets): the tile's state
+#   hotspot-backend set NAME PASS   new name and password; a running hotspot restarts with them
+#   hotspot-backend share|alltraffic on|off   not available yet
+set -u
+export LC_ALL=C
+UNIT=omamobile-hotspot.service
+RUN=${OMAMOBILE_HOTSPOT_RUN:-/run/omamobile-hotspot}
+CON=Hotspot
+# -e no: names and passwords with ':' or '\' come back as they are
+nm() { timeout 10 nmcli -e no "$@"; }
+json_str() { python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$1"; }
+# the first connection named "Hotspot" in AP mode, as hotspot-ap picks it
+hsuuid() {
+  local line u
+  while IFS= read -r line; do
+    u=${line%%:*}; [[ ${line#*:} == "$CON" ]] || continue
+    [[ $u =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || continue
+    [[ $(nm -g 802-11-wireless.mode connection show uuid "$u" 2>/dev/null | head -n 1) == ap ]] && { printf '%s' "$u"; return 0; }
+  done < <(nm -t -f UUID,NAME connection show 2>/dev/null)
+  return 1
+}
+unit_state() { timeout 4 systemctl show -p ActiveState --value "$UNIT" 2>/dev/null; }
+# a new profile: 2.4 GHz, shared, PMF required, AP isolation (clients don't reach each other), bound to ap0; never autoconnects (the unit brings it up)
+make_profile() {
+  nm connection add type wifi con-name "$CON" ifname ap0 ssid "$1" autoconnect no 802-11-wireless.mode ap \
+    802-11-wireless.band bg ipv4.method shared ipv6.method ignore 802-11-wireless-security.key-mgmt wpa-psk \
+    802-11-wireless-security.psk "$2" 802-11-wireless-security.pmf 3 802-11-wireless-security.proto rsn \
+    802-11-wireless-security.pairwise ccmp 802-11-wireless-security.group ccmp \
+    802-11-wireless.ap-isolation yes >/dev/null 2>&1
+}
+
+state() {
+  local u ssid='' psk='' hotspot=off clients=0 editable=true
+  if u=$(hsuuid); then
+    ssid=$(nm -s -g 802-11-wireless.ssid connection show uuid "$u" 2>/dev/null)
+    psk=$(nm -s -g 802-11-wireless-security.psk connection show uuid "$u" 2>/dev/null)
+  fi
+  # activating counts as on, so the tile doesn't flip back while the unit comes up
+  case $(unit_state) in active|activating) hotspot=on ;; esac
+  [[ $hotspot == on && -r $RUN/clients ]] && clients=$(grep -c . "$RUN/clients" 2>/dev/null)
+  printf '{"backend":"hotspot-ap","hotspot":"%s","vpn":"off","share":"off","share_available":false,"prefer_share":false,"all_traffic_available":false,"all_traffic":false,"editable":%s,"ssid":%s,"psk":%s,"clients":%s,"uplink_note":%s}\n' \
+    "$hotspot" "$editable" "$(json_str "$ssid")" "$(json_str "$psk")" "${clients:-0}" \
+    "$(json_str "Shares the phone's connection on 2.4 GHz. Devices need PMF (802.11w) to join.")"
+}
+
+on() {
+  # the unit only starts where a device package opted in; say so instead of a start that does nothing
+  [[ -r ${OMAMOBILE_HOTSPOT_DEVCONF:-/usr/share/omamobile/hotspot.conf} ]] || { echo "error: this phone has no hotspot settings"; exit 1; }
+  if ! hsuuid >/dev/null; then
+    # like NetworkManager's own hotspot: a name from the hostname and a generated password, editable on the page
+    local pass
+    pass=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 12)
+    local host; host=$(hostname -s 2>/dev/null) || host=''; host=${host:-omamobile}
+    make_profile "Hotspot-${host:0:24}" "$pass" || { echo "error: could not make the Hotspot settings"; exit 1; }
+  fi
+  # waits for the unit to be ready (Type=notify), so a start that fails says so
+  timeout 130 systemctl start "$UNIT" >/dev/null 2>&1 || { echo "error: the hotspot did not start"; exit 1; }
+}
+
+off() { timeout 10 systemctl stop --no-block "$UNIT" >/dev/null 2>&1 || { echo "error: the hotspot did not stop"; exit 1; }; }
+
+set_name() {
+  local u
+  if u=$(hsuuid); then
+    nm connection modify uuid "$u" 802-11-wireless.ssid "$1" 802-11-wireless-security.psk "$2" >/dev/null 2>&1 \
+      || { echo "error: NetworkManager refused the change"; exit 1; }
+  else
+    make_profile "$1" "$2" || { echo "error: could not make the Hotspot settings"; exit 1; }
+  fi
+  case $(unit_state) in
+    active|activating)
+      # polkit allows start and stop only, so a restart is the two; the stop waits for the teardown (ap0 deleted,
+      # rules out) so the start doesn't race it
+      timeout 160 systemctl stop "$UNIT" >/dev/null 2>&1 || { echo "error: the hotspot did not stop for the change"; exit 1; }
+      if timeout 130 systemctl start "$UNIT" >/dev/null 2>&1; then
+        echo "ok: hotspot restarted with the new name and password"
+      else
+        echo "error: the hotspot did not restart"; exit 1
+      fi ;;
+    *) echo "ok: saved; applies when the hotspot is turned on" ;;
+  esac
+}
+
+case ${1:-} in
+  state) state ;;
+  active) case $(unit_state) in active|activating) echo on ;; *) echo off ;; esac ;;
+  on) on ;;
+  off) off ;;
+  set) set_name "${2:-}" "${3:-}" ;;
+  share|alltraffic) echo "error: sharing a VPN isn't available with this hotspot yet" ;;
+  *) echo "usage: hotspot-backend state | active | on | off | set NAME PASSWORD | share|alltraffic on|off" >&2; exit 2 ;;
+esac
