@@ -16,21 +16,22 @@ Everything here is from the `omamobile-shell` package (`packages/omamobile-shell
 
 ## Picking a language (user)
 
-The language list is `org.gnome.desktop.input-sources` `sources`, a GNOME setting. squeekboard 1.43 shows the first entry and re-reads the setting on every change (`bin/omamobile-keyboard-languages` lines 14-16, from squeekboard's `eekboard/eekboard-context-service.c`). So the first entry is the current layout, and switching means moving an entry to the front.
+The language list is `org.gnome.desktop.input-sources` `sources`, a GNOME setting. squeekboard 1.43 shows the first entry and re-reads the setting on every change (`bin/omamobile-keyboard-languages` lines 16-18, from squeekboard's `eekboard/eekboard-context-service.c`). So the first entry is the current layout, and switching means moving an entry to the front.
 
 Two ways to do that:
 
 **The language sheet.** In a text field, tap the keyboard's globe key. A sheet slides up over the keyboard with one row per language, the current one checked, a remove target on the others, and "Add a language" with the layouts the keyboard carries that are not on the list yet. A tap on a row switches and closes the sheet; a tap outside or a swipe down closes it without a change (`docs/VOICE-PLAN.md`, "The language sheet"; `plugins/omamobile.keyboard/Keyboard.qml` `pickLanguage` and `removeLanguage`, lines 78-92; the dismiss gestures are in `LanguageSheet.qml`). The globe itself only opens and closes the sheet.
 
-**The command.** The sheet runs `bin/omamobile-keyboard-languages`, and it can be run by hand (its docstring, lines 6-12):
+**The command.** The sheet runs `bin/omamobile-keyboard-languages`, and it can be run by hand (its docstring, lines 6-14):
 
 ```
 omamobile-keyboard-languages list          # JSON: sources, the current one, what can be added
 omamobile-keyboard-languages set NAME      # NAME to the front of sources (added when missing)
+omamobile-keyboard-languages add NAME      # NAME at the end when missing; the current one stays (for the Settings page)
 omamobile-keyboard-languages remove NAME   # NAME off the list; never the last one
 ```
 
-`NAME` is the xkb layout name, `gr`, `us`, or `layout+variant` such as `gr+polytonic` or `us+dvorak` (lines 9, 20-22). `set` keeps the other entries in their order, as squeekboard's own popover does (lines 137-141). With an empty `sources`, squeekboard falls back to `us`, and `set gr` then writes `gr, us` (lines 44-45, 139-141). `remove` refuses to empty the list (lines 144-148). The `list` output names each layout with xkeyboard-config's description from `/usr/share/X11/xkb/rules/evdev.xml`, so `gr` shows as the Greek entry there; what can be added is the set of portrait files in `/usr/share/omamobile/squeekboard/keyboards/` (or the directory in `OMAMOBILE_KEYBOARDS_DIR`) that are not already shown (lines 43, 101-109, 126-132). When `sources` is empty the shown list is the fallback `us`, so `us` is not offered either.
+`NAME` is the xkb layout name, `gr`, `us`, or `layout+variant` such as `gr+polytonic` or `us+dvorak` (lines 9, 22-24). `set` keeps the other entries in their order, as squeekboard's own popover does (lines 139-143). With an empty `sources`, squeekboard falls back to `us`, and `set gr` then writes `gr, us` (lines 46-47, 141-143). `add` appends a missing name and leaves the first entry where it is (lines 146-156). `remove` refuses to empty the list (lines 159-163). The `list` output names each layout with xkeyboard-config's description from `/usr/share/X11/xkb/rules/evdev.xml`, so `gr` shows as the Greek entry there; what can be added is the set of portrait files in `/usr/share/omamobile/squeekboard/keyboards/` (or the directory in `OMAMOBILE_KEYBOARDS_DIR`) that are not already shown (lines 45, 103-111, 128-134). When `sources` is empty the shown list is the fallback `us`, so `us` is not offered either.
 
 Greek as the second language, English staying first:
 
@@ -39,7 +40,7 @@ omamobile-keyboard-languages set gr    # sources: gr, us ...
 omamobile-keyboard-languages set us    # sources: us, gr ...
 ```
 
-Or in the sheet: globe, "Add a language", Greek, then globe, English. After that, the globe and a tap on the other language's row switch between the two. The same can be done with `gsettings set org.gnome.desktop.input-sources sources "[('xkb', 'us'), ('xkb', 'gr')]"`; the tool only reads and writes that key (lines 40-41, 70-75).
+Or in the sheet: globe, "Add a language", Greek, then globe, English. After that, the globe and a tap on the other language's row switch between the two. The same can be done with `gsettings set org.gnome.desktop.input-sources sources "[('xkb', 'us'), ('xkb', 'gr')]"`; the tool only reads and writes that key (lines 42-43, 72-77).
 
 Tried on a Pixel 8 Pro, with a local key that rotated the list before the sheet existed there: with `sources` set to `us` then `gr`, the keyboard switched between English and Greek and the Greek layout typed into an app. The sheet itself was not tried on that phone.
 
@@ -53,7 +54,7 @@ To change the Greek layout for yourself:
 2. Edit the copy. Keep the action row (`- "Mic Paste Emoji Hide"` as the first row of every view) and the globe key's `keysym: "XF86MediaLanguageMenu"`, or the Mic, Paste, Emoji, Hide and language keys stop working; nothing in the shell checks a user's file.
 3. Make `gr` current (`omamobile-keyboard-languages set gr`, or the sheet). If `gr` was already current, switch away and back; whether that is enough for squeekboard to read the changed file was not checked here (see below).
 
-To add a layout under a new name, say `mine.yaml`: put it in the same directory and run `omamobile-keyboard-languages set mine` (or set `sources` by hand). The sheet's "Add a language" does not offer it, because that list is read from the package's directory, not the user's (`bin/omamobile-keyboard-languages` lines 43, 101-109); once it is in `sources`, the sheet lists it under whatever name xkeyboard-config has for it, the form `Base (variant)` when the variant is not in the file, or the bare name.
+To add a layout under a new name, say `mine.yaml`: put it in the same directory and run `omamobile-keyboard-languages set mine` (or set `sources` by hand). The sheet's "Add a language" does not offer it, because that list is read from the package's directory, not the user's (`bin/omamobile-keyboard-languages` lines 45, 103-111); once it is in `sources`, the sheet lists it under whatever name xkeyboard-config has for it, the form `Base (variant)` when the variant is not in the file, or the bare name.
 
 Not verified in this repository: how squeekboard itself finds a layout file. This page says only what `omamobile-setup-user` does (link into `~/.local/share/squeekboard/keyboards/`) and that the shipped layouts work from there. Whether squeekboard looks at other directories, reloads an edited file without a layout switch, or accepts a name with no xkb counterpart was not checked here; `docs/VOICE-PLAN.md` ("The language sheet") notes that squeekboard looks a name up as a path, from a reading of its source, not from a test.
 

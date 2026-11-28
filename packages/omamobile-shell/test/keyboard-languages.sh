@@ -4,7 +4,8 @@
 # the language sheet (squeekboard's names from xkeyboard-config, sorted, the
 # current one first in `sources`), and that set moves a layout to the front
 # as squeekboard's own popover does (src/popover.rs, set_layout), adds one
-# that isn't there, and remove never takes the last one.
+# that isn't there, add appends without switching, and remove never takes
+# the last one.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
@@ -68,5 +69,21 @@ assert d["current"] == "us" and d["configured"] == 0 and [r["name"] for r in d["
 ' || fail "no sources: squeekboard's fallback, English (US)"
 langs set de
 [[ $(sources) == "[('xkb', 'de'), ('xkb', 'us')]" ]] || fail "adding to no sources keeps the fallback: $(sources)"
-langs bogus 2>/dev/null && fail "an unknown command is refused"
 pass "the last language stays, and no sources means English (US)"
+
+echo "[('xkb', 'de'), ('xkb', 'us')]" >"$t/sources"
+langs add fr
+[[ $(sources) == "[('xkb', 'de'), ('xkb', 'us'), ('xkb', 'fr')]" ]] || fail "add appends and keeps the current one first: $(sources)"
+echo "[('xkb', 'de'), ('xkb', 'us')]" >"$t/sources"; touch -d 2000-01-01 "$t/sources"
+langs add us
+[[ $(sources) == "[('xkb', 'de'), ('xkb', 'us')]" && $(stat -c %Y "$t/sources") == $(date -d 2000-01-01 +%s) ]] || fail "add of a listed layout writes nothing: $(sources)"
+echo "@a(ss) []" >"$t/sources"
+langs add de
+[[ $(sources) == "[('xkb', 'us'), ('xkb', 'de')]" ]] || fail "add to no sources keeps the fallback first: $(sources)"
+echo "@a(ss) []" >"$t/sources"
+langs add us
+[[ $(sources) == "@a(ss) []" ]] || fail "add of the fallback to no sources writes nothing: $(sources)"
+langs add 2>/dev/null && fail "add needs a name"
+langs add -x 2>/dev/null && fail "add refuses an option-like name"
+langs bogus 2>/dev/null && fail "an unknown command is refused"
+pass "add appends without switching, writes nothing when present"

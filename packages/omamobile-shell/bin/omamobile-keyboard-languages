@@ -8,6 +8,8 @@
                                                layouts that can be added
     omamobile-keyboard-languages set NAME      switch to xkb layout NAME
                                                (added when it isn't there)
+    omamobile-keyboard-languages add NAME      append NAME at the end when
+                                               missing; the current one stays
     omamobile-keyboard-languages remove NAME   take NAME off the list (never
                                                the last one)
 
@@ -141,6 +143,19 @@ def set_layout(name):
     write_sources([entry] + [s for s in sources if s != entry])
 
 
+def add_layout(name):
+    """Add without switching: NAME goes at the end, the first entry (the
+    current layout) stays first, and nothing is written when NAME is already
+    there. An empty list keeps squeekboard's fallback in it, first (set
+    keeps it too, second)."""
+    sources = read_sources()
+    if any(n == name for _, n in sources):
+        return
+    if not sources and name == FALLBACK:
+        return
+    write_sources((sources or [("xkb", FALLBACK)]) + [("xkb", name)])
+
+
 def remove_layout(name):
     sources = read_sources()
     kept = [s for s in sources if s[1] != name]
@@ -154,8 +169,9 @@ def main(argv):
     if argv[1:] == ["list"]:
         print(json.dumps(listing()))
         return 0
-    if len(argv) == 3 and argv[1] in ("set", "remove") and argv[2] and not argv[2].startswith("-"):
-        (set_layout if argv[1] == "set" else remove_layout)(argv[2])
+    verbs = {"set": set_layout, "add": add_layout, "remove": remove_layout}
+    if len(argv) == 3 and argv[1] in verbs and argv[2] and not argv[2].startswith("-"):
+        verbs[argv[1]](argv[2])
         return 0
     print(__doc__.split("\n\n")[1], file=sys.stderr)
     return 2
