@@ -8396,10 +8396,7 @@ of tracefs `format` files labeled
 `debugfs_tracing_debug`. The audit lacks the event
 paths. A separate denial for the shell on
 `available_events` rules out using the shell to
-enumerate the same tracefs surface. The saved factory
-extracts do not include the compiled D1 SELinux
-policy, so the audit cannot identify every allowed
-event or rule out an unobserved vendor export.
+enumerate the same tracefs surface.
 
 The existing Composer client provides a second
 timestamp through its userspace `gfx` markers. The
@@ -8442,6 +8439,58 @@ therefore success-signaled. This rules out the
 driver's known timeout error-fence path for that
 event. It still cannot identify interrupt delivery
 or distinguish the driver's interrupt and poll paths.
+
+###### Exact D1 SELinux policy and stock atrace
+
+Extracted SELinux policy v30 from the D1 factory
+`vendor.img` at `/etc/selinux/precompiled_sepolicy`.
+The factory vbmeta signatures, chained keys and
+vendor, system, system_ext and product hashtrees
+verified. The three policy identity files match the
+vendor precompiled policy's sidecars. There is no
+ODM override of the precompiled binary. Its SHA-256
+is `4e8b5b357ec380f708357da1a96d2554ae57f2187d992a6fefe95a854646770b`.
+[Android init policy selection](https://android.googlesource.com/platform/system/core/+/refs/heads/main/init/selinux.cpp#134).
+
+The vendor `gfx` list includes `dpu/tracing_mark_write`.
+Its init script sets that event's `enable` mode to 0666.
+The compiled tracefs policy still labels both `format`
+and `enable` as `debugfs_tracing_debug`. Effective
+access checks deny both files to `traced_probes`,
+`atrace`, shell and `hal_atrace_default`. The same
+label covers `vs_drm` event files and `set_event`.
+Only init has write access to the DPU event control.
+Vendor init can set file attributes there. The factory
+VINTF fragments contain no registered ATrace HAL.
+The vendor `pixel` instance arms CMA memory events,
+and its trace is inaccessible to the stock tracing
+clients. None of these paths exposes DPU frame-start
+on production stock A.
+
+There is a separate stock candidate for recording
+fences and IRQ activity. The exact `atrace` ELF puts
+`events/dma_fence/enable` in `sync` and
+`events/irq/enable` in `irq`. Platform `atrace.rc`
+sets both group controls to 0666. Compiled policy
+permits `atrace` to write them and read the text
+trace. The script does not give the two individual
+DMA-fence enable files the same mode override.
+This is consistent with the earlier Perfetto failure
+on individual controls. Its `set_event` fallback is
+also denied by policy.
+[Perfetto event enable implementation](https://github.com/google/perfetto/blob/v58.3/src/traced/probes/ftrace/tracefs.cc#L138).
+
+A short stock `atrace` capture with `gfx sync irq`
+can be tested for a CRTC DMA-fence signal and display
+IRQ entry and exit on the same CPU. Identify the
+fence by driver, timeline, context and sequence,
+and match its timestamp to Composer's successful
+fence. If the signal is nested inside the display
+IRQ, that is evidence of ISR delivery. The IRQ
+covers several display status bits and the trace
+lacks the DPU frame-start marker, so it cannot
+independently identify the asserted bit. This
+candidate was verified in the factory files only.
 
 After this stock Android session, take and verify a fresh
 guarded nine-partition NV backup before the next Linux
