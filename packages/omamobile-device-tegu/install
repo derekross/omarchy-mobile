@@ -29,3 +29,9 @@ install -Dm644 etc/NetworkManager/conf.d/zz-omamobile-wifi-powersave.conf \
   "$destination/etc/NetworkManager/conf.d/zz-omamobile-wifi-powersave.conf"
 install -Dm644 LICENSE "$destination/usr/share/licenses/omamobile-device-tegu/LICENSE"
 install -Dm644 version "$destination/usr/share/omamobile/device-tegu/version"
+# Suspend is verified on this phone (device/tegu/SLEEP-PLAN.md S1): the
+# shell's user setup turns auto-sleep on once where this file exists. With the
+# modem up it sleeps too, where omamobile-modem's sleep policy allows it (this
+# package's vendor/omamobile-modem/suspend-verified and a kernel with the modem
+# link's early sleep refusal); otherwise the modem's start holds an inhibitor.
+install -Dm644 /dev/null "$destination/usr/share/omamobile/auto-sleep-default"

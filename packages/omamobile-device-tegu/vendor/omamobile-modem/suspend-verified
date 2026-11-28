@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: MIT
+# The Pixel 9a's declaration that suspend with the modem up works, as
+# device-cheetah's is for the Pixel 7 Pro. On W4HO-ham's 9a, under #809's
+# terms: the modem-up series of #837 (20 of 20 sleeps entered and woke, mobile
+# data back after each) and a night on the shell's own path on 2026-11-20 (32
+# sleeps through omamobile-sleepd and logind, the longest 50 minutes, no
+# service watchdog line, no UFS error line), both with the modem's sleep
+# inhibitor lifted by hand. With this file omamobile-modem's sleep policy
+# says yes, and omamobile-tegu-modem-up then takes no sleep inhibitor, but
+# only on a kernel whose modem link refuses a sleep early while the link is up
+# (linux-omamobile#232, kernel-2026.11.15 and later), and not where the owner
+# has opted out (/etc/omamobile/modem-suspend-disable, from the next boot).
