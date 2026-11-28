@@ -193,8 +193,10 @@ wake. Then flash `boot_a` as [KEYS-PLAN](KEYS-PLAN.md) K6, re-mark slot A
 - `sleepstate` is never driven: the SSC always sees the APPS as awake.
 - SAR (§6): the sensors PD's crash at every resume makes the SAR daemon
   resubscribe, which re-zeroes the chip against the hand holding the phone.
-- SAR (§6): whether the modem subscribes to the SX9324 by itself under
-  Linux is read from its firmware strings only, not seen at run time.
+- SAR (§6): nothing lowers the modem's transmit power while the phone is
+  held. On LTE band 20 neither a near reading nor any QMI SAR state (1-8)
+  changed it (R4); other bands, and what stock does when held, are not
+  measured.
 
 ## 5. Proximity from the touchscreen's ear mode
 
@@ -252,8 +254,8 @@ device-hotdog 0.1.24 keeps it in `/run/omamobile/sar/`.**
 | The sample (message 1026) is a standard sensor event: floats `[state, diff, offset, 0, 0]`, status 3. `state` 1 is near; `diff` is the chip's useful value against its baseline, `offset` its compensation offset | ssc-probe, below |
 | Every new subscription makes the chip compensate against whatever touches it: with a hand on the phone at that moment the offset went to 16383 (its maximum), `diff` read 0 and it never reported near | hand test, below |
 | Mainline's SM8150 DT gives `sdhc_2` (the SD card controller, which this phone lacks) `cd-gpios = <&tlmm 96>`, the SAR's interrupt line. The hotdog DT keeps `sdhc_2` disabled, so the line stays free; a DT that enables it takes the interrupt from the SSC | `/sys/kernel/debug/gpio`, `/proc/device-tree` |
-| Stock Android never sends the sensor to the modem: no QMI SAR (`rf_set_state`) caller outside Qualcomm's test tool, AOSP Wi-Fi body-SAR off (`config_wifi_framework_enable_body_proximity_sar_tx_power_limit` false, no overlay), and the OEM hook `AP_2_MODEM_SAR_SENSOR_OPERATE` only in the factory app. The modem's OnePlus OEM service names the SSC data type `sars` itself, next to an NV switch `/oem/oem_sar_disable`: the modem most likely subscribes to the sensor through the SSC on its own | `dexdump` of stock's `framework.jar`, `wifi-service.jar`, `qcnvitems.jar`; `aapt2` of `framework-res.apk` and the vendor overlays; `strings` of `modem.mbn` |
-| The modem's QMI SAR service answers over QRTR: `qmicli -d qrtr://0 --sar-rf-get-state` reads 0 | on the phone |
+| Stock Android never sends the sensor to the modem: no QMI SAR (`rf_set_state`) caller outside Qualcomm's test tool, AOSP Wi-Fi body-SAR off (`config_wifi_framework_enable_body_proximity_sar_tx_power_limit` false, no overlay), and the OEM hook `AP_2_MODEM_SAR_SENSOR_OPERATE` only in the factory app. The modem's OnePlus OEM service names the SSC data type `sars` itself, next to an NV switch `/oem/oem_sar_disable`. Under Linux it does not act on the sensor by itself: a near reading left its power unchanged (R4) | `dexdump` of stock's `framework.jar`, `wifi-service.jar`, `qcnvitems.jar`; `aapt2` of `framework-res.apk` and the vendor overlays; `strings` of `modem.mbn` |
+| The modem's QMI SAR service answers over QRTR: `qmicli -d qrtr://0 --sar-rf-get-state` reads 0, and it accepts and reads back states 1-8, but on LTE band 20 none of them lowers the transmit power (R4) | on the phone |
 
 Hand test, 2026-11-28 (owner; phone on its stand, the subscription started
 with nothing near it, then the hand put on):
@@ -278,8 +280,9 @@ client in Python: it looks up `sars`, subscribes once on change, and writes
 iio-sensor-proxy always ask for wakeup), so a grip never wakes the phone from
 sleep, and keeps its one subscription because a new one re-zeroes the chip. It
 follows SLPI restarts through the QRTR name service and runs with a dynamic
-user. Nothing is sent to the modem: stock sends nothing either, and a second
-backoff on top of the modem's own would cost signal for no gain.
+user. Nothing is sent to the modem: stock sends nothing either, and on band
+20 no QMI SAR state the modem accepts changes its power (R4), so there is no
+known message that would make it back off.
 
 **R1. The service by hand (phone, read-only).**
 `/usr/lib/omamobile/hotdog/omamobile-hotdog-sar --once`. Expect: the Sensor
@@ -309,3 +312,22 @@ crashed as after every resume (§4, `frpc_dsp`), the daemon saw the service go,
 resubscribed 2 s later and read near/far again. That resubscription
 re-zeroes the chip against whatever touches it at that moment, often the hand
 that pressed the power key; it clears at the next release and grip.*
+
+**R4. Does anything lower the modem's power? (phone, mobile data).** Bring
+up mobile data (Wi-Fi stays the default route), upload over its interface
+only (`curl --interface qmapmux0.0` to a speed-test upload address), and read
+the modem's own report once a second: `qmicli -d qrtr://0
+--nas-get-tx-rx-info=lte`, `TX` `Power`. (a) Untouched, then gripped at the
+bottom edge. (b) Untouched, with `qmicli -d qrtr://0 --sar-rf-set-state=N`
+for N = 0, 1-8, then 0. Pass: a steady drop while near, or in some state.
+Restore: `--sar-rf-set-state=0` (also cleared by a modem restart), mobile
+data down. Risk: low (runtime QMI only, no NV write); about 10-20 MB of
+mobile data per run.
+*2026-11-28, `7.3.0-rc6-omamobile-crypt1-gf3a11a5f5062`, LTE band 20, RSRP
+about -103 dBm, so the upload ran at full power: (a) untouched (far)
+22-23 dBm, gripped (near, `diff` 18138) 21-22 dBm over 30 s, the same
+spread: no backoff. (b) Every state 1-8 was accepted and read back, and the
+power stayed at 21-23 dBm in each; restored to 0. Either this phone's
+tables don't back off on band 20, or its SAR is off (`/oem/oem_sar_disable`)
+or not loaded; another band would tell them apart, and Linux won't change
+the modem's band settings to find out.*
