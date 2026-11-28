@@ -3,8 +3,9 @@
 #include <QObject>
 #include <QVariantMap>
 #include <QStringList>
+#include <QUrl>
 
-// Runs the source-owned backend scripts (display, charge) with a fixed argument list and no shell. Pages call run();
+// Runs the source-owned backend scripts (display, charge, security, nfc) with a fixed argument list and no shell. Pages call run();
 // the JSON the script prints comes back through finished(), always from the event loop and never before run()
 // has returned its id.
 class ActionRunner : public QObject {
@@ -12,6 +13,8 @@ class ActionRunner : public QObject {
 public:
     explicit ActionRunner(QObject *parent = nullptr) : QObject(parent) {}
     Q_INVOKABLE int run(const QString &tool, const QStringList &args);
+    // Copies a picked sound to ~/.config/omamobile/sounds/.import for `nfc sound import`; "" or why not.
+    Q_INVOKABLE QString stageSound(const QUrl &picked);
     // Where the backend scripts live; tests point it at stubs so they don't depend on the host's install.
     void setBackendDir(const QString &dir) { m_dir = dir; }
 signals:
