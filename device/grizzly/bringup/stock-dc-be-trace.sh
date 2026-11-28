@@ -89,9 +89,10 @@ stock_dc_be_trace() (
     printf '64\n' > "$instance/buffer_size_kb" || return 1
 
     # Audited DC offsets are relative to the dpu-fe-be resource at 0x0f600000.
-    # At dc_read+0x2c, x0 contains the returned value and x19 the offset.
+    # At dc_read+0x30, x0 contains the returned value and x19 the offset.
+    # The preceding NOP is reserved by the module's jump table.
     offsets='reg == 0xd4004 || reg == 0x80248 || reg == 0x80004 || reg == 0x80008 || reg == 0x80014'
-    stock_dc_be_add_probe be_read 'vs_drm:dc_read+0x2c reg=%x19:x32 value=%x0:x32' "$offsets" ||
+    stock_dc_be_add_probe be_read 'vs_drm:dc_read+0x30 reg=%x19:x32 value=%x0:x32' "$offsets" ||
         return 1
     # Observe the stock isolation call and its return. No probe reads MMIO.
     stock_dc_be_add_probe be_isolation_write \
@@ -123,6 +124,10 @@ stock_dc_be_trace() (
     done <<EOF
 $capture
 EOF
+    if "$bb" dmesg | "$bb" grep -Eq 'trace_kprobe: Failed to re-register probe be_(read|isolation_write|isolation_returned) on vs_drm:'; then
+        stock_inventory_log 'DC BE trace probe attachment incomplete'
+        return 1
+    fi
     trap - 0
     stock_dc_be_cleanup
 )

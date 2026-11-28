@@ -9144,6 +9144,49 @@ truncated trace and refusal to load with a DSI host enabled.
 Live probe attachment and samples remain to be verified.
 No phone access, reboot or flash was performed.
 
+###### Attended stock D1 BE trace
+
+On 2026-11-28 the rescue saved and independently verified all
+nine NV partitions (3,392,151,552 bytes). The stock BE fixture
+booted once on B after all five images and the full 64 MiB
+vendor boot readback passed staging checks. The NV guard
+passed before the trace armed. Both DSI hosts and PHYs stayed
+disabled.
+
+| Cycle | Last supplier ON reply (s) | De-isolation write → return (s) | Isolation write → return (s) |
+| --- | ---: | --- | --- |
+| First | 5.834222 | 5.834286 → 5.834291 | 5.868114 → 5.868119 |
+| Second | 5.879896 | 5.879932 → 5.879937 | 5.916155 → 5.916161 |
+
+In each cycle, wrapper, BE, DSI0, DSI1, FE0 and FE1 returned ON
+before stock wrote `0` to `0x0f680248`. The write returned
+before the parent reached RPM_ACTIVE. On suspend, the write
+of `0x0f` returned before the parent reached RPM_SUSPENDED
+and before BE or wrapper OFF. Ramoops and `SYSTEM_LAST_KMSG`
+agree on the four writes and returns, 20 runtime-PM events
+and 26 MBFS request/reply pairs. The trace had zero
+`power_domain_target` samples.
+
+Stock rejected `be_read` at module load with `-22`, so this
+boot captured no BE reads. The exact module's relocation at
+`0x2e348` identifies the probe site as a jump-label patch slot.
+The corrected fixture probes the next instruction
+(`dc_read+0x30` at `0x2e34c`), where x0 still holds the read
+result and x19 the offset. It preserves partial capture and
+reports a failed re-registration separately. The corrected
+five-image set passed offline checks with replacement
+`init_boot` SHA-256
+`c22b7804040776f5a1c120452d0f703021300eb6e531e8d2bee62b092a3ae723`.
+It was not booted.
+
+The stock isolation writes were observed with the full supplier
+sequence. A write returning supplies no independent isolation
+or external reset readback for the BE-only mainline case.
+The timer requested restart at 90.883 s. A USB-C reconnect let
+the Mac detect Fastboot again. Stock D1 A then completed boot
+with enforcing verity and the original VBMeta digest. Take a
+fresh guarded NV backup before another slot B trial.
+
 ###### Mainline DSI0 readiness after stock connector registration
 
 The mainline prerequisite fixture at kernel
