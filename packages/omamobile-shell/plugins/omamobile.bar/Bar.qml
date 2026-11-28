@@ -15,9 +15,9 @@ import "StatusModel.js" as StatusModel
 //
 // The phone has no window list, tray or workspaces to show, so this bar only
 // reports state: the clock and the unread notifications on the left,
-// connectivity, do-not-disturb and battery on the right. The middle stays empty for the camera cutout. The
-// whole strip is one touch target: a tap or a downward pull opens the quick
-// settings sheet.
+// connectivity, do-not-disturb and battery on the right, never under the
+// front camera's hole (BarStrip.qml). The whole strip is one touch target: a
+// tap or a downward pull opens the quick settings sheet.
 Item {
   id: root
 
@@ -56,6 +56,25 @@ Item {
   }
 
   readonly property string clockFormat: String(setting("clockFormat", "HH:mm"))
+  readonly property string clockText: Qt.formatDateTime(clock.date, clockFormat)
+
+  // The front camera's hole, which nothing in the bar may reach
+  // (StatusModel.cutout): shell.json's bar.cutout ({ "center": 0.5,
+  // "width": 40 }, the centre as a fraction of the width, the width in
+  // logical px; false for none), else the device package's
+  // /usr/share/omamobile/bar-cutout.json with the same keys, else the
+  // default, which fits the centred holes of the supported Pixels.
+  property string deviceCutoutText: ""
+  FileView {
+    path: "/usr/share/omamobile/bar-cutout.json"
+    blockLoading: true
+    printErrors: false
+    watchChanges: true
+    onLoaded: root.deviceCutoutText = text()
+    onLoadFailed: root.deviceCutoutText = ""
+    onFileChanged: reload()
+  }
+  readonly property var cutout: StatusModel.cutout(barConfig, deviceCutoutText)
   // shell.json bar.batteryStyle and bar.statusIcons (StatusModel.batteryStyle
   // and iconShown). The shell hands a new barConfig on
   // `omarchy-shell shell reloadConfig`.
@@ -95,6 +114,7 @@ Item {
   }
   readonly property string networkIcon: StatusModel.networkIcon(networkKind,
     wifiNetwork ? Math.round((wifiNetwork.signalStrength || 0) * 100) : -1)
+  readonly property bool networkDim: networkKind === "off" || networkKind === "disconnected"
 
   // The mobile network, from ModemManager's API through
   // bin/omamobile-cell-watch (omamobile-mmd serves it on the Pixel 7 Pro).
@@ -103,6 +123,7 @@ Item {
   property var cell: null
   readonly property string cellGlyph: StatusModel.cellGlyph(cell)
   readonly property string cellText: StatusModel.cellText(cell)
+  readonly property bool cellSearching: !!cell && cell.state === "searching"
 
   Process {
     id: cellWatch
@@ -229,6 +250,7 @@ Item {
   }
 
   readonly property var btAdapter: Bluetooth.defaultAdapter
+  readonly property bool bluetoothEnabled: !!btAdapter && btAdapter.enabled
   readonly property bool bluetoothConnected: {
     var devices = Bluetooth.devices ? Bluetooth.devices.values : []
     for (var i = 0; i < devices.length; i++)
@@ -240,6 +262,7 @@ Item {
   readonly property bool hasBattery: !!battery && battery.isPresent === true
   readonly property int batteryPercent: hasBattery ? Math.round(battery.percentage * 100) : -1
   readonly property bool charging: hasBattery && battery.state === UPowerDeviceState.Charging
+  readonly property bool batteryFull: hasBattery && battery.state === UPowerDeviceState.FullyCharged
 
   // ------------------------------------------------- Omarchy's power panel
   // A tap on the battery opens Omarchy's own power panel (plugins/panels/power,
@@ -337,306 +360,17 @@ Item {
       WlrLayershell.namespace: "omarchy-bar"
       WlrLayershell.layer: WlrLayer.Top
 
-      // Above the strip's touch area (below), so the call chip takes its
-      // own taps; nothing else in here handles touches, so the rest still
+      // The clock, the call chip, the unread count and the status row
+      // (BarStrip.qml), kept off the camera cutout. Above the strip's touch
+      // area (below), so the items that take taps get them; the rest still
       // reaches the pull-down.
-      Item {
+      BarStrip {
         z: 1
         anchors.fill: parent
-        anchors.leftMargin: Style.spacing.huge
-        anchors.rightMargin: Style.spacing.huge
-
-        Text {
-          id: clockText
-          anchors.left: parent.left
-          anchors.verticalCenter: parent.verticalCenter
-          textFormat: Text.PlainText
-          text: Qt.formatDateTime(clock.date, root.clockFormat)
-          color: root.foreground
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.title
-          font.bold: true
-        }
-
-        // The time card (TimePanel.qml), unseen but for its popup, opened by a
-        // tap on the clock; a pull still opens quick settings.
-        Loader {
-          id: timeCard
-          anchors.fill: clockText
-          active: root.cardsOnTap
-          sourceComponent: TimePanel { bar: root; opacity: 0 }
-        }
-
-        MouseArea {
-          x: clockText.x - Style.space(8)
-          // Nothing past the clock's right edge: the unread count and the
-          // call chip sit there and take their own taps.
-          width: clockText.width + Style.space(8)
-          height: parent.height
-          enabled: root.cardsOnTap
-          property real pressY: 0
-          property bool pulled: false
-          onPressed: function(mouse) { pressY = mouse.y; pulled = false }
-          onPositionChanged: function(mouse) {
-            if (!pulled && mouse.y - pressY > Style.space(14)) { pulled = true; root.openQuickSettings() }
-          }
-          onClicked: if (!pulled && timeCard.item) timeCard.item.toggle()
-          function triggerPress(button) { if (timeCard.item) timeCard.item.toggle() }
-          Component.onCompleted: root.clickTargets = root.clickTargets.concat([this])
-          Component.onDestruction: root.clickTargets = root.clickTargets.filter(function(t) { return t !== this }, this)
-        }
-
-        // The call in progress, beside the clock; a tap opens the Phone
-        // app's in-call screen (the bar is never shown over the lock).
-        Rectangle {
-          id: callChipPill
-          objectName: "callChip"
-          visible: root.callChip !== ""
-          z: 2
-          anchors.left: clockText.right
-          anchors.leftMargin: Style.spacing.lg
-          anchors.verticalCenter: parent.verticalCenter
-          height: Math.round(root.barSize * 0.66)
-          width: chipRow.implicitWidth + Style.spacing.lg * 2
-          radius: height / 2
-          color: chipTap.pressed ? Qt.darker("#1e9e53", 1.2) : "#1e9e53"
-
-          Row {
-            id: chipRow
-            anchors.centerIn: parent
-            spacing: Style.spacing.xs
-            Text { anchors.verticalCenter: parent.verticalCenter; textFormat: Text.PlainText; text: String.fromCodePoint(0xF03F2); color: "white"; font.family: root.fontFamily; font.pixelSize: Style.font.body }
-            Text { anchors.verticalCenter: parent.verticalCenter; textFormat: Text.PlainText; text: root.callChip; color: "white"; font.family: root.fontFamily; font.pixelSize: Style.font.body; font.bold: true }
-          }
-
-          // The bar's full height (44 px), not the 29 px pill, so a tap
-          // just above or below the chip opens the call, not quick settings.
-          MouseArea {
-            id: chipTap
-            anchors.centerIn: parent
-            width: parent.width
-            height: Math.max(parent.height, root.barSize)
-            onClicked: Quickshell.execDetached(["omaphone", "--in-call"])
-          }
-        }
-
-        // Notifications not yet seen in the quick-settings shade: a count in
-        // an accent pill, beside the clock (after the call chip). Not in the
-        // right-hand row: that row grows leftwards with every glyph, and on a
-        // phone with Bluetooth, a modem, Wi-Fi and the battery's percentage
-        // its first item ended under the camera cutout. The strip's tap
-        // opens the shade.
-        Rectangle {
-          objectName: "unreadNotifications"
-          visible: root.showUnread && root.unread > 0
-          anchors.left: callChipPill.visible ? callChipPill.right : clockText.right
-          anchors.leftMargin: Style.spacing.lg
-          anchors.verticalCenter: parent.verticalCenter
-          height: Math.max(18, Math.round(root.barSize * 0.45))
-          width: Math.max(height, unreadText.implicitWidth + Style.spacing.md * 2)
-          radius: height / 2
-          color: Commons.Color.accent
-
-          Text {
-            id: unreadText
-            anchors.centerIn: parent
-            textFormat: Text.PlainText
-            text: String(root.unread)
-            color: root.background
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.body
-            font.bold: true
-          }
-        }
-
-        Row {
-          id: status
-          anchors.right: parent.right
-          anchors.verticalCenter: parent.verticalCenter
-          spacing: Style.spacing.xl
-
-          StatusGlyph {
-            visible: root.showDnd && root.doNotDisturb
-            text: "󰂛"
-          }
-
-          Item {
-            visible: root.showBluetooth && !!root.btAdapter && root.btAdapter.enabled
-            anchors.verticalCenter: parent.verticalCenter
-            implicitWidth: bluetoothGlyph.implicitWidth
-            implicitHeight: barWindow.height
-
-            StatusGlyph {
-              id: bluetoothGlyph
-              text: root.bluetoothConnected ? "󰂱" : "󰂯"
-            }
-
-            // With bar.cardsOnTap, a tap opens quick settings' Bluetooth panel
-            // (not Omarchy's card: the phone's panel makes the phone visible
-            // while it is open and shows the code a pairing asks to confirm);
-            // a pull opens quick settings.
-            MouseArea {
-              anchors.fill: parent
-              anchors.leftMargin: -Style.space(8)
-              anchors.rightMargin: -Style.space(8)
-              enabled: root.cardsOnTap
-              property real pressY: 0
-              property bool pulled: false
-              onPressed: function(mouse) { pressY = mouse.y; pulled = false }
-              onPositionChanged: function(mouse) {
-                if (!pulled && mouse.y - pressY > Style.space(14)) { pulled = true; root.openQuickSettings() }
-              }
-              onClicked: if (!pulled) root.openBluetoothPanel()
-              function triggerPress(button) { root.openBluetoothPanel() }
-              Component.onCompleted: root.clickTargets = root.clickTargets.concat([this])
-              Component.onDestruction: root.clickTargets = root.clickTargets.filter(function(t) { return t !== this }, this)
-            }
-          }
-
-          Item {
-            visible: root.showCell && root.cellGlyph !== ""
-            anchors.verticalCenter: parent.verticalCenter
-            implicitWidth: cellRow.implicitWidth
-            implicitHeight: barWindow.height
-
-            Row {
-              id: cellRow
-              spacing: Style.spacing.xs
-              anchors.verticalCenter: parent.verticalCenter
-              opacity: root.cell && root.cell.state === "searching" ? 0.55 : 1
-
-              StatusGlyph { text: root.cellGlyph }
-              Text {
-                visible: text !== ""
-                anchors.verticalCenter: parent.verticalCenter
-                textFormat: Text.PlainText
-                text: root.cellText
-                color: root.foreground
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.body
-                font.bold: true
-              }
-            }
-
-            // The mobile network card (CellularPanel.qml), unseen but for its popup.
-            Loader {
-              id: cellCard
-              anchors.fill: parent
-              active: root.cardsOnTap
-              sourceComponent: CellularPanel { bar: root; glyph: root.cellGlyph; opacity: 0 }
-            }
-
-            // With bar.cardsOnTap, a tap opens the card; a pull opens quick settings.
-            MouseArea {
-              anchors.fill: parent
-              anchors.leftMargin: -Style.space(8)
-              anchors.rightMargin: -Style.space(8)
-              enabled: root.cardsOnTap
-              property real pressY: 0
-              property bool pulled: false
-              onPressed: function(mouse) { pressY = mouse.y; pulled = false }
-              onPositionChanged: function(mouse) {
-                if (!pulled && mouse.y - pressY > Style.space(14)) { pulled = true; root.openQuickSettings() }
-              }
-              onClicked: if (!pulled && cellCard.item) cellCard.item.toggle()
-              function triggerPress(button) { if (cellCard.item) cellCard.item.toggle() }
-              Component.onCompleted: root.clickTargets = root.clickTargets.concat([this])
-              Component.onDestruction: root.clickTargets = root.clickTargets.filter(function(t) { return t !== this }, this)
-            }
-          }
-
-          Item {
-            visible: root.showWifi && root.networkIcon !== ""
-            anchors.verticalCenter: parent.verticalCenter
-            implicitWidth: networkGlyph.implicitWidth
-            implicitHeight: barWindow.height
-
-            StatusGlyph {
-              id: networkGlyph
-              text: root.networkIcon
-              opacity: root.networkKind === "off" || root.networkKind === "disconnected" ? 0.55 : 1
-            }
-
-            // Omarchy's network panel, unseen but for its popup.
-            Loader {
-              id: networkPanel
-              anchors.fill: parent
-              active: root.cardsOnTap
-              source: "file://" + root.omarchyPath + "/shell/plugins/panels/network/Panel.qml"
-              onLoaded: { item.bar = root; item.opacity = 0 }
-            }
-
-            // With bar.cardsOnTap, a tap opens the card; a pull opens quick settings.
-            MouseArea {
-              anchors.fill: parent
-              anchors.leftMargin: -Style.space(8)
-              anchors.rightMargin: -Style.space(8)
-              enabled: root.cardsOnTap
-              property real pressY: 0
-              property bool pulled: false
-              onPressed: function(mouse) { pressY = mouse.y; pulled = false }
-              onPositionChanged: function(mouse) {
-                if (!pulled && mouse.y - pressY > Style.space(14)) { pulled = true; root.openQuickSettings() }
-              }
-              onClicked: if (!pulled && networkPanel.item) networkPanel.item.toggle()
-              function triggerPress(button) { if (networkPanel.item) networkPanel.item.toggle() }
-              Component.onCompleted: root.clickTargets = root.clickTargets.concat([this])
-              Component.onDestruction: root.clickTargets = root.clickTargets.filter(function(t) { return t !== this }, this)
-            }
-          }
-
-          Item {
-            visible: root.hasBattery
-            anchors.verticalCenter: parent.verticalCenter
-            implicitWidth: batteryItem.implicitWidth
-            implicitHeight: barWindow.height
-
-            // The charging bolt shows in every style (BatteryIndicator).
-            BatteryIndicator {
-              id: batteryItem
-              objectName: "battery"
-              anchors.verticalCenter: parent.verticalCenter
-              style: root.batteryStyle
-              percent: root.batteryPercent
-              charging: root.charging
-              full: root.hasBattery && root.battery.state === UPowerDeviceState.FullyCharged
-              foreground: root.foreground
-              background: root.background
-              urgent: root.urgent
-              fontFamily: root.fontFamily
-              iconPx: Style.font.iconLarge
-              textPx: Style.font.body
-              barSize: root.barSize
-            }
-
-            // Omarchy's power panel, unseen but for its popup.
-            Loader {
-              id: powerPanel
-              anchors.fill: parent
-              active: root.cardsOnTap
-              source: "file://" + root.omarchyPath + "/shell/plugins/panels/power/Panel.qml"
-              onLoaded: { item.bar = root; item.opacity = 0 }
-            }
-
-            // With bar.cardsOnTap, a tap opens the card; a pull opens quick settings.
-            MouseArea {
-              anchors.fill: parent
-              anchors.leftMargin: -Style.space(8)
-              anchors.rightMargin: -Style.space(8)
-              enabled: root.cardsOnTap
-              property real pressY: 0
-              property bool pulled: false
-              onPressed: function(mouse) { pressY = mouse.y; pulled = false }
-              onPositionChanged: function(mouse) {
-                if (!pulled && mouse.y - pressY > Style.space(14)) { pulled = true; root.openQuickSettings() }
-              }
-              onClicked: if (!pulled && powerPanel.item) powerPanel.item.toggle()
-              function triggerPress(button) { if (powerPanel.item) powerPanel.item.toggle() }
-              Component.onCompleted: root.clickTargets = root.clickTargets.concat([this])
-              Component.onDestruction: root.clickTargets = root.clickTargets.filter(function(t) { return t !== this }, this)
-            }
-          }
-        }
+        bar: root
+        cutout: root.cutout
+        screenWidth: barWindow.modelData ? barWindow.modelData.width : width
+        screenHeight: barWindow.modelData ? barWindow.modelData.height : 0
       }
 
       // The whole strip is the touch target. A downward pull past a small
@@ -660,13 +394,5 @@ Item {
         onClicked: if (!pulled && !root.cardsOnTap) root.toggleQuickSettings()
       }
     }
-  }
-
-  component StatusGlyph: Text {
-    anchors.verticalCenter: parent ? parent.verticalCenter : undefined
-    textFormat: Text.PlainText
-    color: root.foreground
-    font.family: root.fontFamily
-    font.pixelSize: Style.font.iconLarge
   }
 }

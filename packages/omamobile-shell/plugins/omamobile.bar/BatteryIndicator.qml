@@ -28,18 +28,34 @@ Row {
   property int textPx: 14
   // Height of the strip the indicator sits in (the bar's 44 px).
   property int barSize: 44
+  // False drops the number beside the glyph (icon-percent) where the bar
+  // has no room for it; the other styles keep what they draw.
+  property bool showText: true
 
   readonly property bool low: StatusModel.batteryLow(percent, charging)
   readonly property color tint: low ? urgent : foreground
   readonly property bool horizontal: style === "horizontal" || style === "horizontal-percent"
   readonly property bool withGlyph: style === "icon" || style === "icon-percent"
-  readonly property bool withText: style === "percent" || style === "icon-percent"
+  readonly property bool withText: style === "percent" || (style === "icon-percent" && showText)
   readonly property bool boltBeside: charging && !withGlyph
   readonly property real level: Math.max(0, Math.min(1, percent / 100))
 
   spacing: Math.max(2, Math.round(textPx * 0.25))
 
+  // The widths the bar fits its row with, from each part's own size (a Row's
+  // width follows what is visible, so it can't say what would fit): the
+  // indicator without the number it may drop, and that number with its gap.
+  readonly property real textWidth: style === "icon-percent" ? spacing + percentText.implicitWidth : 0
+  readonly property real compactWidth: {
+    var parts = [boltBeside ? bolt.implicitWidth : 0, withGlyph ? glyph.implicitWidth : 0,
+                 horizontal ? body.width : 0, style === "percent" ? percentText.implicitWidth : 0]
+    var total = 0, count = 0
+    for (var i = 0; i < parts.length; i++) if (parts[i] > 0) { total += parts[i]; count++ }
+    return total + Math.max(0, count - 1) * spacing
+  }
+
   Text {
+    id: bolt
     objectName: "batteryBolt"
     visible: root.boltBeside
     anchors.verticalCenter: parent.verticalCenter
@@ -51,6 +67,7 @@ Row {
   }
 
   Text {
+    id: glyph
     objectName: "batteryGlyph"
     visible: root.withGlyph
     anchors.verticalCenter: parent.verticalCenter
@@ -153,6 +170,7 @@ Row {
   }
 
   Text {
+    id: percentText
     objectName: "batteryPercent"
     visible: root.withText
     anchors.verticalCenter: parent.verticalCenter

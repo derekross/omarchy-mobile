@@ -516,6 +516,18 @@ if omarchy-done ensure omamobile-menu-keyboard; then
     sed -i '0,/^{/s//{\n  "setup.keyboard": {"icon":"\xf3\xb0\x8c\x8c","label":"Keyboard","title":"On-screen keyboard","description":"Which keyboard to type on","when":"command -v tactus"},\n  "setup.keyboard.squeekboard": {"icon":"\xf3\xb0\x8c\x8c","label":"Standard","description":"Types what you tap, in every language","checked":"[[ $(omamobile-osk which) == squeekboard ]]","action":"omamobile-osk use squeekboard"},\n  "setup.keyboard.tactus": {"icon":"\xf3\xb0\x8c\x8c","label":"Tactus","description":"Corrects words as you type (English)","checked":"[[ $(omamobile-osk which) == tactus ]]","action":"omamobile-osk use tactus"},/' "$extension"
   fi
 fi
+# Text size (omamobile.textsize): one size for the shell, GTK apps, the
+# terminal, Chromium and Grok Bot (omamobile-text-size), and Setup > Text
+# size in Omarchy's menu opening it. Once each.
+if omarchy-done ensure omamobile-textsize-plugin; then
+  add_plugin omamobile.textsize
+fi
+if omarchy-done ensure omamobile-menu-text-size; then
+  extension=~/.config/omarchy/extensions/omarchy-menu.jsonc
+  if [[ -f $extension ]] && ! grep -q '"setup.text-size"' "$extension"; then
+    sed -i '0,/^{/s//{\n  "setup.text-size": {"icon":"\xf3\xb0\x89\xbf","label":"Text size","description":"Bigger or smaller text in the shell, apps and web pages","action":"omarchy-shell shell summon omamobile.textsize '"'"'{}'"'"'"},/' "$extension"
+  fi
+fi
 # Setup > Voice in Omarchy's menu opens the voice settings (omamobile.voice),
 # through the menu extension file. Added once.
 if omarchy-done ensure omamobile-menu-voice; then

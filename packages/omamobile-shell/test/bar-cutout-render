@@ -1,0 +1,178 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Offscreen shots of the status bar's strip (BarStrip.qml) at every text size
+# step, on the supported Pixels' screens upright and two on their side, with
+# a light and a busy set of items, in a dark and a light Omarchy theme. The
+# checks: upright, no shown item's rect reaches the camera cutout's zone and
+# every pixel of the zone's columns is the bar's background (so no glyph's
+# ink runs into it either); on the side there is no zone; the two groups
+# never overlap; the clock and the battery always show; what is hidden is
+# what StatusModel's order sheds first.
+# Runs inside the OWL conformance container, or on a laptop with Omarchy's
+# shell and themes (OMARCHY_SHELL_DIR, OMARCHY_THEMES_DIR), as
+# test/textsize-render does:
+#
+#   docker run --rm --network none -u "$(id -u):$(id -g)" -v "$PWD:/src" \
+#     -v /usr/share/omarchy/themes:/themes:ro -v /usr/share/omarchy/shell:/omarchy-shell:ro \
+#     omamobile-owl-conformance:p1 bash /src/packages/omamobile-shell/test/bar-cutout-render /src/logs/bar-cutout-render
+#
+# test/all runs it when OMAMOBILE_BAR_CUTOUT_RENDER names an output directory.
+set -euo pipefail
+out=${1:?Usage: bar-cutout-render OUTDIR}
+here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+shell_dir=${OMARCHY_SHELL_DIR:-/omarchy-shell}
+themes=${OMARCHY_THEMES_DIR:-/themes}
+[[ -d $shell_dir && -d $themes ]] || { echo "bar-cutout-render: needs $shell_dir and $themes (the container's mounts)" >&2; exit 2; }
+command -v quickshell >/dev/null || { echo "bar-cutout-render: no quickshell" >&2; exit 2; }
+mkdir -p "$out"
+out=$(cd -- "$out" && pwd)
+: >"$out/bar-cutout-render.txt"
+tmp=$(mktemp -d)
+trap 'rm -rf -- "$tmp"' EXIT
+export XDG_RUNTIME_DIR=$tmp/xdg QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software QML_DISABLE_DISK_CACHE=1
+mkdir -p "$XDG_RUNTIME_DIR"; chmod 700 "$XDG_RUNTIME_DIR"
+
+h=$tmp/harness
+mkdir -p "$h"
+# Omarchy's Commons and Ui, with its palette qualified as on the phone
+# (Qt 6.12's QtQuick Color shadows a bare `Color.`; AGENTS.md, Userspace).
+for m in Commons Ui services; do cp -r "$shell_dir/$m" "$h/$m"; done
+find "$h/Commons" "$h/Ui" "$h/services" -name '*.qml' -exec sed -i -E \
+  -e 's/(^|[^.[:alnum:]_])Color\./\1Commons.Color./g' \
+  -e '0,/^import qs\.Commons$/s//import qs.Commons\nimport qs.Commons as Commons/' {} +
+for f in "$h"/Commons/*.qml; do grep -c '^import qs.Commons as Commons' "$f" >/dev/null || sed -i '0,/^import QtQuick$/s//import QtQuick\nimport qs.Commons as Commons/' "$f"; done
+cp -r "$here/../plugins/omamobile.bar" "$h/bar"
+cp "$here/bar-cutout-render.qml" "$h/"
+
+status=0
+for theme in tokyo-night catppuccin-latte; do
+  for step in smaller:11 default:12 large:14 larger:16 largest:18; do
+    name=${step%%:*} px=${step#*:}
+    home=$tmp/home-$theme-$name
+    mkdir -p "$home/.local/state/omarchy/current" "$home/.config/omarchy"
+    ln -sfn "$themes/$theme" "$home/.local/state/omarchy/current/theme"
+    # The shell's base size the step sets (omamobile-text-size)
+    [[ $name == default ]] || printf '[font]\nbase-size = %s\n' "$px" >"$home/.config/omarchy/shell.toml"
+    python3 - "$out" "$theme" "$name" >"$h/job-$theme-$name.json" <<'PY'
+import json, sys
+out, theme, step = sys.argv[1:]
+# Logical screens: the Pixel 9a at its monitor scale of 3 and at 8/3, the
+# Pixel 8 Pro and the Pixel 7 Pro at 3; on its side, the 9a and the 7 Pro.
+screens = [("tegu", 360, 808), ("tegu-8-3", 405, 909), ("husky", 448, 997), ("cheetah", 480, 1040),
+           ("tegu-side", 808, 360), ("cheetah-side", 1040, 480)]
+states = {
+    # The owner's palmtop: Bluetooth on, LTE, Wi-Fi, 58 %, two unread.
+    "owner": {"bluetooth": "on", "cellTech": "LTE", "wifi": True, "percent": 58, "unread": 2},
+    # Everything at once, at its widest.
+    "busy": {"dnd": True, "bluetooth": "connected", "cellTech": "LTE R", "wifi": True, "percent": 100, "charging": True,
+             "clock": "12:59 PM", "call": "1:02:05", "unread": 12},
+    # The number alone is the battery: it never goes.
+    "busy-percent": {"dnd": True, "bluetooth": "connected", "cellTech": "5G", "wifi": True, "percent": 100,
+                     "batteryStyle": "percent", "clock": "12:59 PM", "call": "On hold", "unread": 3},
+}
+shots = []
+for screen, w, hgt in screens:
+    for state, s in states.items():
+        nm = "%s-%s-%s" % (step, screen, state)
+        shots.append({"name": nm, "png": "%s/bar-cutout-%s-%s.png" % (out, nm, theme), "w": w, "h": hgt, "state": s})
+print(json.dumps({"shots": shots}))
+PY
+    HOME=$home QT_SCALE_FACTOR=3 BAR_JOB="$h/job-$theme-$name.json" timeout 180 quickshell -p "$h/bar-cutout-render.qml" >"$h/log-$theme-$name" 2>&1 || true
+    grep -E "shot |geometry |Error|TypeError|ReferenceError|Binding loop" "$h/log-$theme-$name" | sed -E 's/^.*(shot |geometry |Error|TypeError|ReferenceError|Binding loop)/\1/' >>"$out/bar-cutout-render.txt" || true
+    python3 - "$h/log-$theme-$name" "$theme" "$name" "$h/job-$theme-$name.json" "$here/../plugins/omamobile.bar/StatusModel.js" <<'PY' || status=1
+import json, re, struct, sys, zlib
+log, theme, step, jobfile, model = sys.argv[1:]
+text = open(log).read()
+job = json.load(open(jobfile))
+js = open(model).read()
+order = {side: json.loads(re.search(r"var %s = (\[[^\]]*\])" % var, js).group(1))
+         for side, var in (("left", "LEFT_SHED"), ("right", "RIGHT_SHED"))}
+
+def png_rows(path):
+    # A plain PNG decoder for Qt's 8-bit RGB(A) shots, no libraries.
+    data = open(path, "rb").read()
+    assert data[:8] == b"\x89PNG\r\n\x1a\n"
+    pos, idat, w = 8, b"", 0
+    while pos < len(data):
+        n, kind = struct.unpack(">I4s", data[pos:pos + 8])
+        body = data[pos + 8:pos + 8 + n]
+        if kind == b"IHDR":
+            w, h, depth, ctype = struct.unpack(">IIBB", body[:10])
+            assert depth == 8 and ctype in (2, 6), (depth, ctype)
+            bpp = 4 if ctype == 6 else 3
+        elif kind == b"IDAT":
+            idat += body
+        pos += 12 + n
+    raw = zlib.decompress(idat)
+    stride = w * bpp
+    rows, prev = [], bytearray(stride)
+    for y in range(h):
+        f = raw[y * (stride + 1)]
+        line = bytearray(raw[y * (stride + 1) + 1:(y + 1) * (stride + 1)])
+        for i in range(stride):
+            a = line[i - bpp] if i >= bpp else 0
+            b = prev[i]
+            c = prev[i - bpp] if i >= bpp else 0
+            if f == 1: line[i] = (line[i] + a) & 255
+            elif f == 2: line[i] = (line[i] + b) & 255
+            elif f == 3: line[i] = (line[i] + (a + b) // 2) & 255
+            elif f == 4:
+                p = a + b - c
+                pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
+                line[i] = (line[i] + (a if pa <= pb and pa <= pc else b if pb <= pc else c)) & 255
+        rows.append(bytes(line))
+        prev = line
+    return w, h, bpp, rows
+
+bad = [l for l in text.splitlines() if re.search(r"(TypeError|ReferenceError|is not a type|Error:|Binding loop)", l)]
+shots = {m.group(1): (int(m.group(2)), json.loads(m.group(4)))
+         for m in re.finditer(r"geometry (\S+) (\d+)x(\d+) (\{.*\})", text)}
+ok = len(shots) == len(job["shots"]) and not bad
+if len(shots) != len(job["shots"]):
+    print("not ok - %s %s: %d of %d shots taken" % (theme, step, len(shots), len(job["shots"])))
+for s in job["shots"]:
+    if s["name"] not in shots: continue
+    w, g = shots[s["name"]]
+    upright = s["h"] > s["w"]
+    items = {i["name"]: i for i in g["items"]}
+    why = []
+    zone = g["zone"]
+    if upright and not zone: why.append("no zone upright")
+    if not upright and zone: why.append("a zone on its side")
+    for i in g["items"]:
+        if zone and i["x"] + i["w"] > zone["left"] + 0.01 and i["x"] < zone["right"] - 0.01:
+            why.append("%s at %.1f-%.1f in the zone %.1f-%.1f" % (i["name"], i["x"], i["x"] + i["w"], zone["left"], zone["right"]))
+        if i["x"] < 0 or i["x"] + i["w"] > w + 0.01: why.append("%s off the strip" % i["name"])
+    if "barClock" not in items: why.append("no clock")
+    if "barBattery" not in items: why.append("no battery")
+    lefts = [items[n] for n in ("barClock", "callChip", "unreadNotifications") if n in items]
+    rights = [i for n, i in items.items() if n.startswith("bar") and n != "barClock"]
+    if lefts and rights and max(i["x"] + i["w"] for i in lefts) > min(i["x"] for i in rights) + 0.01:
+        why.append("the groups overlap")
+    present = {p["id"] for p in g["present"] if p["w"] > 0}
+    for side in ("left", "right"):
+        gone = [i for i in order[side] if i in present and not g["show"].get(i)]
+        # an attached item goes with its glyph: count it as shed with it
+        firsts = [i for i in order[side] if i in present][:len(gone)]
+        if sorted(gone) != sorted(firsts): why.append("%s shed out of order: %s" % (side, gone))
+    if s["state"].get("batteryStyle") == "percent" and "batteryText" in present: why.append("the percent style's number counted as sheddable")
+    if not upright and s["name"].endswith("-owner") and any(not g["show"].get(i) for i in present):
+        why.append("on its side the owner's items should all fit")
+    if zone:
+        pw, ph, bpp, rows = png_rows(s["png"])
+        k = pw / w
+        bg = rows[0][bpp:2 * bpp]
+        x0, x1 = int(zone["left"] * k), int(-(-zone["right"] * k // 1))
+        ink = [x for x in range(max(0, x0), min(pw, x1)) if any(r[x * bpp:(x + 1) * bpp] != bg for r in rows)]
+        if ink: why.append("ink in the zone at png x %d-%d" % (ink[0], ink[-1]))
+    shed = sorted(i for i in present if not g["show"].get(i))
+    print("%s - %s %s: %s%s" % ("not ok" if why else "ok", theme, s["name"],
+        "shed " + ",".join(shed) if shed else "nothing shed", "; " + "; ".join(why) if why else ""))
+    ok = ok and not why
+for l in bad:
+    print("  " + l)
+sys.exit(0 if ok else 1)
+PY
+  done
+done
+exit $status

@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "id": "omamobile.textsize",
+  "name": "Text size",
+  "version": "0.1.0",
+  "author": "Omamobile",
+  "license": "MIT",
+  "description": "The phone's Text size page: five sizes from Smaller to Largest, each drawn at its own size, a preview line and a note on what changes when. Runs omamobile-text-size, which sets the shell, GTK apps, the terminal, Chromium and Grok Bot together.",
+  "kinds": ["panel"],
+  "keepLoaded": true,
+  "entryPoints": {
+    "panel": "TextSize.qml"
+  }
+}

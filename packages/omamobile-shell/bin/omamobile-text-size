@@ -1,0 +1,315 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""One text size for the whole phone (Setup > Text size).
+
+  omamobile-text-size [get]       the chosen step (default when none is)
+  omamobile-text-size get --json  the step and every step, for the Setup page
+  omamobile-text-size set STEP    smaller, default, large, larger or largest
+
+A step is a size in px against the shell's default 12 px, and the same step
+goes everywhere that can follow one setting, with Omarchy's own anchors
+(omarchy-display-text-size: 12 px = GTK 1.0 = a 9 pt terminal):
+
+  - the shell: [font] base-size in ~/.config/omarchy/shell.toml, the user
+    override Omarchy layers over every theme (a theme change keeps it). The
+    shell watches the file, so the bar, menus and sheets change at once, and
+    so does anything else that reads it (the Settings app, when reopened);
+  - GTK apps: org.gnome.desktop.interface text-scaling-factor, rounded so the
+    interface font lands on a whole point size, as Omarchy does;
+  - the terminal: the font size line foot.ini (and alacritty.toml,
+    ghostty's config or kitty.conf, where they have one) already has;
+  - Chromium and Grok Bot (and the web apps that run in Chromium): their
+    fitted --force-device-scale-factor (omamobile-browser-setup) times the
+    step, so pages follow too. The fit is done again at each login, always
+    times the step, so a new fit never undoes the owner's choice.
+
+Default puts each back as shipped: the theme's base size, GTK's own factor,
+a 9 pt terminal and the fitted browser scale. The step is kept in
+~/.config/omamobile/text-size. Each value is written only when it differs,
+so a second run with the same step changes nothing. Open apps and terminals
+keep the size they started with until they are reopened.
+"""
+import importlib.machinery
+import importlib.util
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+
+sys.dont_write_bytecode = True
+
+# name, label, px (the shell's base size; 12 is Omarchy's default)
+STEPS = (
+    ("smaller", "Smaller", 11),
+    ("default", "Default", 12),
+    ("large", "Large", 14),
+    ("larger", "Larger", 16),
+    ("largest", "Largest", 18),
+)
+DEFAULT_PX = 12
+TERMINAL_PT = 9  # Omarchy's terminals at 12 px
+SCHEMA = "org.gnome.desktop.interface"
+
+
+def step_scale(px):
+    return f"{px / DEFAULT_PX:.4f}"
+
+
+def browser_setup():
+    path = Path(os.environ.get("OMAMOBILE_BROWSER_SETUP") or Path(__file__).resolve().with_name("omamobile-browser-setup"))
+    loader = importlib.machinery.SourceFileLoader("omamobile_browser_setup", str(path))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+def write_if_changed(path, before, after):
+    # In place through a link (a dotfile setup keeps its link); a new file
+    # next to the real one, then renamed, so a reader never sees half of it.
+    if after == before:
+        return False
+    real = path.resolve()
+    real.parent.mkdir(parents=True, exist_ok=True)
+    tmp = real.with_name("." + real.name + ".omamobile-text-size")
+    tmp.write_text(after)
+    os.replace(tmp, real)
+    return True
+
+
+def read(path):
+    try:
+        return path.read_text()
+    except FileNotFoundError:
+        return None
+
+
+# ---------------------------------------------------------------- the step
+
+
+def state_path(home):
+    return home / ".config/omamobile/text-size"
+
+
+def chosen(home):
+    text = read(state_path(home)) or ""
+    match = re.search(r"^step=([a-z]+)[ \t]*$", text, re.M)
+    names = [name for name, _, _ in STEPS]
+    return match[1] if match and match[1] in names else None
+
+
+def record(home, name, px):
+    path = state_path(home)
+    text = ("# The phone's text size: Setup > Text size, or omamobile-text-size set STEP.\n"
+            f"step={name}\nscale={step_scale(px)}\n")
+    return write_if_changed(path, read(path), text)
+
+
+# ---------------------------------------------------------------- the shell
+
+
+def shell_toml(text, px):
+    # base-size under [font]: replaced, added to [font], or a new [font];
+    # px None takes the line out (the theme's size). Other keys stay.
+    lines = text.splitlines(keepends=True) if text else []
+    out = []
+    in_font = False
+    done = px is None
+    line_for = f"base-size = {px}\n"
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("["):
+            if in_font and not done:
+                out.append(line_for)
+                done = True
+            in_font = re.match(r"^\[font\]\s*(#.*)?$", stripped) is not None
+        elif in_font and re.match(r"^base-size\s*=", stripped):
+            if not done:
+                out.append(line_for)
+                done = True
+            continue
+        out.append(line)
+    if not done:
+        if in_font:
+            if out and not out[-1].endswith("\n"):
+                out[-1] += "\n"
+            out.append(line_for)
+        else:
+            if out and not out[-1].endswith("\n"):
+                out[-1] += "\n"
+            out.append(("\n" if out else "") + "[font]\n" + line_for)
+    text = "".join(out)
+    if px is None:  # a [font] left with nothing in it goes too
+        text = re.sub(r"\n?^\[font\][ \t]*\n(?:[ \t]*\n)*(?=\[|\Z)", "", text, flags=re.M)
+    return text
+
+
+def apply_shell(home, px):
+    path = home / ".config/omarchy/shell.toml"
+    before = read(path)
+    if before is None and px is None:
+        return False
+    return write_if_changed(path, before or "", shell_toml(before or "", px))
+
+
+# ---------------------------------------------------------------- GTK
+
+
+def gsettings(*args):
+    try:
+        result = subprocess.run(["gsettings", *args], capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
+def gtk_factor(px):
+    # Omarchy's rounding: the interface font at a whole point size (GTK 4
+    # menus clip fractional ones).
+    name = (gsettings("get", SCHEMA, "font-name") or "").strip("'")
+    try:
+        points = float(name.rsplit(" ", 1)[-1])
+    except ValueError:
+        points = 11.0
+    if points <= 0:
+        points = 11.0
+    return int(points * px / DEFAULT_PX + 0.5) / points
+
+
+def apply_gtk(px):
+    current = gsettings("get", SCHEMA, "text-scaling-factor")
+    if current is None:
+        return None  # no gsettings or no schema
+    target = 1.0 if px == DEFAULT_PX else gtk_factor(px)
+    try:
+        if abs(float(current) - target) < 0.00005:
+            return False
+    except ValueError:
+        pass
+    if px == DEFAULT_PX:
+        gsettings("reset", SCHEMA, "text-scaling-factor")
+    else:
+        gsettings("set", SCHEMA, "text-scaling-factor", f"{target:.4f}")
+    return True
+
+
+# ---------------------------------------------------------------- terminals
+
+# Each config's own size line, only where the file already has one: foot's
+# font lines (every font in them, :size=), alacritty's, ghostty's and kitty's.
+def _sized(pattern):
+    return lambda text, pt: re.sub(pattern, lambda m: m[1] + pt, text)
+
+
+def _foot(text, pt):
+    return re.sub(r"(?m)^[ \t]*font(?:-[a-z]+)?[ \t]*=.*$",
+                  lambda line: re.sub(r"(:size=)[0-9.]+", lambda m: m[1] + pt, line[0]), text)
+
+
+TERMINALS = (
+    ("foot", ".config/foot/foot.ini", _foot, None),
+    ("alacritty", ".config/alacritty/alacritty.toml", _sized(r"(?m)^([ \t]*size[ \t]*=[ \t]*)[0-9.]+"), None),
+    ("ghostty", ".config/ghostty/config", _sized(r"(?m)^([ \t]*font-size[ \t]*=[ \t]*)[0-9.]+"), ("-USR2", "ghostty")),
+    ("kitty", ".config/kitty/kitty.conf", _sized(r"(?m)^([ \t]*font_size[ \t]+)[0-9.]+"), ("-USR1", "kitty")),
+)
+
+
+def terminal_pt(px):
+    return int(px * TERMINAL_PT / DEFAULT_PX + 0.5)
+
+
+def apply_terminals(home, px):
+    changed = []
+    pt = str(terminal_pt(px))
+    for name, relative, rewrite, reload in TERMINALS:
+        path = home / relative
+        before = read(path)
+        if before is None:
+            continue
+        if write_if_changed(path, before, rewrite(before, pt)):
+            changed.append(name)
+            if reload:  # these two read their config again on a signal
+                try:
+                    subprocess.run(["pkill", reload[0], "-x", reload[1]], capture_output=True, timeout=5)
+                except (OSError, subprocess.SubprocessError):
+                    pass
+    return changed
+
+
+# ---------------------------------------------------------------- commands
+
+
+def usage():
+    print("Usage: omamobile-text-size [get [--json]] | set " + "|".join(n for n, _, _ in STEPS), file=sys.stderr)
+    return 2
+
+
+def get(home, as_json):
+    name = chosen(home)
+    if not as_json:
+        print(name or "default")
+        return 0
+    print(json.dumps({
+        "step": name or "default",
+        "chosen": name is not None,
+        "steps": [{"name": n, "label": label, "px": px, "scale": float(step_scale(px))} for n, label, px in STEPS],
+    }))
+    return 0
+
+
+def set_step(home, name):
+    step = next((s for s in STEPS if s[0] == name), None)
+    if step is None:
+        return usage()
+    _, label, px = step
+    errors = []
+    record(home, name, px)
+    print(f"Text size: {label}")
+
+    try:
+        apply_shell(home, None if px == DEFAULT_PX else px)
+        print(f"  shell: {'the theme' + chr(39) + 's size' if px == DEFAULT_PX else str(px) + ' px'}, now")
+    except OSError as error:
+        errors.append(f"shell: {error}")
+
+    gtk = apply_gtk(px)
+    if gtk is None:
+        print("  GTK apps: no gsettings, left as they are")
+    else:
+        print(f"  GTK apps: {gsettings('get', SCHEMA, 'text-scaling-factor') or '?'}, most at once, some when reopened")
+
+    try:
+        apply_terminals(home, px)
+        print(f"  terminal: {terminal_pt(px)} pt, when reopened")
+    except OSError as error:
+        errors.append(f"terminal: {error}")
+
+    try:
+        factor = browser_setup().apply_text_scale(home, step_scale(px))
+        if factor:
+            print(f"  Chromium, web apps and Grok Bot: scale {factor}, when reopened")
+        else:
+            print("  Chromium, web apps and Grok Bot: at the next login (the screen's size isn't known yet)")
+    except (OSError, ValueError, ImportError, SyntaxError) as error:
+        errors.append(f"browsers: {error}")
+
+    for error in errors:
+        print(f"omamobile-text-size: {error}", file=sys.stderr)
+    return 1 if errors else 0
+
+
+def main(argv):
+    home = Path.home()
+    if not argv or argv == ["get"]:
+        return get(home, False)
+    if argv == ["get", "--json"]:
+        return get(home, True)
+    if len(argv) == 2 and argv[0] == "set":
+        return set_step(home, argv[1])
+    return usage()
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

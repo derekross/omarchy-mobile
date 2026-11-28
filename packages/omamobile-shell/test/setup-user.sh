@@ -493,6 +493,18 @@ for name, label in (("squeekboard", "Standard"), ("tactus", "Tactus")):
     assert row["checked"] == "[[ $(omamobile-osk which) == %s ]]" % name, row
 PY
 [[ $(grep -c '"setup.keyboard"' "$H/.config/omarchy/extensions/omarchy-menu.jsonc") == 1 ]] || fail "Setup > Keyboard is added once"
+python3 -I - "$H/.config/omarchy/extensions/omarchy-menu.jsonc" "$H/.config/omarchy/shell.json" <<'PY' || fail "Setup > Text size opens the text size page"
+import json, re, sys
+text = open(sys.argv[1]).read()
+text = re.sub(r"(?m)^\s*//.*$", "", text)
+text = re.sub(r",(\s*[}\]])", r"\1", text)
+row = json.loads(text)["setup.text-size"]
+assert row["label"] == "Text size" and row["icon"] == "\U000f027f", row
+assert row["action"] == "omarchy-shell shell summon omamobile.textsize '{}'", row
+plugins = [p.get("id") for p in json.load(open(sys.argv[2]))["plugins"]]
+assert plugins.count("omamobile.textsize") == 1, plugins
+PY
+[[ $(grep -c '"setup.text-size"' "$H/.config/omarchy/extensions/omarchy-menu.jsonc") == 1 ]] || fail "Setup > Text size is added once"
 # A user from before 0.2.134: the line this script wrote is changed once, a line of their own is not
 ho2=$t/keyboard-old; mkdir -p "$ho2/.config/hypr" "$ho2/.config/omarchy/extensions" "$ho2/.local/state/omarchy/done"
 cp "$H"/.config/hypr/{looknfeel,monitors}.lua "$ho2/.config/hypr/"

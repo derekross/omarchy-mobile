@@ -99,3 +99,91 @@ assert.strictEqual(M.batteryLow(10, true), false, "charging is never the low col
 assert.strictEqual(M.batteryLow(11, false), false)
 assert.strictEqual(M.batteryLow(-1, false), false, "no reading is not low")
 console.log("ok - status model: battery styles, icon switches, the bolt")
+
+// The camera cutout: shell.json's bar.cutout over the device package's file
+// over the default, which keeps the Pixels' centred holes clear.
+assert.deepStrictEqual(M.cutout(undefined, ""), { center: 0.5, width: 40 }, "the default")
+assert.deepStrictEqual(M.cutout({}, undefined), M.CUTOUT_DEFAULT)
+assert.deepStrictEqual(M.cutout({ cutout: { center: 0.4, width: 30 } }, ""), { center: 0.4, width: 30 })
+assert.deepStrictEqual(M.cutout({ cutout: { width: 52 } }, ""), { center: 0.5, width: 52 }, "one key; the other from below")
+assert.strictEqual(M.cutout({ cutout: false }, ""), null, "false: no cutout")
+assert.strictEqual(M.cutout({ cutout: { width: 0 } }, ""), null, "width 0: no cutout")
+assert.deepStrictEqual(M.cutout({ cutout: { center: 2, width: -1 } }, ""), M.CUTOUT_DEFAULT, "out of range keeps what is below")
+assert.deepStrictEqual(M.cutout({ cutout: { center: "0.25", width: "36" } }, ""), { center: 0.25, width: 36 }, "numbers as strings")
+assert.deepStrictEqual(M.cutout({ cutout: { center: true, width: null } }, ""), M.CUTOUT_DEFAULT)
+assert.deepStrictEqual(M.cutout({ cutout: "wide" }, ""), M.CUTOUT_DEFAULT, "not an object: ignored")
+assert.deepStrictEqual(M.cutout({}, '{"center": 0.5, "width": 46}\n'), { center: 0.5, width: 46 }, "the device package's file")
+assert.deepStrictEqual(M.cutout({ cutout: { width: 30 } }, '{"center": 0.3, "width": 46}'), { center: 0.3, width: 30 }, "shell.json over the device's file, key by key")
+assert.strictEqual(M.cutout({}, "false"), null, "a device without a hole")
+assert.deepStrictEqual(M.cutout({ cutout: { width: 30 } }, "false"), { center: 0.5, width: 30 }, "the owner's cutout on a device without one")
+assert.deepStrictEqual(M.cutout({}, "{torn"), M.CUTOUT_DEFAULT, "a torn file: the default")
+assert.deepStrictEqual(M.cutoutZone(M.CUTOUT_DEFAULT, 360, 360, 808), { left: 160, right: 200 }, "upright on the 9a at scale 3")
+assert.deepStrictEqual(M.cutoutZone({ center: 0.25, width: 20 }, 400, 400, 900), { left: 90, right: 110 })
+assert.strictEqual(M.cutoutZone(M.CUTOUT_DEFAULT, 808, 808, 360), null, "on its side the hole is at a short edge, not in the bar")
+assert.strictEqual(M.cutoutZone(null, 360, 360, 808), null)
+assert.deepStrictEqual(M.cutoutZone(M.CUTOUT_DEFAULT, 360, 360, 0), { left: 160, right: 200 }, "a screen of no known size keeps the zone")
+assert.strictEqual(M.cutoutZone(M.CUTOUT_DEFAULT, 0, 360, 808), null, "no width yet")
+console.log("ok - status model: the camera cutout's zone")
+
+// Fitting the bar's two sides beside the zone (widths as the strip measures
+// them at Large on the 9a, rounded). An attached item (the words beside a
+// glyph) carries its own gap and goes with its glyph.
+const right = (o) => [
+  { id: "dnd", w: o.dnd || 0 }, { id: "bluetooth", w: o.bluetooth || 0 }, { id: "cell", w: o.cell || 0 },
+  { id: "cellText", w: o.cellText || 0, attach: true }, { id: "wifi", w: o.wifi || 0 },
+  { id: "battery", w: o.battery || 0 }, { id: "batteryText", w: o.batteryText || 0, attach: true }]
+const left = (o) => [{ id: "clock", w: o.clock || 0 }, { id: "call", w: o.call || 0 }, { id: "unread", w: o.unread || 0 }]
+const owner = { bluetooth: 13, cell: 17, cellText: 28, wifi: 21, battery: 14, batteryText: 29 }
+assert.strictEqual(M.rowWidth(right(owner), {}, 12), 13 + 17 + 28 + 21 + 14 + 29 + 3 * 12, "four items, three gaps")
+assert.strictEqual(M.rowWidth(right(owner), { cell: true }, 12), 13 + 21 + 14 + 29 + 2 * 12, "the words go with their glyph")
+const bar = (o) => M.fitBar(Object.assign({ width: 360, margin: 21, zone: { left: 160, right: 200 }, groupGap: 12,
+                                            leftSpacing: 9, rightSpacing: 12 }, o))
+const shown = (fit, ids) => ids.filter((id) => fit.show[id])
+let f = bar({ left: left({ clock: 48, unread: 22 }), right: right(owner) })
+assert.strictEqual(f.rightRoom, 139)
+assert.strictEqual(f.leftRoom, 139)
+assert.deepStrictEqual(shown(f, ["bluetooth", "cell", "cellText", "wifi", "battery", "batteryText"]),
+  ["bluetooth", "cell", "wifi", "battery", "batteryText"], "the owner's palmtop at Large: LTE goes first")
+assert.ok(f.right <= f.rightRoom && f.fits)
+assert.deepStrictEqual(shown(f, ["clock", "unread"]), ["clock", "unread"])
+// Wider: each step sheds the next in the order, never the battery.
+// All of it is 185 px; without the words 157, then 128, 103, 76, 43 and 14.
+const steps = [[185, []], [160, ["cellText"]], [130, ["cellText", "batteryText"]], [110, ["cellText", "batteryText", "bluetooth"]],
+               [80, ["cellText", "batteryText", "bluetooth", "dnd"]], [50, ["cellText", "batteryText", "bluetooth", "dnd", "wifi"]],
+               [20, ["cellText", "batteryText", "bluetooth", "dnd", "wifi", "cell"]]]
+const all = { dnd: 15, bluetooth: 13, cell: 17, cellText: 28, wifi: 21, battery: 14, batteryText: 29 }
+for (const [room, gone] of steps) {
+  const r = M.fitRow(right(all), room, 12, M.RIGHT_SHED)
+  assert.deepStrictEqual(M.RIGHT_SHED.filter((id) => !r.show[id]), gone, "room " + room)
+  assert.strictEqual(r.show.battery, true, "the battery stays at room " + room)
+}
+assert.strictEqual(M.fitRow(right(all), 10, 12, M.RIGHT_SHED).fits, false, "the battery alone is wider than 10: it stays all the same")
+// What isn't there is not shed: with no words, Bluetooth is the first to go.
+let r = M.fitRow(right({ bluetooth: 13, cell: 17, wifi: 21, battery: 14 }), 80, 12, M.RIGHT_SHED)
+assert.deepStrictEqual(["bluetooth", "cell", "wifi", "battery"].filter((id) => !r.show[id]), ["bluetooth"])
+assert.strictEqual(r.show.dnd, false, "absent, so not shown")
+// The left: the unread count before the call; the clock always stays.
+f = bar({ left: left({ clock: 48, call: 96, unread: 22 }), right: right(owner) })
+assert.deepStrictEqual(shown(f, ["clock", "call", "unread"]), ["clock"], "a 96 px call chip doesn't fit beside a 48 px clock in 139")
+f = bar({ left: left({ clock: 48, call: 70, unread: 22 }), right: right(owner) })
+assert.deepStrictEqual(shown(f, ["clock", "call", "unread"]), ["clock", "call"], "the count goes first")
+f = bar({ left: left({ clock: 200 }), right: right(owner) })
+assert.strictEqual(f.show.clock, true, "the clock stays even where it can't fit")
+assert.strictEqual(f.fits, false)
+// On its side there is no zone: the right row keeps room for what it never
+// sheds, the left side fits in the rest, and the two never meet.
+f = bar({ width: 808, zone: null, left: left({ clock: 48, call: 96, unread: 22 }), right: right(all) })
+assert.strictEqual(Object.values(f.show).every(Boolean), true, "808 px wide: everything")
+assert.ok(f.left + 12 + f.right <= 808 - 2 * 21)
+f = bar({ width: 200, zone: null, left: left({ clock: 48, call: 96, unread: 22 }), right: right(all) })
+assert.ok(f.left + 12 + f.right <= 200 - 2 * 21 || !f.fits)
+assert.strictEqual(f.show.battery && f.show.clock, true)
+// A zone in a margin, or off the bar, is no zone for the content.
+f = bar({ zone: { left: -40, right: 0 }, left: left({ clock: 48 }), right: right(owner) })
+assert.strictEqual(f.zone, null)
+// Off-centre: each side gets what is left of it.
+f = bar({ zone: { left: 60, right: 100 }, left: left({ clock: 48, unread: 22 }), right: right(owner) })
+assert.strictEqual(f.leftRoom, 39)
+assert.strictEqual(f.rightRoom, 239)
+assert.deepStrictEqual(shown(f, ["clock", "unread"]), ["clock"])
+console.log("ok - status model: the bar sheds, in order, what doesn't fit beside the cutout")

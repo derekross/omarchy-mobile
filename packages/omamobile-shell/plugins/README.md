@@ -13,7 +13,7 @@ logical at scale 3).
 
 | Plugin | Kind | What it is |
 | --- | --- | --- |
-| `omamobile.bar` | `bar` | Status bar: clock, connectivity, battery; tap or pull down for quick settings, or with `cardsOnTap` a tap on an item for its card |
+| `omamobile.bar` | `bar` | Status bar: clock, connectivity, battery, never under the camera's hole; tap or pull down for quick settings, or with `cardsOnTap` a tap on an item for its card |
 | `omamobile.quicksettings` | `panel` (keepLoaded) | Pull-down sheet: up to 21 tiles the user arranges, brightness and volume, a Settings gear, media controls and the notification history; Wi-Fi picker and Bluetooth panel |
 | `omamobile.launcher` | `panel` (keepLoaded) | Home bar: app search, app grid and coding-agent prompt in one input |
 | `omamobile.home` | `panel` (keepLoaded) | Home screens: pages of apps and widgets on the wallpaper, with an edit mode |
@@ -24,6 +24,7 @@ logical at scale 3).
 | `omamobile.access` | `panel` (keepLoaded) | The permission sheet: xdg-desktop-portal's "Allow Camera to use the camera?", in place of GTK's desktop dialog |
 | `omamobile.back` | `panel` (keepLoaded) | The back gesture: swipe in from the left or right edge for Escape; an app at its top level then asks for home (`omamobile-home`) |
 | `omamobile.mobilenetwork` | `panel` (keepLoaded) | The Mobile network page: carrier, signal, mobile data, data roaming, the APN and (under Advanced) the attach APN, the SIM PIN lock; Setup > Mobile network or the Mobile data tile's chevron. "No modem" without the modem stack (docs/TELEPHONY-APPS-PLAN.md 7.6) |
+| `omamobile.textsize` | `panel` (keepLoaded) | The Text size page: Smaller to Largest, each drawn at its own size, a preview line and what changes when; Setup > Text size. Runs `omamobile-text-size` ([README](../README.md#text-size)) |
 | lockpad | none | Not built; see [Lock screen](#lock-screen-pin-pad) for why and what upstream needs |
 
 ## Enabling
@@ -53,8 +54,32 @@ size if larger), anchored to the top, and reserves its height so windows tile
 below it. Left: the clock, then the unread notification count (when there
 is one). Right: do-not-disturb (when on), Bluetooth (when on), cellular
 signal (when a modem exists), Wi-Fi or Ethernet, battery glyph and
-percentage. The centre is left empty for the camera cutout; the count is on
-the left because the right-hand row grows towards it with every glyph.
+percentage. The count is on the left because the right-hand row grows
+towards the centre with every glyph.
+
+**The camera cutout:** nothing in the bar is ever drawn under the front
+camera's hole. The bar keeps a zone clear (`cutout` below): the left group
+ends before it and the right row starts after it, measured from each item's
+own text at the current text size (`BarStrip.qml`, `StatusModel.fitBar`).
+Where a side has no room it sheds items rather than run into the hole, and
+they come back when there is room again. The right row sheds, first to last,
+the network type ("LTE"), the battery's number, Bluetooth, do-not-disturb,
+Wi-Fi and the signal; the battery always stays. The words go first because
+the glyph beside each says the same; Bluetooth before do-not-disturb, which
+silences calls; Wi-Fi before the signal, which says whether a call can reach
+the phone. The left sheds the unread count, then the call chip; the clock
+always stays. A shed item takes no tap. On its side the hole is at a short
+edge, not in the bar, and the bar has its whole width; upside down the zone
+stays at the top (the bar can't tell that from upright).
+
+The default zone is 40 logical px at the centre. The Pixel 9a's stock
+cutout is a circle 83 panel px across at x 540 of 1080, which Android keeps
+a 112 px box clear for: 37.3 logical px at the monitor scale of 3 and 42 at
+8/3, where the hole is 27.7 and 31.1. The Pixel 7 Pro's and 8 Pro's holes
+are smaller on wider panels. A device package with another hole installs
+`/usr/share/omamobile/bar-cutout.json` with the same keys
+(`{"center": 0.5, "width": 46}`, or `false` for none); `bar.cutout` in
+`shell.json` wins over it, key by key.
 
 A downward pull past ~14 px anywhere on the strip opens quick settings, and a
 tap toggles it. With `cardsOnTap` set (off by default), a tap on an item opens
@@ -95,6 +120,7 @@ Settings live on the `bar` object in `shell.json`:
 | `statusIcons` | all shown | `{"bluetooth","wifi","cell","dnd","unread"}`: `false` hides one (Wi-Fi covers Ethernet too) |
 | `quickSettings` | `"omamobile.quicksettings"` | Plugin id the bar opens |
 | `cardsOnTap` | `false` | A tap on an item opens its card (below); a pull opens quick settings |
+| `cutout` | `{"center": 0.5, "width": 40}` | The camera's hole, kept clear (above): `center` a fraction of the bar's width, `width` in logical px; `false` for none |
 
 The charging bolt has no setting: while charging it shows in every battery
 style. Low battery (10 % and under, not charging) takes the urgent colour.
