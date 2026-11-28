@@ -78,9 +78,16 @@ Android boot image) was taken to the laptop and checked by SHA-256.
   Power key: Omarchy's lock screen. The initramfs's no-USB-host watchdog
   doesn't fire: `boot_arch` stops it (`kill -9 -1`) before `switch_root`.
 - **Seen on that boot:** SDDM's first Hyprland session ended at 12 s
-  (`sddm-helper exited with 9`) and SDDM started it again; most likely
-  Hyprland came up before msm DRM, loaded from the root, took the panel
-  from simpledrm. The boot then ended in an orderly power-off at about 30 s
+  (`sddm-helper exited with 9`) and SDDM started it again: Hyprland came up
+  on simpledrm before msm DRM, loaded from the root, took the panel.
+  `omamobile-device-kebab` 0.1.3 adds `omamobile-kebab-display.service`
+  (ordered before the display manager by a `display-manager.service.d`
+  drop-in, as husky and tegu do), which loads msm and the panel driver and
+  waits up to 15 s for DSI-1 to be connected, always exiting 0 so a failed
+  msm still leaves SDDM on simpledrm. Next boot: msm bound at 6.81 s, the
+  wait returned at 7.14 s, SDDM started at 7.30 s; no `sddm-helper exited`,
+  Hyprland started once. (A root `tty` session that logs out at about 8 s
+  is a boot-time service's, not the user's.) The boot then ended in an orderly power-off at about 30 s
   whose cause isn't in the journal (UPower logged no critical action; logind
   ignores the power key, which the shell handles); plugging USB in powered
   the phone on again, and that boot is clean.

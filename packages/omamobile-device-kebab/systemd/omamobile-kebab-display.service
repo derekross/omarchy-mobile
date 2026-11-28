@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: MIT
+# Waits for msm DRM to take the panel before the display manager starts
+# (display-manager.service.d/10-omamobile-kebab.conf).
+[Unit]
+Description=Wait for the OnePlus 8T panel on msm DRM
+After=systemd-udevd.service systemd-modules-load.service
+Before=display-manager.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/omamobile-kebab-display-wait
+RemainAfterExit=yes
+TimeoutStartSec=30

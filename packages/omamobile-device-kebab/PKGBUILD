@@ -2,7 +2,7 @@
 pkgname=omamobile-device-kebab
 pkgver=$(cat "${startdir:-.}/version")
 pkgrel=1
-pkgdesc="Omamobile support for the OnePlus 8T (kebab): reboot-to-fastboot, USB networking, speaker UCM"
+pkgdesc="Omamobile support for the OnePlus 8T (kebab): reboot-to-fastboot, USB networking, display start, audio UCM"
 arch=(aarch64)
 url="https://github.com/derekross/omamobile"
 license=(MIT)
@@ -34,6 +34,13 @@ package() {
     "$pkgdir/etc/pacman.d/omamobile-mirrorlist"
   install -Dm644 "$startdir/LICENSE" \
     "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  # The display manager waits for msm DRM to take the panel
+  install -Dm755 "$startdir/bin/omamobile-kebab-display-wait" \
+    "$pkgdir/usr/bin/omamobile-kebab-display-wait"
+  install -Dm644 "$startdir/systemd/omamobile-kebab-display.service" \
+    "$pkgdir/usr/lib/systemd/system/omamobile-kebab-display.service"
+  install -Dm644 "$startdir/systemd/10-omamobile-kebab.conf" \
+    "$pkgdir/usr/lib/systemd/system/display-manager.service.d/10-omamobile-kebab.conf"
   # ALSA UCM for the sound card ("OnePlus 8T", driver sm8250): UCM looks for
   # conf.d/<driver>/<card name>.conf
   install -Dm644 "$startdir/ucm2/OnePlus/kebab/kebab.conf" \
