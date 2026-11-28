@@ -1,7 +1,16 @@
 // SPDX-License-Identifier: MIT
 // Mobile data on and off without a password, as on a phone: the active local
-// user in the modem's control group (modem-sit.conf, wheel by default) may
-// start and stop omamobile-sit-data.service. Nothing else.
+// user in wheel may start and stop omamobile-sit-data.service. The group is
+// written here, so it doesn't follow modem-sit.conf's [control] group if an
+// owner changes that one.
+//
+// polkit checks only the unit named in the call, and the data unit requires
+// omamobile-sitd.service (which on the Pixel 7 Pro requires
+// omamobile-modem.service). So this also lets a start of the data unit bring
+// up a stopped sitd with no password. "omamobile-sit data on", which the
+// quick-settings tile runs, refuses while sitd isn't running; a bare
+// "systemctl start omamobile-sit-data.service" doesn't. Any other verb and
+// every other unit still ask.
 polkit.addRule(function(action, subject) {
   if (action.id == "org.freedesktop.systemd1.manage-units" &&
       subject.local && subject.active && subject.isInGroup("wheel") &&

@@ -56,6 +56,13 @@ def public_state():
         return None
 
 
+def sitd_running():
+    """True while omamobile-sitd.service is up or on its way up."""
+    state = subprocess.run(['systemctl', 'is-active', 'omamobile-sitd.service'],
+                           capture_output=True, text=True).stdout.strip()
+    return state in ('active', 'activating', 'reloading')
+
+
 def live_call(state, wanted=('ringing-in', 'waiting', 'active', 'dialing', 'ringing-out', 'held')):
     for call in state['calls']:
         if call['state'] in wanted:
@@ -140,6 +147,11 @@ def main(argv):
             return 0
         if cmd == 'data' and rest in (['on'], ['off']):
             verb = 'start' if rest[0] == 'on' else 'stop'
+            # The data unit requires omamobile-sitd.service, so starting it
+            # with sitd stopped would start sitd too, a second start-up on
+            # the same CP, which sitd doesn't support. Refuse instead.
+            if verb == 'start' and not sitd_running():
+                raise RuntimeError("the phone service isn't running this boot; restart the phone")
             return subprocess.run(['systemctl', verb, 'omamobile-sit-data.service']).returncode
     except (OSError, RuntimeError, ValueError) as error:
         print('omamobile-sit:', error, file=sys.stderr)
