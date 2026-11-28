@@ -8670,7 +8670,7 @@ already appears as an FE0 leaf within the same
 number range, so DT ordering does not establish the
 439 mapping.
 
-The missing evidence is a same-boot
+The offline check called for a same-boot
 `/proc/interrupts` row tying 439 to both the GIA
 instance and hardware input. The exact D1 policy
 permits shell to read that file. Input 4 at
@@ -8692,6 +8692,27 @@ applying the current mapping to the captured fence.
 If that continuity is unavailable, report the row
 for the current boot only. This check needs no
 display mode change or new trace.
+
+###### Stock A confirms modeset IRQ 439 is frame-start
+
+A read-only ADB snapshot on stock A
+`CP4A.261105.040.D1` identified Linux IRQ 439 as GIA
+input 4 on `dpu_multicast_aggr_1@f46e020`. All 22
+live backend IRQ rows matched their device-tree
+leaves. The neighboring output-0 routes include
+IRQ 440 for frame-done, 441 for underrun, 458 for
+TE falling and 459 for TE rising.
+
+The snapshot uptime was 32,114.76 s. FrameTimeline's
+saved capture began at boot time 31,346.213 s.
+Those readings differ by 768.547 s, within 0.183 s
+of the Mac's elapsed time since starting the
+capture. The snapshot was on the same boot.
+This identifies the IRQ that carried CRTC fence
+`39625` during the resolution switch as the
+dedicated output-0 frame-start leaf. The GIC
+parent and backend handler are shared. No mode
+change, reboot, or flash was used for this check.
 
 After this stock Android session, take and verify a fresh
 guarded nine-partition NV backup before the next Linux
