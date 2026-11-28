@@ -8092,11 +8092,21 @@ rows with distinct display-frame tokens and 479 actual surface
 rows. The retained display rows span 6.839 seconds. The 8 MiB
 ring buffer wrapped, and Trace Processor reported four frame
 timeline parser errors and one unpaired end event. The counts
-describe the retained rows. Use the FrameTimeline data source
-alone for a cleaner frame capture if the userspace `gfx` track
-is unnecessary. SurfaceFlinger confirms live Android frame
-activity. Vendor modeset and hardware frame completion were
-unavailable in the separate ftrace check.
+describe the retained rows. SurfaceFlinger confirms live
+Android frame activity. Vendor modeset and hardware frame
+completion were unavailable in the separate ftrace check.
+
+A second scrolling run enabled only
+`android.surfaceflinger.frametimeline`. Perfetto recorded
+both service boundaries, 20.004 seconds apart. The 1,280
+completed display rows had distinct tokens and covered
+19.722 seconds, from 3.7 ms after session start to 278.3 ms
+before stop. The 8 MiB ring buffer recorded zero wraps,
+overwritten bytes or chunks, discarded chunks, and writer
+or sequence packet loss. Trace Processor reported 71 frame
+timeline parser errors, so these counts cover the decoded
+rows. Stock A completed-boot and enforcing-verity checks
+matched before and after the capture.
 
 After this stock Android session, take and verify a fresh
 guarded nine-partition NV backup before the next Linux
