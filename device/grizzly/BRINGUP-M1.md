@@ -16,9 +16,9 @@
   wrapper → BE → DSI0 and released it in reverse. First native output
   still needs verified APB and external reset readiness and a working
   compressed display pipeline. PHY TX and DSI0 host reads stay disabled.
-- **Next check.** Try passive [stock Perfetto capture](#stock-cgyda-compression-and-mainline-dsi2-reuse)
-  on A. Take a fresh verified nine-partition backup after that stock
-  session before the next Linux trial.
+- **Stock trace.** [Perfetto on A](#attended-stock-d1-perfetto-result)
+  could not find the two vendor display events. Take a fresh verified
+  nine-partition backup after that stock session before the next Linux trial.
 
 See the [D1 recovery and trial record](NOTES.md#november-d1-recovery-and-first-light-checks)
 and the [kernel provenance and fixtures](bringup/README.md). Coordinate with
@@ -8062,20 +8062,36 @@ APB clock and external reset sequence. Keep the bridge
 disabled in Grizzly diagnostics until that prerequisite
 is met. Keep the PHY TX and host read holds in place.
 
-The next stock check needs the Pixel running D1 on A.
-After that stock Android session, take and verify a fresh guarded
-nine-partition NV backup before the next Linux slot B trial.
-Keep Android off between the backup rescue and that trial.
-Query the stock Perfetto service over ADB and check
-whether it can collect the driver's existing
-`vs_drm/disp_set_mode` and `vs_drm/disp_frame_done`
-events while the existing Composer client runs. Use
-the capture's setup status to distinguish unavailable
-events from an idle observation window. Open no extra
-DRM file and leave the panel payload events out. This
-would qualify a passive observation path for a stock
-modeset. It cannot establish the mainline APB gate or
-external reset, or supply a DP0 PSM1 sample.
+###### Attended stock D1 Perfetto result
+
+On 2026-11-28 ADB verified slot A, `CP4A.261105.040.D1`,
+completed boot and enforcing verity. Stock Perfetto v58.3
+advertised `linux.ftrace` from `traced_probes` and the
+SurfaceFlinger frame timeline. The existing Composer
+service and SurfaceFlinger were running.
+
+A 12-second trace requested `vs_drm/disp_set_mode`,
+`vs_drm/disp_frame_done` and `power/cpu_frequency`. The
+trace contained 94 CPU-frequency events. Its start-of-trace
+setup stats listed both display events under
+`unknown_ftrace_events`. This establishes that the stock
+Perfetto producer could not find the two vendor events in
+this session. The trace does not identify why the events
+were unavailable to the producer.
+
+A 20-second fallback also requested the generic DRM
+`drm_vblank_event` and `drm_vblank_event_delivered`
+tracepoints. The producer reported both as unknown.
+The same trace enabled userspace `gfx` and SurfaceFlinger
+frame timeline. It contained no frames, and the subsequent
+power query showed the display session was dozing.
+The Android timeline can report presentation activity if
+active, but it is separate from the hardware completion
+and vendor modeset tracepoints.
+
+After this stock Android session, take and verify a fresh
+guarded nine-partition NV backup before the next Linux
+slot B trial. Keep Android off between the rescue and trial.
 
 ###### Mainline DSI0 readiness after stock connector registration
 
