@@ -991,18 +991,38 @@ CONFIG_DM_CRYPT=y
 CONFIG_CRYPTO_XTS=y
 ```
 
-Built in because most phones' initramfs carry no modules. `BLK_DEV_DM` and
-`CRYPTO_XTS` were modules from the arm64 defconfig, the rest unset
-(`CRYPTO_AES_ARM64_CE_BLK=y` was already in). The kernel's crypto sockets
-for userspace (`CRYPTO_USER_API_HASH` and `_SKCIPHER`, AF_ALG), which
-cryptsetup uses for the LUKS2 keyslot area where they exist, stay off:
-they would open the kernel's crypto API to every process on every phone,
-and cryptsetup opened the owner's volume without them (§11.9, 2026-11-27).
-The three that are in are inert without an
-encrypted root: the kernel sets up no device-mapper target by itself, and
-at boot only the `cryptsetup` of an `INITRAMFS_CRYPT` initramfs opens one,
-on a LUKS2 `userdata`. A per-device `kernel.config` can't carry them,
-since the release kernel is one build for every device (RELEASES §3.1, §4).
+Built in because most phones' initramfs carry no modules
+(`CRYPTO_AES_ARM64_CE_BLK=y` was already in). With what `olddefconfig`
+derives from them, the three lines change these options against main's
+fragment (both built on `omamobile` at `c143303b9e9c`, 2026-11-28,
+`scripts/diffconfig`):
+
+| Option | main | with these | Why |
+| --- | --- | --- | --- |
+| `BLK_DEV_DM` | m | y | device-mapper |
+| `DM_CRYPT` | unset | y | dm-crypt |
+| `CRYPTO_XTS` | m | y | the cipher mode |
+| `CRYPTO_ESSIV` | unset | y | selected by dm-crypt |
+| `CRYPTO_LIB_MD5` | m | y | selected by dm-crypt, for its `lmk` IV mode |
+| `PNFS_BLOCK` | m | y | NFS's pNFS block-layout driver (`blocklayoutdriver`) |
+
+`PNFS_BLOCK` has no prompt: it depends on `NFS_V4` and `BLK_DEV_DM` and
+defaults to `NFS_V4`, which the defconfig builds in, so it follows
+device-mapper from module to built in, and a fragment can't keep it a
+module. It acts only for an NFSv4.1 or later mount whose server hands out
+block layouts; otherwise it only registers its layout type with the NFS
+client. The two new questions, `DM_INIT` (device-mapper tables from the
+kernel command line) and `CRASH_DM_CRYPT` (dm-crypt keys for a crash
+kernel), stay off. The kernel's crypto sockets for userspace
+(`CRYPTO_USER_API_HASH` and `_SKCIPHER`, AF_ALG), which cryptsetup uses for
+the LUKS2 keyslot area where they exist, stay off: they would open the
+kernel's crypto API to every process on every phone, and cryptsetup opened
+the owner's volume without them (§11.9, 2026-11-27). The options that are
+in are inert without an encrypted root: the kernel sets up no device-mapper
+target by itself, and at boot only the `cryptsetup` of an `INITRAMFS_CRYPT`
+initramfs opens one, on a LUKS2 `userdata`. A per-device `kernel.config`
+can't carry them, since the release kernel is one build for every device
+(RELEASES §3.1, §4).
 
 `bin/omamobile initramfs`, only with `INITRAMFS_CRYPT=yes`: Alpine's
 signed `cryptsetup` and GNU `tar` (the build stops if either is missing;
@@ -1181,9 +1201,11 @@ something to follow; each is one place in the code.
   in this pull request), or in every initramfs, as the contributor first
   built it. And whether `--release` may set it while §5.3 item 2 is open.
 - **PD14. The kernel options** in the shared fragment (as here), for every
-  phone, with the reasons of §11.8: device-mapper, dm-crypt and XTS. The
-  two AF_ALG options are out, at the maintainer's request, since the
-  unlock works without them (§11.9, 2026-11-27).
+  phone, with the reasons of §11.8: device-mapper, dm-crypt and XTS, and
+  what they bring with them built in (ESSIV, MD5 and NFS's pNFS
+  block-layout driver; §11.8's table). The two AF_ALG options are out, at
+  the maintainer's request, since the unlock works without them (§11.9,
+  2026-11-27).
 - **PD15. What follows:** `omamobile-crypt` in the root image,
   `install-phone --encrypt` (or `--fresh` folded into it),
   `tools/phone-smoke` knowing `/dev/mapper/root`, and `omamobile-setup-user`
