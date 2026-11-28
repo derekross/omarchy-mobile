@@ -54,6 +54,44 @@ peripheral, no panel node and the wrong touch controller (S6SY761).
 [tree72]: https://gitlab.postmarketos.org/soc/qualcomm-sm8250/linux
 [tree]: https://gitlab.com/sm8250-mainline/linux
 
+## 2026-11-28: booting from `boot_b` (no `fastboot boot`)
+
+`boot_b` now holds the same image that was `fastboot boot`ed all day
+(header v2, `7.2.0-omamobile-push1-00084-g3c5440e9dd3c`, the board DTB
+with `omamobile.dtsi`, the shared initramfs, no `omamobile.initramfs`).
+Written by hand with `fastboot flash boot_b` (`bin/omamobile flash` refuses
+`android-v0`), after a read-only copy of the old `boot_b` (a downstream
+Android boot image) was taken to the laptop and checked by SHA-256.
+
+| | `current-slot` | B: successful / unbootable / retry-count | A: successful / unbootable / retry-count |
+| --- | --- | --- | --- |
+| before the write | b | no / no / 7 | no / no / 6 |
+| after the write | b | no / no / 7 | (not read) |
+
+- **`fastboot reboot`:** ABL starts slot B by itself
+  (`androidboot.slot_suffix=_b`, `androidboot.verifiedbootstate=orange`:
+  the unlocked bootloader accepts the image although `vbmeta_b` still
+  describes the old one; `vbmeta` was not touched), the init hands over to
+  the root, the system reaches `running` and Hyprland starts. USB networking
+  was up 9 s after the reboot.
+- **Without the laptop:** powered off, USB unplugged, powered on with the
+  Power key: Omarchy's lock screen. The initramfs's no-USB-host watchdog
+  doesn't fire: `boot_arch` stops it (`kill -9 -1`) before `switch_root`.
+- **Seen on that boot:** SDDM's first Hyprland session ended at 12 s
+  (`sddm-helper exited with 9`) and SDDM started it again; most likely
+  Hyprland came up before msm DRM, loaded from the root, took the panel
+  from simpledrm. The boot then ended in an orderly power-off at about 30 s
+  whose cause isn't in the journal (UPower logged no critical action; logind
+  ignores the power key, which the shell handles); plugging USB in powered
+  the phone on again, and that boot is clean.
+- **Not known yet:** whether this ABL spends slot B's retries on each
+  normal boot while B isn't marked successful (marking it is a GPT write,
+  a CONTRIBUTING.md §3.1 exception for the maintainer to agree). Until
+  then, `fastboot --set-active=b` resets the count.
+
+Way back: `fastboot boot` of the same image, or `fastboot flash boot_b`
+of the saved copy; slot A was not written.
+
 ## 2026-11-28: microphones (`fastboot boot`, Arch root on `userdata`)
 
 Same kernel and DSP firmware. The phone's mics are two digital mics on the
