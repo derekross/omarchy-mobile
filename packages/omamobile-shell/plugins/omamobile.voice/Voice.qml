@@ -572,7 +572,7 @@ Item {
 
   Process {
     id: levelBridge
-    command: ["voxtype-audio-bridge"]
+    command: ["omamobile-shell-child", "voxtype-audio-bridge"]
     running: root.listening && root.mine
     stdout: SplitParser {
       onRead: function(line) {

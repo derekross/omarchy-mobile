@@ -1490,3 +1490,6 @@ else
   pass "Back threshold feedback: once per gesture, both edges and retreat"
 fi
 env -u OMAMOBILE_POWER_KEY_ANDROID bash test/power-overlap.sh || fail "overlapping power-key presses"
+
+# Long-lived helpers end with the shell and hold none of its descriptors (#989, #990).
+bash test/shell-child.sh || fail "omamobile-shell-child"

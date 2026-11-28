@@ -219,8 +219,7 @@ Item {
     id: agent
     // --pairable-window: the helper owns Pairable (off at its start, on only
     // when the panel asks, off at its exit) and BlueZ's PairableTimeout.
-    command: root.pairableOwned ? ["omamobile-bt-agent", "--pairable-window", String(root.visibleSeconds)]
-                                : ["omamobile-bt-agent"]
+    command: ["omamobile-shell-child", "omamobile-bt-agent"].concat(root.pairableOwned ? ["--pairable-window", String(root.visibleSeconds)] : [])
     stdinEnabled: true
     stdout: SplitParser {
       onRead: function(line) { root.helperEvent(BluetoothModel.parseHelperLine(line)) }

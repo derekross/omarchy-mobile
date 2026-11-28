@@ -1,0 +1,31 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# omamobile-shell-child COMMAND [ARGS...]: run one of the shell's long-lived
+# helpers (a watcher a plugin reads lines from) so that it ends with the shell
+# and holds nothing of the shell's.
+#
+# A helper started by a Quickshell Process outlived the shell whenever
+# Quickshell crashed: the crashed process can't stop its children, they were
+# handed to the user's systemd, and the restarted shell started a second set.
+# Each also kept the file descriptors Quickshell had open without close-on-exec
+# (the GPU's render node among them); with the compositor gone too, that held
+# its screen buffers, and Hyprland couldn't allocate new ones to come back
+# (omarchy-mobile#989, #990).
+#
+# So: every descriptor above stderr is closed, and the command runs with the
+# parent-death signal set (TERM when the shell's process ends, however it ends).
+# The kernel ties that signal to the thread that forked the child, not to the
+# whole process: it fires when that thread ends. Quickshell starts its
+# Process children from its main thread, so here the two end together.
+# stdin, stdout and stderr stay: they are the Process's pipes.
+set -u
+(( $# )) || { echo "usage: omamobile-shell-child COMMAND [ARGS...]" >&2; exit 2; }
+parent=$PPID
+for fd in /proc/$$/fd/*; do
+  n=${fd##*/}
+  # 255 is bash's own copy of this script, close-on-exec already
+  (( n > 2 && n != 255 )) && eval "exec $n>&-" 2>/dev/null
+done
+# The shell is already gone (it died between the fork and here): nothing to watch for.
+[[ $(awk '{print $4}' "/proc/$$/stat" 2>/dev/null) == "$parent" ]] || exit 0
+exec setpriv --pdeathsig TERM -- "$@"

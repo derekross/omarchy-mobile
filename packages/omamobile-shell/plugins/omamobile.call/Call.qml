@@ -95,7 +95,7 @@ Item {
 
   Process {
     id: watch
-    command: ["omamobile-call-watch"]
+    command: ["omamobile-shell-child", "omamobile-call-watch"]
     running: true
     stdout: SplitParser {
       onRead: function(line) {

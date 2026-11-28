@@ -516,7 +516,7 @@ Item {
 
   Process {
     id: oskWatch
-    command: ["omamobile-osk-watch"]
+    command: ["omamobile-shell-child", "omamobile-osk-watch"]
     running: true
     stdout: SplitParser {
       onRead: function(line) {
