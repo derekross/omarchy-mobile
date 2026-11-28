@@ -8873,9 +8873,34 @@ handoff checks. DSI0 host and PHY TX reads remain disabled.
 The binding and timed return still need an attended hardware
 trial. No phone access, reboot or flash was performed.
 
-After this stock Android session, take and verify a fresh
-guarded nine-partition NV backup before the next Linux
-slot B trial. Keep Android off between the rescue and trial.
+###### Attended slot B DC9x00 binding trial
+
+On 2026-11-28 the read-only rescue backed up and verified all nine NV
+partitions (3,392,151,552 bytes). Each was read-only and unmounted.
+The host copy passed the independent manifest and permissions check.
+The rescue returned to Fastboot without starting Android. All five
+fixture images staged to B, and `vendor_boot_b` readback matched all
+8,192 supplied bytes. The fixture booted once.
+
+| Monotonic time (s) | Observation |
+| ---: | --- |
+| 2.289–2.498 | GPT scan verified 42 partitions with seven metadata reads. The v73 comparison returned 0. PID 1 verified the 42 partitions read-only and unmounted. |
+| 6.434 | The temporary SCSI host was removed. |
+| 6.520–6.521 | `f46e080.interrupt-controller` and `f46e020.interrupt-controller` both bound to the Malibu SGIA driver. |
+| 6.523–6.540 | BE ON readback was 1. DC9x00 bound and reserved frame-start as Linux IRQ 31 with `IRQF_NO_AUTOEN`. PID 1 confirmed the SGIA chip and hardware input 4. |
+| 6.541–6.559 | Module removal succeeded, BE OFF readback was 0, and the guarded binding check completed. |
+| 90.294–91.296 | No SCSI disks remained. The 90-second timer requested a warm restart. |
+
+Ramoops and `SYSTEM_LAST_KMSG` contain the binding and masked reservation
+markers. The IRQ stayed disabled through module removal. This trial
+added no SGIA enable-register readback or interrupt delivery test.
+DSI0 host and PHY TX reads stayed disabled. The existing deferred-probe
+device-link warning appeared before the display binding check.
+
+Fastboot was visible on the phone before the Mac detected it. A USB-C
+reconnect restored host detection. Stock D1 then completed boot on A
+with enforcing verity and the original VBMeta digest. Take and verify a
+fresh guarded nine-partition NV backup before the next slot B trial.
 
 ###### Mainline DSI0 readiness after stock connector registration
 
