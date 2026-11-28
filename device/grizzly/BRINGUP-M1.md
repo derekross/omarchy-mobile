@@ -18,8 +18,10 @@
   compressed display pipeline. PHY TX and DSI0 host reads stay disabled.
 - **Stock trace.** [Perfetto on A](#attended-stock-d1-perfetto-result)
   captured live SurfaceFlinger frames while scrolling. The two vendor
-  events remain unavailable. Take a fresh verified nine-partition
-  backup after that stock session before the next Linux trial.
+  events remain unavailable. A [resolution switch](#attended-stock-d1-resolution-switch)
+  captured the Composer configuration call and a matching present
+  fence. Take a fresh verified nine-partition backup after the stock
+  session before the next Linux trial.
 
 See the [D1 recovery and trial record](NOTES.md#november-d1-recovery-and-first-light-checks)
 and the [kernel provenance and fixtures](bringup/README.md). Coordinate with
@@ -8157,6 +8159,36 @@ atomic commit marker. The trace supplies no positive evidence
 of a Composer modeset or a vendor display interrupt. It cannot
 exclude a modeset outside the retained records or one without a
 marker. [Android mode-check source](https://android.googlesource.com/platform/frameworks/native/+/refs/heads/main/services/surfaceflinger/SurfaceFlinger.cpp#1509).
+
+###### Attended stock D1 resolution switch
+
+On 2026-11-28 the owner switched stock A from 1080×2410 to
+1280×2856 while Perfetto captured userspace `gfx` and
+SurfaceFlinger FrameTimeline. The 40.072-second session used
+separate 96 MiB and 16 MiB buffers. Both reported zero wraps,
+overwrites, discarded chunks and writer or sequence packet
+loss. Stock D1 A and enforcing verity were verified before
+and after the capture. The 68 FrameTimeline parser errors
+match 68 actual surface events with an explicit unspecified
+`present_type`, the same metadata condition audited above.
+
+The trace shows one Composer `setActiveConfigWithConstraints[0]`
+call containing `SetActiveConfigInternal:1280x2856x120@120`.
+Times below are relative to the end of that Composer call.
+
+| Time (ms) | Trace evidence |
+| ---: | --- |
+| +0.730 | First `PresentDisplay` that began after the call. |
+| +4.409 | Earliest subsequently signaled fence in the trace, from a `PresentDisplay` that began 10.793 ms before the call ended. |
+| +9.164 | Composer entered `OnPostActiveDisplayConfigurationChange` under `OnPresentPostCommit`. |
+| +21.091 | Fence for the first post-call `PresentDisplay`. Its FrameTimeline end matches the Composer fence value within 26 ns. |
+
+The +21.091 ms match is the first present-fence completion
+associated with a post-call Composer submission. The
+earlier fence completed work that was already in flight.
+These are userspace observations of configuration and
+presentation. They do not timestamp the kernel modeset,
+DSI transfer, panel scanout or the display interrupt.
 
 After this stock Android session, take and verify a fresh
 guarded nine-partition NV backup before the next Linux
