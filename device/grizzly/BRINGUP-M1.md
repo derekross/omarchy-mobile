@@ -8523,6 +8523,66 @@ the observed fence signals. The trace contains no
 DPU frame-start marker or status bits, so the IRQ
 bracket does not identify the asserted status bit.
 
+###### D1 self-refresh fences and the next modeset capture
+
+Rejoined all 25 task-context CRTC signals to the
+Composer atomic submission that created the fence.
+All 13 signals in `psr_timer` were created and
+signaled in `DpuSleep` → `CommitFrame`. All 12
+signals in `dpu_kthread0` were created in the
+following `DpuWakeup` → `CommitFrame`, each one
+sequence after its sleep fence in context 1. Eleven
+had a Composer `wait_present` timestamp match.
+The wake signals followed fence creation by
+3.078–7.392 ms. A thirteenth wake created a fence
+whose signal is absent from the trace. The 11
+previously matched task-context signals therefore
+belong to self-refresh exit commits.
+
+The exact D1 `vs_drm.ko` creates `dpu_kthread%u`
+at `0x14b4`. Its BE handler reads decoded status at
+`0x4349c` and dispatches it at `0x43500`. The
+flip-wait timeout at `0xb6c` and disable path at
+`0x40124` can call `vs_dc_check_interrupts` in task
+context. That path reads pending hardware status
+and reaches the same per-display dispatcher at
+`0x279e8`. The commit tail can also call
+`drm_atomic_helper_fake_vblank` at `0x7828`, and
+`vs_crtc_enter_power_off` can send the pending
+event after vblank is turned off at `0x4a64`.
+The trace identifies the sleep and wake commits.
+It does not expose the branch taken or the CRTC
+`no_vblank` flag for those commits.
+
+The driver exposes software counters in
+`/sys/class/drm/card0/crtc-0/errors/`. In the
+flip-wait path, a successful status poll can emit
+the warning that the frame-start interrupt handler
+did not run and increment `frame_start_missing`.
+`frame_start_timeout` counts a different condition.
+Exact vendor policy labels these counters
+`sysfs_display` and grants the display bugreport
+collector read access. Neither the counter nor
+its change identifies a fence sequence. Stock shell
+access and inclusion in the collector output are
+unverified.
+
+For an attended resolution switch, use the same
+15-second `gfx sync irq` capture and a separate
+FrameTimeline-only Perfetto session. Keep both
+running before the switch and through the first
+new-mode frame. Confirm a real mode-bearing
+`PresentDisplay`, then match its FrameTimeline
+endpoint to a successful Composer fence timestamp
+and the CRTC DMA-fence init and signal key. Record
+the matching IRQ bracket or task context on the
+same CPU. Use `DpuSleep` and `DpuWakeup` scopes
+at fence creation to avoid treating a self-refresh
+transition as the first new-mode presentation.
+This can verify IRQ delivery for that fence.
+Direct hardware frame-start status remains
+unavailable through stock tracing.
+
 After this stock Android session, take and verify a fresh
 guarded nine-partition NV backup before the next Linux
 slot B trial. Keep Android off between the rescue and trial.
