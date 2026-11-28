@@ -52,6 +52,60 @@ owner's go:
   26.3.1-3 (signatures checked), and the vendor firmware from
   `tools/extract-vendor-firmware -d sargo`.
 
+## 2026-11-25: two packaged modem boots (a 0.1.3 that is not in this PR)
+
+Kept as a record for #502, which decides the packages: the start below was
+packaged as `omamobile-device-sargo` 0.1.3 on the owner's branch, tried on
+two boots, then taken out of the device's pull request, which stays at
+0.1.2 with the modem started by hand. Whether the modem starts at boot by
+default is the maintainer's call. None of it is on the phone's slot B now
+except what the bring-up entry below lists.
+
+Kernel `7.3.0-rc6-omamobile-push1-gcf6151c19800`, the one of the bring-up
+entry below. On two boots in a row from `boot_b` the modem and Wi-Fi came
+up with nobody touching the phone: the modem was up 4 s after its start
+(about 19 s of uptime), the WLAN firmware answered at about 20 s, and
+`wlan0` joined the network configured on the phone by itself; HTTPS over
+`wlan0` worked. **Before the first and after the last of these boots all
+nine NV partitions read `ro=1` and matched the backup.**
+
+- **`qrtr` 1.2, `rmtfs` 1.3 and `tqftpserv` 1.3** from linux-msm's release
+  tags, binaries only: upstream's `rmtfs.service` runs `rmtfs -r -P -s`,
+  which opens the real EFS partitions and starts and stops the modem
+  itself, and `qrtr-ns` was left out because the kernel has the name
+  service.
+- **The start** did nothing on a kernel whose DT has no modem or before the
+  firmware was installed, refused unless the four EFS partitions read
+  `ro=1`, copied them to `/run/omamobile/rmtfs`, and started the modem with
+  recovery off; then `rmtfs -o` on those copies (a device policy allowed
+  only `/dev/qcom_rmtfs_mem1`, so rmtfs couldn't fall back to `/dev/mem`)
+  and tqftpserv, then the PD mapper, then `ath10k_snoc`. A start that hung
+  or reset the phone left a latch in `/var/lib/omamobile`, and the next boot
+  skipped the modem.
+- **The PD mapper has to come last.** On the first packaged boot the modem
+  came up but never started its WLAN domain: `qcom_pd_mapper` was loaded
+  before the modem started, and loading it again later changed nothing. In
+  the bring-up boot its first announce had failed, and the modem asked for
+  `wlanmdsp.mbn` 70 ms after the reload that made it known. With the mapper
+  blacklisted, unloaded before the start and loaded only once rmtfs and
+  tqftpserv ran, the WLAN firmware came up about 1 s after the modem on
+  both boots.
+- **The Wi-Fi address.** ath10k gets none on this phone ("invalid MAC
+  address; choosing random"); a udev rule gave `wlan0` the bootloader's
+  `/chosen/cdt/cdb2/wlan_mac1` (a Google OUI), and NetworkManager connected
+  with it.
+- **Firmware.** `tools/extract-vendor-firmware -d sargo`, given the factory
+  zip itself, read the radio image (`radio-sargo-*.img`: an FBPK container
+  whose one entry, `modem`, is the modem partition's FAT16) as data, with no
+  mount, and staged `mba.mbn`, `modem.mdt` as `modem.mbn` with its 31
+  segments, `qdsp6m.qdb` and `modemr.jsn`: byte for byte the files on the
+  phone's own `modem` partition. Wi-Fi's board data was its `board-2.bin`
+  of one entry. With that output the firmware on the phone was the tool's.
+
+Still open: the QRTR announce failure itself (the start order works round
+it), SIM, calls, SMS and mobile data (no IPA yet), Google's regional Wi-Fi
+board files, and a Wi-Fi power and roaming check.
+
 ## 2026-11-25: the modem runs and Wi-Fi scans (bring-up, by hand)
 
 Kernel `7.3.0-rc6-omamobile-push1-gcf6151c19800`: the Bluetooth branch
@@ -326,6 +380,12 @@ areas `mmcblk0boot0/1`. The guard removed `/dev/mmcblk0` and
 `/dev/mmcblk0rpmb`, set both boot areas and 70 partitions read-only, and
 left the running slot's `boot` (`boot_a` on a RAM boot from slot A) and
 `userdata` writable. Nothing was mounted or written.
+
+That was this port's own guard, since taken out of its pull request. The
+eMMC guard in review is #1072 (the Lenovo Tab M10's), which covers every
+`mmcblk*` disk; it has **not run on this phone yet**. A RAM boot of it, with
+the guard's kmsg lines posted on #1072, waits for the maintainer's answer on
+RAM boots.
 
 ## 2026-11-24: first light, and what this bootloader wants
 
