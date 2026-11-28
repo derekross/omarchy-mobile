@@ -133,7 +133,15 @@ for out in "$t/new/dir" "$t/x/../out" "$t/new-nl"$'\n' $'/\n'; do
 done
 PATH=$t/fake:$PATH refused "-o -x (from scratch)" "$zip" "$dfs_err" "-x" "$t"
 NO_OUT=1 PATH=$t/fake:$PATH check_one "$XVC" "default -o (from scratch)" "$zip" "$dfs_err" "" "$t"
+mkdir -p "$t/sym"
+ln -s "$XVC" "$t/sym/extract-vendor-chroot"
+ln -s "$XFP" "$t/sym/extract-fingerprint-vendor"
+orig_xvc=$XVC orig_xfp=$XFP
+XVC=$t/sym/extract-vendor-chroot XFP=$t/sym/extract-fingerprint-vendor
+PATH=$t/fake:$PATH refused "through a symlink: -o out" "$zip" "$dfs_err" "$t/out"
 VERDICT=""
+refused_root "through a symlink: -o /" /
+XVC=$orig_xvc XFP=$orig_xfp
 
 # --- Real ext4 images (made-up files), when the host can make them ------------
 mkdir -p "$t/v" "$t/s/system"

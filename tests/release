@@ -679,7 +679,7 @@ cp "$kr/omamobile.gpg" "$R/$B/omamobile.gpg"
 # phone-provision with its helpers under tools/ (make-bundle's own list)
 echo guide > "$R/$B/INSTALL.md"
 echo readme > "$R/$B/README.txt"
-mkdir -p "$R/$B/tools"
+mkdir -p "$R/$B/tools/lib"
 ptools=$(sed -n 's/^provision_tools="\(.*\)"$/\1/p' tools/make-bundle)
 [[ -n $ptools ]] || fail "read make-bundle's provision_tools"
 for f in $ptools; do printf '#!/bin/bash\n' > "$R/$B/tools/$f"; done

@@ -915,7 +915,7 @@ scan_fail() {
 # the device has one, #716); it is under SHA256SUMS like every other file.
 bundle_extra_files() {
   local tools t args=()
-  tools=$(sed -n 's/^provision_tools="\([a-z0-9 .-]*\)"$/\1/p' tools/make-bundle)
+  tools=$(sed -n 's/^provision_tools="\([a-z0-9 ./-]*\)"$/\1/p' tools/make-bundle)
   [[ -n $tools ]] || die "can't read provision_tools from tools/make-bundle"
   for t in $tools; do args+=(! -path "./tools/$t"); done
   (cd "$1" && find . \( -type f -o -type l \) ! -path './images/*.img' ! -path ./README.txt ! -path ./INSTALL.md \

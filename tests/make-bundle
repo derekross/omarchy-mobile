@@ -34,14 +34,14 @@ r=$t/repo k=$t/kernel
 # nv-backup, and the guided install with what it runs (#guidedbundle)
 tools=$(sed -n 's/^provision_tools="\(.*\)"$/\1/p' tools/make-bundle)
 for f in phone-provision nv-backup phone-ssh phone-ssh-proxy extract-vendor-firmware extract-vendor-chroot extract-fingerprint-vendor extract-camera-data \
-  install-guided phone-smoke factory-index camera-requirements.txt; do
+  install-guided phone-smoke factory-index camera-requirements.txt lib/out-dir.sh; do
   [[ " $tools " == *" $f "* ]] || fail "make-bundle's provision_tools has $f"
 done
 mkdir -p "$r/tools/lib" "$r/docs" "$r/device/testdev" "$r/packages/omamobile-keyring" "$r/out" \
   "$k/include/config" "$k/images"
 cp tools/make-bundle tools/bundle-manifest tools/install-phone "$r/tools/"
 cp tools/lib/signing.sh tools/lib/bundle-tar.sh "$r/tools/lib/"
-for f in $tools; do cp "tools/$f" "$r/tools/"; done
+for f in $tools; do cp "tools/$f" "$r/tools/$f"; done
 cp docs/INSTALL.md "$r/docs/"
 printf 'CODENAME=testdev\nNAME="Test device"\nBOOT_IMAGES="boot dtbo"\nUFS_RW="boot_b dtbo_b userdata"\n' > "$r/device/testdev/device.conf"
 : > "$r/packages/omamobile-keyring/omamobile.gpg"
@@ -62,8 +62,8 @@ b=$r/out/bundle/omamobile-testdev-2026.11.01
 pass "an unsigned development bundle assembles"
 
 for f in $tools; do
-  if [[ $f == *.txt ]]; then
-    [[ -f $b/tools/$f && ! -x $b/tools/$f ]] || fail "the bundle has tools/$f, not executable"
+  if [[ $f == *.txt || $f == lib/* ]]; then
+    [[ -f $b/tools/$f && $(stat -c %a "$b/tools/$f") == 644 ]] || fail "the bundle has tools/$f, mode 644"
   else
     [[ -x $b/tools/$f ]] || fail "the bundle has an executable tools/$f"
   fi
@@ -85,6 +85,22 @@ PATH="$t/stubs:$PATH" OMAMOBILE_SSH_CONFIG=/dev/null OMAMOBILE_SSH_INTERFACE=usb
 grep -F -- '--relay usb-fixture 172.16.42.1' "$t/bundle-transport" >/dev/null || fail "bundled wrapper finds its direct transport helper"
 pass "bundled phone-ssh resolves its helper with no checkout or network"
 
+# A bundled extractor copied out on its own (no repository beside it) loads
+# its bundled tools/lib/out-dir.sh to refuse -o /, and stops before creating -w
+# if that helper is missing.
+mkdir -p "$t/standalone"
+cp -a "$b/tools" "$t/standalone/tools"
+: > "$t/standalone/junk.img"
+out=$("$t/standalone/tools/extract-vendor-firmware" -w "$t/standalone/work" -o / "$t/standalone/junk.img" 2>&1) &&
+  fail "bundled extract-vendor-firmware refuses -o /"
+grep -cF -- "-o resolves to /" <<<"$out" >/dev/null && [[ ! -e $t/standalone/work ]] ||
+  fail "bundled extract-vendor-firmware refuses -o / before creating -w: $out"
+rm "$t/standalone/tools/lib/out-dir.sh"
+out=$("$t/standalone/tools/extract-vendor-firmware" -w "$t/standalone/work" -o "$t/standalone/out" "$t/standalone/junk.img" 2>&1) &&
+  fail "bundled extract-vendor-firmware stops when lib/out-dir.sh is missing"
+grep -cF -- "error: can't load lib/out-dir.sh" <<<"$out" >/dev/null && [[ ! -e $t/standalone/work ]] ||
+  fail "bundled extract-vendor-firmware stops cleanly when lib/out-dir.sh is missing: $out"
+pass "bundled extract-vendor-firmware uses tools/lib/out-dir.sh standalone and stops if it is missing"
 
 (cd "$b" && sha256sum -c --quiet SHA256SUMS) || fail "SHA256SUMS checks"
 for f in INSTALL.md $(printf 'tools/%s ' $tools); do
@@ -140,6 +156,7 @@ tar -tvf "$tarball" | awk '$2 != "0/0" { bad = 1 } END { exit bad }' || fail "ev
 [[ $(TZ=UTC tar -tvf "$tarball" | awk '{ print $4 }' | sort -u) == 2026-11-01 ]] || fail "every mtime is the release date"
 tar -tvf "$tarball" omamobile-testdev-2026.11.01/install | grep -c '^-rwxr-xr-x' >/dev/null || fail "install keeps its execute bit in the tar"
 tar -tvf "$tarball" omamobile-testdev-2026.11.01/README.txt | grep -c '^-rw-r--r--' >/dev/null || fail "README.txt is 644 in the tar"
+tar -tvf "$tarball" omamobile-testdev-2026.11.01/tools/lib/out-dir.sh | grep -c '^-rw-r--r--' >/dev/null || fail "tools/lib/out-dir.sh is 644 in the tar"
 mkdir "$t/unpacked"
 tar -C "$t/unpacked" -xf "$tarball"
 (cd "$t/unpacked/omamobile-testdev-2026.11.01" && sha256sum -c --quiet SHA256SUMS) || fail "the unpacked bundle checks against its SHA256SUMS"
