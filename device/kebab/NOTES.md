@@ -54,6 +54,34 @@ peripheral, no panel node and the wrong touch controller (S6SY761).
 [tree72]: https://gitlab.postmarketos.org/soc/qualcomm-sm8250/linux
 [tree]: https://gitlab.com/sm8250-mainline/linux
 
+## 2026-11-28: battery and charging (`fastboot boot`, Arch root on `userdata`)
+
+Same kernel. No change was needed for either.
+
+- **Gauge:** the board DTS's `ti,bq28z610` at I2C 0x55 binds
+  `bq27xxx_battery_i2c` (loaded by udev) as `bq28z610-0`: status, capacity,
+  voltage, current, temperature, health, charge-full and cycle count read
+  back sensibly. UPower reports it (`battery_bq28z610_0`: percentage, state,
+  time to full, capacity health), so the shell's battery indicator has a
+  source. The pack is two cells in series: `voltage_now` reads about 8.0 V.
+- **Charging:** with the Type-C port online (`tcpm-source-psy`, 5 V,
+  `current_max` 3 A from the laptop) the battery charges at about +376 mA,
+  about 3 W: the PM8150B's charger runs on the limits the bootloader left,
+  with no Linux driver.
+- **Not enabled on purpose:** `qcom_pm8150b_charger` (`CHARGER_QCOM_SMB5`)
+  is built and the OnePlus 8 Pro's DTS enables `&pm8150b_charger` with
+  `monitored-battery`, but the 8 Pro's battery is one cell and the 8T's is
+  two in series, and the 8T's board DTS leaves the node disabled. Driving
+  a charger that assumes one cell on a 2S pack isn't something to try
+  without the 8T's charging path written down first (the PM8150B, the
+  BQ25970 charge pump, and how the downstream kernel splits the work), so
+  faster charging waits for that. `qcom_fg` and `bq25970_charger` are
+  built but not loaded for the same reason.
+
+Light/dark mode needs nothing device-specific: Omamobile's quick settings
+"Dark theme" tile switches between Omarchy's dark and light themes, and a
+long press opens the theme switcher.
+
 ## 2026-11-28: DSPs and speakers (`fastboot boot`, Arch root on `userdata`)
 
 Same kernel, with `SND_SOC_TFA987X`, `CHARGER_QCOM_SMB5`,
