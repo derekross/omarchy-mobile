@@ -1014,15 +1014,20 @@ block layouts; otherwise it only registers its layout type with the NFS
 client. The two new questions, `DM_INIT` (device-mapper tables from the
 kernel command line) and `CRASH_DM_CRYPT` (dm-crypt keys for a crash
 kernel), stay off. The kernel's crypto sockets for userspace
-(`CRYPTO_USER_API_HASH` and `_SKCIPHER`, AF_ALG), which cryptsetup uses for
-the LUKS2 keyslot area where they exist, stay off: they would open the
-kernel's crypto API to every process on every phone, and cryptsetup opened
-the owner's volume without them (§11.9, 2026-11-27). The options that are
-in are inert without an encrypted root: the kernel sets up no device-mapper
-target by itself, and at boot only the `cryptsetup` of an `INITRAMFS_CRYPT`
-initramfs opens one, on a LUKS2 `userdata`. A per-device `kernel.config`
-can't carry them, since the release kernel is one build for every device
-(RELEASES §3.1, §4).
+(`CRYPTO_USER_API_HASH` and `_SKCIPHER`, AF_ALG) stay off: they would open
+the kernel's crypto API to every process on every phone, and cryptsetup
+doesn't need them for this format. Alpine's cryptsetup in the initramfs and
+Arch's on the root are both built on OpenSSL (`libcryptsetup` links
+`libcrypto`), and with that backend cryptsetup encrypts and decrypts the
+LUKS2 keyslot area with OpenSSL in userspace, turning to the kernel's
+sockets only for a cipher OpenSSL lacks (`crypt_cipher_init()` in
+cryptsetup's `lib/crypto_backend/crypto_openssl.c`); `aes-xts-plain64`
+isn't one. It opened the owner's volume without them (§11.9, 2026-11-27).
+The options that are in are inert without an encrypted root: the kernel
+sets up no device-mapper target by itself, and at boot only the
+`cryptsetup` of an `INITRAMFS_CRYPT` initramfs opens one, on a LUKS2
+`userdata`. A per-device `kernel.config` can't carry them, since the
+release kernel is one build for every device (RELEASES §3.1, §4).
 
 `bin/omamobile initramfs`, only with `INITRAMFS_CRYPT=yes`: Alpine's
 signed `cryptsetup` and GNU `tar` (the build stops if either is missing;
