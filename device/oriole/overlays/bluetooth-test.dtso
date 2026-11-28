@@ -1,0 +1,16 @@
+// SPDX-License-Identifier: MIT
+/* Opt-in only: BLUETOOTH-PLAN.md. Requires kernel Bluetooth support (#159). */
+/dts-v1/;
+/plugin/;
+
+&{/soc@0/usi@175b00c0} {
+	status = "okay";
+};
+
+&{/soc@0/usi@175b00c0/serial@175b0000} {
+	status = "okay";
+};
+
+&{/soc@0/usi@175b00c0/serial@175b0000/bluetooth} {
+	status = "okay";
+};
