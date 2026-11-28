@@ -9068,6 +9068,41 @@ The image manifest SHA-256 is
 `cc34c26d2f64bf51bf9cbdcac724ccbd5682d53eb30401ab101830a0a6dace6e`.
 No phone access, reboot or flash was performed.
 
+###### Attended BE selector 4 gate trial
+
+On 2026-11-28 the guarded rescue backed up all nine read-only,
+unmounted NV partitions (3,392,151,552 bytes). The Mac independently
+verified all hashes and private permissions. Android stayed off
+between the rescue and diagnostic. All five slot B images passed
+staging, and the vendor boot readback matched all 8,192 supplied
+bytes. The diagnostic booted once.
+
+| Checkpoint | Kernel uptime (s) | Selector 4 gate reply |
+| --- | ---: | ---: |
+| Before BE ON | 6.454700 | 0 |
+| After BE ON | 6.455120 | 1 |
+| Before BE OFF | 6.473207 | 1 |
+| After BE OFF | 6.473498 | 0 |
+
+BE ON returned deferred ACK 5 and readback 1. BE OFF returned
+immediate ACK 0 and readback 0. Ramoops and `SYSTEM_LAST_KMSG`
+agree on the four replies and both vote transitions.
+
+PID 1 verified the 42 read-only, unmounted LUN 0 partitions
+and the v73 comparison. The temporary SCSI host retired before
+the binding check. Both display SGIAs and DC9x00 bound. The
+module reserved IRQ 31 on SGIA input 4 with `IRQF_NO_AUTOEN`,
+then unloaded. BE MMIO, DSI0 host and PHY TX reads remained
+disabled. The gate transition confirms the selector 4 clock
+cell's acknowledgment. BE register-bus access, isolation and
+external reset readiness remain open.
+
+Zero SCSI disks remained at the timed return. The kernel requested
+restart at 91.232 s. Fastboot was visible before the Mac detected
+it, and a USB-C reconnect restored detection. Stock D1 completed
+boot on A with enforcing verity and the original VBMeta digest.
+Take a fresh guarded NV backup before the next slot B trial.
+
 ###### Mainline DSI0 readiness after stock connector registration
 
 The mainline prerequisite fixture at kernel
