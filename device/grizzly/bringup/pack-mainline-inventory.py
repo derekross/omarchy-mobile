@@ -23,6 +23,15 @@ def arm64_member(archive, member):
     return content
 
 
+def arm64_module(path, name):
+    content = path.read_bytes()
+    if (len(content) < 64 or content[:6] != b"\x7fELF\x02\x01"
+            or struct.unpack_from("<HH", content, 16) != (1, 183)
+            or f"\0name={name}\0".encode("ascii") not in content):
+        raise ValueError(f"expected the ARM64 {name} kernel module")
+    return content
+
+
 def build_read_only_root(output, busybox, loader):
     with TemporaryDirectory(dir=output) as scratch:
         root = Path(scratch)
@@ -48,7 +57,7 @@ def build_read_only_root(output, busybox, loader):
 def pack(rescue, output, device_query_only=False, single_lun_only=False,
          single_disk_only=False, gpt_scan_only=False, read_only_test_root=False,
          dsi0_phy_scaffold=None, require_dsi0_sibling_votes=False,
-         require_dsi0_selector3_gate=False):
+         require_dsi0_selector3_gate=False, dc9x00_binding=None):
     if require_dsi0_selector3_gate and not require_dsi0_sibling_votes:
         raise ValueError("DSI0 selector 3 gate checks require sibling vote checks")
     if require_dsi0_sibling_votes and dsi0_phy_scaffold is None:
@@ -59,7 +68,8 @@ def pack(rescue, output, device_query_only=False, single_lun_only=False,
     archive = output / "inventory.cpio"
     compressed = output / "inventory.cpio.lz4"
     root_image = build_read_only_root(output, busybox, loader) if read_only_test_root else None
-    gpt_scan_only = gpt_scan_only or read_only_test_root or dsi0_phy_scaffold is not None
+    gpt_scan_only = (gpt_scan_only or read_only_test_root
+                     or dsi0_phy_scaffold is not None or dc9x00_binding is not None)
     with TemporaryDirectory(dir=output) as scratch:
         root = Path(scratch)
         dirs = ("grizzly-inventory", "lib")
@@ -84,11 +94,7 @@ def pack(rescue, output, device_query_only=False, single_lun_only=False,
             files["grizzly-inventory/read-only-test-root.sh"] = (
                 (HERE / "read-only-test-root.sh").read_bytes(), 0o644)
         if dsi0_phy_scaffold is not None:
-            module = dsi0_phy_scaffold.read_bytes()
-            if (module[:6] != b"\x7fELF\x02\x01" or len(module) < 64
-                    or struct.unpack_from("<HH", module, 16) != (1, 183)
-                    or b"\0name=phy_google_malibu_cdphy\0" not in module):
-                raise ValueError("DSI0 PHY scaffold requires its ARM64 kernel module")
+            module = arm64_module(dsi0_phy_scaffold, "phy_google_malibu_cdphy")
             files["grizzly-inventory/phy-google-malibu-cdphy.ko"] = (module, 0o400)
             files["grizzly-inventory/dsi0-phy-scaffold.sh"] = (
                 (HERE / "dsi0-phy-scaffold.sh").read_bytes(), 0o644)
@@ -96,6 +102,11 @@ def pack(rescue, output, device_query_only=False, single_lun_only=False,
             files["grizzly-inventory/dsi0-sibling-votes"] = (b"", 0o644)
         if require_dsi0_selector3_gate:
             files["grizzly-inventory/dsi0-selector3-gate"] = (b"", 0o644)
+        if dc9x00_binding is not None:
+            module = arm64_module(dc9x00_binding, "malibu_dc9x00")
+            files["grizzly-inventory/malibu-dc9x00.ko"] = (module, 0o400)
+            files["grizzly-inventory/dc9x00-binding.sh"] = (
+                (HERE / "dc9x00-binding.sh").read_bytes(), 0o644)
         libc = "lib/libc.musl-aarch64.so.1"
         for name in dirs:
             path = root / name
@@ -142,6 +153,8 @@ def main():
                       help="add a RAM-backed read-only ext4 smoke test after the v73 read")
     mode.add_argument("--dsi0-phy-scaffold", type=Path, metavar="PHY_MODULE",
                       help="bind the isolated DSI0 PHY module after the v73 storage guard")
+    mode.add_argument("--dc9x00-binding", type=Path, metavar="DC_MODULE",
+                      help="bind the masked DC9x00 IRQ scaffold after the v73 storage guard")
     parser.add_argument("--require-dsi0-sibling-votes", action="store_true",
                         help="require sibling MBFS samples around the scaffold vote")
     parser.add_argument("--require-dsi0-selector3-gate", action="store_true",
@@ -152,7 +165,7 @@ def main():
         pack(args.rescue_cpio, args.output, args.device_query_only,
              args.single_lun_only, args.single_disk_only, args.gpt_scan_only,
              args.read_only_test_root, args.dsi0_phy_scaffold, args.require_dsi0_sibling_votes,
-             args.require_dsi0_selector3_gate)
+             args.require_dsi0_selector3_gate, dc9x00_binding=args.dc9x00_binding)
     except (OSError, ValueError, subprocess.CalledProcessError) as error:
         parser.exit(1, f"mainline inventory packaging failed: {error}\n")
 

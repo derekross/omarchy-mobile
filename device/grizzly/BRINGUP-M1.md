@@ -8841,6 +8841,38 @@ trial for a fresh verified NV backup, the timed
 return, and an explicit stock A recovery plan.
 Runtime SGIA binding remains untested.
 
+###### Offline slot B DC9x00 binding fixture
+
+The fixture uses kernel `700a6187f630` with release
+`7.3.0-rc6-omamobile-grizzly-dc9x00-binding`. Build with
+`CONFIG_GOOGLE_MALIBU_SGIA=y`,
+`CONFIG_DRM_GOOGLE_MALIBU_DC9X00=m` and the Malibu CD-PHY
+driver disabled. Add `dc9x00-binding.dtso` after the v73
+watchdog, ramoops, USB and UFS overlays. Build the RAM disk
+with `pack-mainline-inventory.py --dc9x00-binding <module>`.
+Keep the v73 kernel command line and D1 five-image packaging
+layout. Leave the manual display vote diagnostics off.
+
+The applied overlay changes exactly three statuses. The
+frame-start route is input 4 on `0x0f46e020`, then input 0
+on `0x0f46e080`, then level-high GIC SPI `0xe5`.
+The built-in SGIAs can probe early and hold wrapper genpd
+until restart. PID 1 waits for the 42 read-only partitions,
+the v73 comparison and disk retirement before loading the
+DC9x00 module. The fixture mounts no UFS partition and
+does not expose the private NV partitions. PID 1 checks
+both SGIA bindings, the DC driver and the masked IRQ's
+Linux SGIA input, then removes the module. The 90-second
+warm return stays armed throughout.
+
+The ARM64 Image, module and Grizzly DTB built offline.
+Module disassembly confirmed `IRQF_NO_AUTOEN` and a
+handler that returns `IRQ_NONE` without MMIO. The final
+boot artifacts passed DT, ramdisk, AVB, slot-size and
+handoff checks. DSI0 host and PHY TX reads remain disabled.
+The binding and timed return still need an attended hardware
+trial. No phone access, reboot or flash was performed.
+
 After this stock Android session, take and verify a fresh
 guarded nine-partition NV backup before the next Linux
 slot B trial. Keep Android off between the rescue and trial.

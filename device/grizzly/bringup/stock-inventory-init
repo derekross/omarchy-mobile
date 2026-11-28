@@ -219,6 +219,26 @@ observe_mainline_ro_disk() {
             0)
                 helper=/grizzly-inventory/read-only-test-root.sh
                 root_image=/grizzly-inventory/test-root.ext4
+                dsi0_scaffold=/grizzly-inventory/dsi0-phy-scaffold.sh
+                dc9x00_binding=/grizzly-inventory/dc9x00-binding.sh
+                if [ -e "$dc9x00_binding" ] || [ -L "$dc9x00_binding" ]; then
+                    [ "$expected" -eq 42 ] && [ -f "$dc9x00_binding" ] && [ ! -L "$dc9x00_binding" ] ||
+                        end_inventory 'invalid DC9x00 binding fixture'
+                    for conflict in "$dsi0_scaffold" "$systemd_root_marker" "$helper" "$root_image"; do
+                        if [ -e "$conflict" ] || [ -L "$conflict" ]; then
+                            end_inventory 'ambiguous DC9x00 binding fixture'
+                        fi
+                    done
+                    if ! "$bb" dmesg | "$bb" grep -Eq 'ufs-uic-v73 LUN 0 block comparison part=23 lba=598711 bytes=8192 ret=0$'; then
+                        "$bb" sleep 1 || break
+                        tries=$((tries + 1))
+                        continue
+                    fi
+                    # shellcheck source=dc9x00-binding.sh
+                    . "$dc9x00_binding"
+                    grizzly_dc9x00_binding "$bb" || end_inventory 'DC9x00 masked binding incomplete'
+                    end_inventory 'DC9x00 masked binding complete'
+                fi
                 if [ -e "$helper" ] || [ -L "$helper" ] ||
                     [ -e "$root_image" ] || [ -L "$root_image" ]; then
                     [ "$expected" -eq 42 ] && [ -f "$helper" ] && [ ! -L "$helper" ] ||
@@ -244,7 +264,6 @@ observe_mainline_ro_disk() {
                     fi
                     exec "$bb" sh "$systemd_root_marker" boot
                 fi
-                dsi0_scaffold=/grizzly-inventory/dsi0-phy-scaffold.sh
                 if [ -e "$dsi0_scaffold" ] || [ -L "$dsi0_scaffold" ]; then
                     [ "$expected" -eq 42 ] && [ -f "$dsi0_scaffold" ] && [ ! -L "$dsi0_scaffold" ] ||
                         end_inventory 'invalid mainline DSI0 PHY fixture'

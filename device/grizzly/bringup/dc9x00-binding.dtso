@@ -1,0 +1,15 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/dts-v1/;
+/plugin/;
+
+&dpu_sgia {
+	status = "okay";
+};
+
+&dpu_be_sgia {
+	status = "okay";
+};
+
+&dc9x00 {
+	status = "okay";
+};
