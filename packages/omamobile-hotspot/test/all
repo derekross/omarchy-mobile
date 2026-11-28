@@ -1,14 +1,18 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# omamobile-hotspot: the helper and the backend against stubs, the unit, the
-# polkit rule and the staged layout. Nothing on this machine is touched.
+# omamobile-hotspot: the helper and the backend against stubs, the client
+# isolation in a network namespace of its own, the unit, the polkit rule and the
+# staged layout. Nothing on this machine is touched.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 fail() { echo "FAIL: $*" >&2; exit 1; }
 pass() { printf 'ok - %s\n' "$1"; }
-bash -n lib/hotspot-ap && bash -n lib/hotspot-backend && bash -n install || fail "the scripts parse"
+bash -n lib/hotspot-ap && bash -n lib/hotspot-backend && bash -n test/hotspot-netns.sh && bash -n install || fail "the scripts parse"
 bash test/hotspot-ap.sh >/dev/null 2>&1 || fail "hotspot-ap (test/hotspot-ap.sh)"
 bash test/hotspot-backend.sh >/dev/null 2>&1 || fail "hotspot-backend (test/hotspot-backend.sh)"
+# the isolation on a real kernel (unshare -rnm); prints its skip line where namespaces aren't allowed
+n=$(bash test/hotspot-netns.sh 2>&1) || { printf '%s\n' "$n" >&2; fail "client isolation in a network namespace (test/hotspot-netns.sh)"; }
+case $n in *"skip - "*) printf '%s\n' "$n" | grep -- '^skip - ' ;; *) pass "client isolation in a network namespace" ;; esac
 u=omamobile-hotspot.service
 grep -qx 'ConditionPathExists=/usr/share/omamobile/hotspot.conf' $u || fail "the unit only runs where a device opted in"
 grep -qx 'ExecStart=/usr/lib/omamobile-hotspot/hotspot-ap run' $u || fail "the unit runs the helper"

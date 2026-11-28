@@ -19,4 +19,4 @@ It goes in before the profile comes up, is refreshed every 5 s, and goes after t
 
 Limit: an on-link split default route (`0.0.0.0/1` and `128.0.0.0/1`, as some VPNs add) lands in that drop set too, so the clients lose the internet while it is there. That fails closed, nothing leaks.
 
-Not run on a phone yet: the isolation has run in the CI container only, against stubs and in a real-kernel network namespace test.
+Not run on a phone yet: the isolation has run in the CI container only, against stubs and in a real-kernel network namespace test (`test/hotspot-netns.sh`, run by `test/all` as a normal user under `unshare -rnm`; it prints a skip line where namespaces aren't allowed).
