@@ -37,7 +37,7 @@ stub omarchy-toggle-nightlight '[ "$1" = --status ] && { cat '"$tmp"'/state/nigh
 stub hyprsunset 'exit 0'
 stub omarchy-toggle-idle 'echo "idle $*" >>'"$log"
 stub omarchy-powerprofiles-set 'echo "powerprofiles $*" >>'"$log"
-stub omamobile-sit 'echo "sit $*" >>'"$log"
+stub omamobile-sit 'echo "sit $*" >>'"$log"'; [ -e '"$tmp"'/state/sit-refuses ] && exit 1; exit 0'
 stub pgrep 'exit 1'
 
 run() { env -i HOME="$tmp/home" XDG_RUNTIME_DIR="$tmp/run" PATH="$fake:$basic" sh "$@"; }
@@ -64,6 +64,74 @@ run "$dir/tile-action.sh" airplane off
 grep -cx "wlan unblocked" "$tmp/state/rfkill" >/dev/null || fail "airplane off unblocks Wi-Fi"
 grep -cx "bluetooth blocked" "$tmp/state/rfkill" >/dev/null || fail "airplane off keeps Bluetooth off when it was off before"
 pass "airplane mode restores the radios it found on"
+
+# With sitd running: airplane mode turns the cellular radio off through sitd
+# as well as Wi-Fi and Bluetooth, and the tile reads sitd's public state.
+ln -sf "$(command -v python3)" "$basic/python3"
+printf 'wlan unblocked\nbluetooth blocked\nnfc unblocked\n' >"$tmp/state/rfkill"
+sit_run() { env -i HOME="$tmp/home" XDG_RUNTIME_DIR="$tmp/run" OMAMOBILE_SIT_STATE="$tmp/state/sit.json" \
+  PATH="$fake:$basic" sh "$@"; }
+printf '{"modem":{"radio":"on","radio_choice":"on","state":"registered"}}\n' >"$tmp/state/sit.json"
+grep -cx "airplane=off" <<<"$(sit_run "$dir/tile-state.sh")" >/dev/null || fail "airplane is off while sitd's radio is on"
+: >"$log"
+sit_run "$dir/tile-action.sh" airplane on || fail "airplane on with sitd succeeds"
+grep -cx "sit radio off" "$log" >/dev/null || fail "airplane on switches the cellular radio off"
+grep -cx "wlan blocked" "$tmp/state/rfkill" >/dev/null || fail "airplane on with sitd blocks Wi-Fi"
+grep -cx "nfc unblocked" "$tmp/state/rfkill" >/dev/null || fail "airplane mode with sitd leaves NFC alone"
+[[ $(head -n1 "$log") == "sit radio off" ]] || fail "the cellular radio goes off before the switches"
+sit_run "$dir/tile-action.sh" airplane off || fail "airplane off with sitd succeeds"
+grep -cx "sit radio on" "$log" >/dev/null || fail "airplane off switches the cellular radio on"
+grep -cx "wlan unblocked" "$tmp/state/rfkill" >/dev/null || fail "airplane off with sitd brings Wi-Fi back"
+grep -cx "bluetooth blocked" "$tmp/state/rfkill" >/dev/null || fail "airplane off with sitd keeps Bluetooth off when it was off before"
+# sitd refuses the radio off (a call in progress): nothing else changes
+touch "$tmp/state/sit-refuses"
+if sit_run "$dir/tile-action.sh" airplane on; then fail "a refused radio off fails the tile's action"; fi
+grep -cx "wlan unblocked" "$tmp/state/rfkill" >/dev/null || fail "a refused radio off leaves Wi-Fi on"
+# sitd fails the radio on: the switches come back all the same, and the
+# action reports the failure
+rm -f "$tmp/state/sit-refuses"
+sit_run "$dir/tile-action.sh" airplane on
+touch "$tmp/state/sit-refuses"
+if sit_run "$dir/tile-action.sh" airplane off; then fail "a failed radio on fails the tile's action"; fi
+grep -cx "wlan unblocked" "$tmp/state/rfkill" >/dev/null || fail "a failed radio on still brings Wi-Fi back"
+rm -f "$tmp/state/sit-refuses"
+# ... and keeps what was on before airplane mode for the next try: Bluetooth
+# was off then, and the second tap leaves it off
+printf '{"modem":{"radio":"off","radio_choice":"off","state":"searching"}}\n' >"$tmp/state/sit.json"
+sit_run "$dir/tile-action.sh" airplane off || fail "the second airplane off succeeds"
+grep -cx "bluetooth blocked" "$tmp/state/rfkill" >/dev/null || fail "after a failed radio on, the next try keeps Bluetooth off as it was"
+printf '{"modem":{"radio":"on","radio_choice":"on","state":"registered"}}\n' >"$tmp/state/sit.json"
+printf '{"modem":{"radio":"off","radio_choice":"off","state":"searching"}}\n' >"$tmp/state/sit.json"
+grep -cx "airplane=on" <<<"$(sit_run "$dir/tile-state.sh")" >/dev/null || fail "airplane is on while sitd's radio is off"
+printf 'not json' >"$tmp/state/sit.json"
+grep -cx "airplane=off" <<<"$(sit_run "$dir/tile-state.sh")" >/dev/null || fail "an unreadable state reads as airplane off"
+rm -f "$tmp/state/sit.json"
+pass "airplane mode with sitd switches the cellular radio, Wi-Fi and Bluetooth, and restores what was on"
+
+# An older sitd (0.3.44) writes no radio_choice, and its state goes on reading
+# radio "on" after its own radio off: the tile must not switch the cellular
+# radio there (a second tap could never turn it back on), so it keeps to the
+# rfkill switches as on a phone without sitd.
+printf 'wlan unblocked\nbluetooth unblocked\nnfc unblocked\n' >"$tmp/state/rfkill"
+printf '{"modem":{"present":true,"radio":"on","state":"registered","voice":true}}\n' >"$tmp/state/sit.json"
+: >"$log"
+sit_run "$dir/tile-action.sh" airplane on
+grep -cx "sit radio off" "$log" >/dev/null && fail "with a sitd that writes no radio_choice, airplane on leaves the cellular radio alone"
+grep -cx "wlan blocked" "$tmp/state/rfkill" >/dev/null || fail "with a sitd that writes no radio_choice, airplane on blocks Wi-Fi"
+grep -cx "airplane=on" <<<"$(sit_run "$dir/tile-state.sh")" >/dev/null || fail "with a sitd that writes no radio_choice, the tile reads the rfkill switches"
+sit_run "$dir/tile-action.sh" airplane off
+grep -cx "sit radio on" "$log" >/dev/null && fail "with a sitd that writes no radio_choice, airplane off leaves the cellular radio alone"
+grep -cx "wlan unblocked" "$tmp/state/rfkill" >/dev/null || fail "with a sitd that writes no radio_choice, airplane off unblocks Wi-Fi"
+# radio_choice anywhere but under "modem" is not sitd's: both scripts read it the same way
+printf '{"radio_choice":"on","modem":{"radio":"off"}}\n' >"$tmp/state/sit.json"
+printf 'wlan unblocked\nbluetooth unblocked\nnfc unblocked\n' >"$tmp/state/rfkill"
+: >"$log"
+sit_run "$dir/tile-action.sh" airplane on
+grep -cx "sit radio off" "$log" >/dev/null && fail "radio_choice outside \"modem\": the action leaves the cellular radio alone"
+grep -cx "airplane=on" <<<"$(sit_run "$dir/tile-state.sh")" >/dev/null || fail "radio_choice outside \"modem\": the tile reads the rfkill switches"
+sit_run "$dir/tile-action.sh" airplane off
+rm -f "$tmp/state/sit.json"
+pass "airplane mode with an older sitd keeps to the rfkill switches"
 
 # Dark theme: the theme being left is remembered for its mode.
 run "$dir/tile-action.sh" dark-theme off

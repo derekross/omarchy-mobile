@@ -6,8 +6,11 @@
 # Nothing here writes; each probe is bounded by timeout so a hung daemon
 # cannot hold the sheet's refresh.
 #
-#   airplane      on when every Wi-Fi, Bluetooth and WWAN rfkill switch is
-#                 soft-blocked (none without such a switch)
+#   airplane      with omamobile-sitd running (and its state saying the
+#                 owner's radio choice): on while its public state says the
+#                 cellular radio is off; otherwise on when every
+#                 Wi-Fi, Bluetooth and WWAN rfkill switch is soft-blocked
+#                 (none without such a switch)
 #   hotspot       on while NetworkManager's "Hotspot" connection is up
 #   powerprofile  power-profiles-daemon's active profile
 #   theme_mode    light or dark, as Omarchy resolves the current theme
@@ -35,9 +38,18 @@
 
 t() { timeout 3 "$@" 2>/dev/null; }
 have() { command -v "$1" >/dev/null 2>&1; }
+here=${0%/*}; [ "$here" != "$0" ] || here=. # this script's folder
 
-# airplane
-if have rfkill; then
+# airplane: the cellular radio where sitd runs and its state says the
+# owner's radio choice (radio_choice: a sitd that keeps radio "off" after its
+# own AT+CFUN=0; the Pixel 9a has no WWAN rfkill switch, and airplane mode is
+# the cell radio). An older sitd's state goes on reading "on" after a radio
+# off, so with it the tile stays on the rfkill switches. sit-airplane.sh
+# makes the check for both this and tile-action.sh.
+sit_airplane=$(t sh "$here/sit-airplane.sh")
+if [ -n "$sit_airplane" ]; then
+  echo "airplane=$sit_airplane"
+elif have rfkill; then
   t rfkill -rn -o TYPE,SOFT | awk '
     $1 == "wlan" || $1 == "bluetooth" || $1 == "wwan" { n++; if ($2 == "blocked") b++ }
     END { print "airplane=" (n == 0 ? "none" : (b == n ? "on" : "off")) }'
