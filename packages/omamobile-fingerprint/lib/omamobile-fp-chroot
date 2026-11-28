@@ -234,8 +234,34 @@ rpmb_sg() {
 
 touch_event() {
   local d
-  for d in /sys/class/input/event*; do
+  for d in "${OMAMOBILE_FP_INPUT_SYS:-/sys/class/input}"/event*; do
     [[ $(cat "$d/device/name" 2>/dev/null) == "$TOUCH_NAME" ]] && { basename "$d"; return; }
+  done
+}
+
+# The touchscreen gets a new event node when its driver unbinds and binds
+# again (a controller reset), and the bridge's bind then points at a device
+# that is gone. Every 2 s, with builtins only while the node is still the
+# touchscreen, check its name; once it isn't, find the touchscreen's node and
+# bind it over the chroot's /dev/input/touchscreen, so the HALs and the
+# bridge still see only the touchscreen, and the bridge reopens the same
+# path. Runs in the runner's mount namespace, as a child of the runner, which
+# kills it with the rest at stop.
+touch_watch() { # $1 the node bound at start
+  local ev=$1 name new pause dst=$ROOT/dev/input/touchscreen
+  exec {pause}<> <(:) # a pipe that never has data: read -t on it is a builtin sleep
+  while :; do
+    read -rt "${OMAMOBILE_FP_TOUCH_WATCH_S:-2}" -u "$pause" _ || :
+    name=
+    [[ -n $ev ]] && { read -r name 2>/dev/null < "${OMAMOBILE_FP_INPUT_SYS:-/sys/class/input}/$ev/device/name" || :; }
+    [[ $name == "$TOUCH_NAME" ]] && continue
+    new=$(touch_event) || :
+    [[ -n $new ]] || continue
+    if [[ $new != "$ev" ]]; then
+      { umount "$dst" 2>/dev/null; bind "/dev/input/$new" "$dst" ro; } &&
+        say "touchscreen now at /dev/input/$new" || say "could not bind /dev/input/$new for the bridge"
+    fi
+    ev=$new
   done
 }
 
@@ -750,6 +776,7 @@ start() {
       ${OMAMOBILE_FP_LHBM_SETTLE_MS:+--settle "$OMAMOBILE_FP_LHBM_SETTLE_MS"}
   fi
 
+  [[ $stage == bridge ]] && { touch_watch "$(touch_event)" & }
   say "stage $stage running"
   rm -f "$PENDING"
   # Supervise: any child exiting stops the whole stack, and it stays stopped

@@ -86,6 +86,35 @@ PATH=$r/bin:$PATH OMAMOBILE_FP_ROOT=$r bash "$h" post
 rm -rf "$r"
 echo "ok - fprintd is restarted after a wake, unless Omarchy's own hook does it"
 
+# The touchscreen's node changes when its driver rebinds: the runner binds
+# the new one over the chroot's /dev/input/touchscreen, and leaves it alone
+# while the node is still the touchscreen (or came back under its old name).
+w=$(mktemp -d)
+(
+  set +e
+  TOUCH_NAME="Test Touch" ROOT=$w/root OMAMOBILE_FP_INPUT_SYS=$w/sys OMAMOBILE_FP_TOUCH_WATCH_S=0.05
+  eval "$(sed -n '/^touch_event() {/,/^}/p; /^touch_watch() {/,/^}/p' lib/omamobile-fp-chroot)"
+  bind() { echo "bind $*" >>"$w/calls"; }
+  umount() { echo "umount $*" >>"$w/calls"; }
+  say() { :; }
+  node() { mkdir -p "$w/sys/$1/device"; echo "$2" >"$w/sys/$1/device/name"; }
+  waitfor() { for _ in $(seq 100); do [[ $(cat "$w/calls" 2>/dev/null) == "$1" ]] && return 0; sleep 0.05; done; return 1; }
+  node event2 "Keys"; node event3 "Test Touch"; : >"$w/calls"
+  touch_watch event3 & pid=$!
+  sleep 0.3; [[ ! -s $w/calls ]] || { echo "not ok - the touchscreen still at its node: nothing is bound"; kill $pid; exit 1; }
+  rm -r "$w/sys/event3"; sleep 0.3
+  [[ ! -s $w/calls ]] || { echo "not ok - while the touchscreen is gone: nothing is bound"; kill $pid; exit 1; }
+  node event5 "Test Touch"
+  waitfor "umount $w/root/dev/input/touchscreen
+bind /dev/input/event5 $w/root/dev/input/touchscreen ro" || { echo "not ok - a new node is bound over the old one: $(cat "$w/calls")"; kill $pid; exit 1; }
+  : >"$w/calls"; rm -r "$w/sys/event5"; sleep 0.2; node event5 "Test Touch"; sleep 0.3
+  [[ ! -s $w/calls ]] || { echo "not ok - back at the same node: nothing to bind"; kill $pid; exit 1; }
+  kill $pid
+) || fail "touch_watch"
+rm -rf "$w"
+sed -n '/^start() {/,/^}/p' lib/omamobile-fp-chroot | grep -c 'touch_watch "$(touch_event)" &' >/dev/null || fail "start watches the touchscreen for the bridge"
+echo "ok - the touchscreen's new node is bound over the old one when its driver rebinds"
+
 # The safety before storageproxyd: consent, the read-only copies, the TDP
 # guard, one storage proxy per boot (test/preflight, a fake tree).
 bash -n test/preflight || fail "syntax: test/preflight"
