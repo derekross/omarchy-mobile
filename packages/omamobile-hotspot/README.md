@@ -11,11 +11,11 @@ It is opt-in per device. omamobile-shell doesn't depend on it, so no phone gets 
 Client isolation is always on, in its own nftables table (`inet omamobile_hotspot_iso`, so a drop there is final whatever UFW or NetworkManager accept):
 
 - a client gets to the phone only for DHCP and for DNS on the hotspot's own address; ssh or the phone's address on another network are dropped;
-- forwarding from the hotspot to private, shared (100.64/10), link-local, loopback, multicast and reserved IPv4 ranges is dropped, so the home LAN is out of reach whether it is the uplink's own subnet or behind its router;
+- forwarding from the hotspot to private, shared (100.64/10), link-local, loopback, benchmarking (198.18/15), multicast and reserved IPv4 ranges is dropped, so the home LAN is out of reach whether it is the uplink's own subnet or behind its router;
 - nothing on the uplink side can open a connection to a client, a client can't reach another one through the phone, and IPv6 from and to the hotspot is dropped (the profile is IPv4 only);
 - the profile asks for AP isolation, so clients don't talk to each other inside the radio either (whether the Wi-Fi firmware honours that hasn't been checked on a phone yet).
 
-It goes in before the profile comes up, is refreshed every 5 s, and goes after the access point's interface is deleted. If it can't be applied (no `nft`, or `nft` refuses), the hotspot doesn't start or stops. The phone's own on-link subnets and host routes are dropped as well, so a home LAN on public addresses directly on the uplink is covered; a public-address network behind the uplink's router can't be told from the internet and stays reachable.
+It goes in before the profile comes up, is refreshed every 5 s, and goes after the access point's interface is deleted. If it can't be applied (no `nft`, or `nft` refuses), the hotspot doesn't start or stops. The phone's own on-link subnets and host routes are dropped as well, so a home LAN on public addresses directly on the uplink is covered (after a roam to such a network, its subnet joins the drop set at the next 5 s refresh, so for up to 5 s it isn't in it); a public-address network behind the uplink's router can't be told from the internet and stays reachable.
 
 Limit: an on-link split default route (`0.0.0.0/1` and `128.0.0.0/1`, as some VPNs add) lands in that drop set too, so the clients lose the internet while it is there. That fails closed, nothing leaks.
 
