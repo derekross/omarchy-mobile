@@ -358,7 +358,7 @@ lists `amp-va` and `amp-vp`; nothing else new. Rollback: previous images.
 ```sh
 ov audio-amps-test && bin/omamobile push
 tools/phone-ssh 'ls /sys/bus/platform/devices/ | grep 10960000; for d in /sys/bus/spi/devices/spi*; do echo $d $(readlink -f $d/of_node | sed "s,.*/,,") $(readlink $d/driver); done'
-tools/phone-ssh 'for a in 0x108401c0 0x108401c4 0x10840220 0x10840224 0x10c40040 0x10c40044 0x10c400a0 0x10c400a4 0x180e0000 0x180e0004 0x180e0040 0x180e0044; do printf "%s " $a; devmem $a 32; done'
+tools/phone-ssh 'for a in 0x108401c0 0x108401c4 0x10840220 0x10840224 0x10c40040 0x10c40044 0x10c400a0 0x10c400a4 0x180e0000 0x180e0004 0x180e0040 0x180e0044; do printf "%s " $a; devmem $a; done'
 ```
 
 Expect `10960000.spi` probed and two SPI devices `amplifier@0`/`@1` with no
