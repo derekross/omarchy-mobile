@@ -8432,6 +8432,17 @@ provides useful vblank timing alongside the fence.
 An independent DPU frame-start correlation on stock A
 remains unverified.
 
+The `wait_present` scope's `fence_timestamp` marker
+adds a status check. The HAL emits it after
+`sync_wait` succeeds at `0xa511c`, and the
+`sync_file_info` helper at `0xd0440` requires
+aggregate status 1 before returning a timestamp.
+The new-mode fence matched to FrameTimeline was
+therefore success-signaled. This rules out the
+driver's known timeout error-fence path for that
+event. It still cannot identify interrupt delivery
+or distinguish the driver's interrupt and poll paths.
+
 After this stock Android session, take and verify a fresh
 guarded nine-partition NV backup before the next Linux
 slot B trial. Keep Android off between the rescue and trial.
