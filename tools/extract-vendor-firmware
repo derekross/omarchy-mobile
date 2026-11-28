@@ -59,13 +59,15 @@
 #   modem/image/venus.{mdt,bNN}                 -> qcom/venus-5.2/
 #   modem/image/mba.mbn                         -> qcom/sdm845/Xiaomi/dipper/mba.mbn
 #   bluetooth/image/crnv21.bin                  -> qca/Xiaomi/dipper/crnv21.bin
+#   bluetooth/image/crbtfw21.tlv                -> qca/crbtfw21.tlv
 #
 # The Pixel 3a (-d sargo, Qualcomm SDM670) takes its files from the vendor
 # partition of its factory image, under the names the SDM670 device trees
 # request (qcom/sdm670/sargo/; upstream's sdm670-google-sargo.dts names only
 # the GPU's zap shader so far). The split ELFs keep their .bNN segments
 # beside the .mdt, renamed .mbn, as dipper's do; every one in the image is
-# copied. Not yet run on a real image (device/sargo/NOTES.md):
+# copied. This map has run on the SP2A.220505.008 factory image
+# (device/sargo/NOTES.md, "Firmware"):
 #
 #   vendor/firmware/{a615_zap,ipa_fws}.mdt      -> qcom/sdm670/sargo/*.mbn
 #   vendor/firmware/{a615_zap,ipa_fws}.bNN      -> beside the matching .mbn
@@ -80,7 +82,9 @@
 # (radio-sargo-*.img, an FBPK container around the partition's FAT; read as
 # data by tools/lib/qcom-firmware.py, nothing mounted). Given the factory zip
 # itself, they are staged too; given the inner image zip or a vendor.img,
-# they are left out, with a note:
+# they are left out, with a note. Given the SP2A.220505.008 factory zip,
+# these came out byte for byte as the files on the phone's own modem
+# partition (device/sargo/NOTES.md, "two packaged modem boots"):
 #
 #   radio: modem/image/mba.mbn                  -> qcom/sdm670/sargo/mba.mbn
 #   radio: modem/image/modem.mdt                -> qcom/sdm670/sargo/modem.mbn
@@ -90,11 +94,10 @@
 # Wi-Fi's board data is Google's own file, under the board name ath10k asks
 # for (linux-firmware's board-2.bin has no entry for this board), as an
 # ath10k board-2.bin of that one entry, which takes the place of
-# linux-firmware's for this phone:
+# linux-firmware's for this phone (the variant Wi-Fi came up with):
 #
 #   vendor/firmware/bdwlan-sargo.bin -> ath10k/WCN3990/hw1.0/board-2.bin
 #        (bus=snoc,qmi-board-id=ff,qmi-chip-id=30214,variant=google_sargo)
-#   bluetooth/image/crbtfw21.tlv                -> qca/crbtfw21.tlv
 #
 # The Pixel 9a (-d tegu; <board> is "google,zumapro-tegu"):
 #
@@ -169,7 +172,6 @@
 # lpunpack if the image only has super.img; fsck.erofs (erofs-utils) if vendor is EROFS;
 # python3 for sargo.
 set -euo pipefail
-TOOLS_LIB=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/lib" && pwd)
 # debugfs and friends live in /sbin on Debian-like hosts
 export PATH=$PATH:/usr/sbin:/sbin
 
@@ -606,7 +608,11 @@ done
 EXTRA=()
 if [[ $DEVICE == sargo ]]; then
   need python3 "install python3"
-  qf() { python3 -I "$TOOLS_LIB/qcom-firmware.py" "$@"; }
+  # Looked up here only: a release bundle ships this tool without tools/lib/
+  # (tools/make-bundle), and every other device must still run from there
+  qcom_lib=$(dirname -- "${BASH_SOURCE[0]}")/lib/qcom-firmware.py
+  [[ -f $qcom_lib ]] || die "sargo needs $qcom_lib beside this tool (run it from a checkout)"
+  qf() { python3 -I "$qcom_lib" "$@"; }
   if [[ -s $WORK/radio.img ]]; then
     names=$(qf radio-list "$WORK/radio.img") || die "the radio image's modem partition can't be read"
     grep -qx mba.mbn <<<"$names" && grep -qx modem.mdt <<<"$names" ||

@@ -335,6 +335,26 @@ run "$t/sargo" "$t/ext4.img" -d sargo -o "$t/sargo-bonito" && fail "sargo: the P
 says "sargo: the Pixel 3a XL's vendor partition" "error: vendor partition is for 'bonito', not sargo; use -f to override"
 sed -i 's/=bonito$/=sargo/' "$t/sargo/build.prop"
 
+# --- From a release bundle ------------------------------------------------------
+# tools/make-bundle ships this tool without tools/lib/, and phone-provision runs
+# that copy: alone in a folder it must still read its arguments and extract
+# every device that needs no library; sargo, which does, says what is missing
+b=$t/bundle/tools n=$failed
+mkdir -p "$b" && cp "$EVF" "$b/extract-vendor-firmware"
+"$b/extract-vendor-firmware" -h > "$t/log" 2>&1 && grep -q '^Usage: extract-vendor-firmware' "$t/log" ||
+  { cat "$t/log"; fail "bundle: -h prints the usage from a folder holding the tool alone"; }
+if EVF=$b/extract-vendor-firmware run "$t/v1" "$t/ext4.img" -o "$t/bundle-out"; then
+  [[ $(listed "$t/bundle-out") == "$CHEETAH_FILES" ]] || fail "bundle: cheetah stages the same files as from a checkout"
+else
+  cat "$t/log"; fail "bundle: a cheetah extraction runs from a folder holding the tool alone"
+fi
+if EVF=$b/extract-vendor-firmware run "$t/sargo" "$t/ext4.img" -d sargo -o "$t/bundle-sargo"; then
+  fail "bundle: sargo without tools/lib is refused"
+else
+  says "bundle: sargo without tools/lib" "error: sargo needs $b/lib/qcom-firmware.py beside this tool (run it from a checkout)"
+fi
+pass_since "$n" "bundle: the tool alone in a folder prints its usage and extracts cheetah"
+
 # sargo's factory zip: the modem's files from its radio image, an FBPK
 # container around the modem partition's FAT16 (made up here: image/ with
 # the MBA, the split modem ELF, one segment two clusters long, and files
