@@ -24,27 +24,37 @@
 #     agent paired with the real daemon
 # What needs a phone is the runbook's (docs/INSTALL-LINK-PLAN.md §11.2).
 set -euo pipefail
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+tmp_base=${TMPDIR:-/tmp}
+[[ -d $tmp_base ]] || fail "TMPDIR is not a directory: $tmp_base"
+tmp_base=$(CDPATH= cd -- "$tmp_base" && pwd)
+[[ -z ${TMPDIR:-} ]] || export TMPDIR=$tmp_base
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 PKG=$PWD
 REPO=$(cd ../.. 2>/dev/null && pwd)
 [[ -f $REPO/initramfs/init ]] || REPO=""
 n=0
-fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
 pass() { n=$((n + 1)); printf 'ok - %s\n' "$1"; }
 skip() { printf 'ok - # skip: %s\n' "$1"; }
 # Bind and connect sockets by short relative paths from inside their root,
 # so long TMPDIR / phone build paths never exceed the 107-byte AF_UNIX limit.
-t=$(mktemp -d "${TMPDIR:-/tmp}/oil.XXXXXX")
+SUN_PATH_MAX=107
+path_bytes() { local LC_ALL=C; printf '%s\n' "${#1}"; }
+t=$(mktemp -d "${tmp_base%/}/oil.XXXXXX")
 p_short=""
 pids=()
 cleanup() {
   local p
+  trap '' INT TERM HUP
   for p in "${pids[@]}"; do kill "$p" 2>/dev/null || true; done
   wait 2>/dev/null || true
   rm -rf "${t:?}"
   [[ -n $p_short ]] && rm -rf "${p_short:?}" || true
 }
 trap cleanup EXIT
+trap 'exit 143' TERM
+trap 'exit 130' INT
+trap 'exit 129' HUP
 
 for f in install fetch-source bin/hold-login bin/has-answers test/all; do bash -n "$f" || fail "$f parses"; done
 for f in bin/omamobile-install-link-agent bin/screen-text; do
@@ -298,6 +308,7 @@ script="say open 3 600;do tap;want show;say code 123456 600;sleep 0.5;do winclos
 for _ in $(seq 100); do [[ -S $A/run/omamobile-install-link/agent ]] && break; sleep 0.05; done
 agent_run || { cat "$t/agent.out"; fail "the agent ends when the link closes for the boot"; }
 wait "$sp" || fail "the stand-in daemon's script ran to its end"
+pids=()
 grep -qx 'got show' "$t/standin.log" && grep -qx 'got hide' "$t/standin.log" || fail "a tap sends show; the window's close sends hide"
 grep -c 'Setup is not finished. Tap to continue with the installer on your computer.' "$t/notify.log" >/dev/null || fail "the notice says setup is not finished"
 grep -- '--action=default=Continue --wait' "$t/notify.log" | grep -c 'Setup is not finished' >/dev/null || fail "the notice can be tapped"
@@ -356,12 +367,30 @@ if [[ -n $BIN && -x $BIN/omamobile-linkd ]]; then
   # A freshly installed phone, as the daemon's own tests make one: the
   # marker, the descriptor, a serial in bootconfig, stand-ins for systemctl
   # and the gadget script
+  # Linux sockaddr_un.sun_path holds 108 bytes including the trailing NUL
+  # (107 max). Measure path lengths in bytes (not locale characters) across
+  # the real daemon roots that bind sockets, and fall back to /tmp only when
+  # configured TMPDIR exceeds that AF_UNIX budget.
+  max_sock_bytes() {
+    local base=$1 name sock len max=0
+    for name in first placeholder reopen paired; do
+      for sock in agent screen; do
+        len=$(path_bytes "$base/$name/run/omamobile-install-link/$sock")
+        (( len > max )) && max=$len
+      done
+    done
+    printf '%s\n' "$max"
+  }
   mkdir -p "$t/p"
   p_root=$t/p
-  if (( ${#t} > 45 )); then
-    p_short=$(mktemp -d /tmp/oilp.XXXXXX)
+  if (( $(max_sock_bytes "$p_root") > SUN_PATH_MAX )); then
+    short_base=$(CDPATH= cd -- "$tmp_base" && pwd -P)
+    (( $(max_sock_bytes "${short_base%/}/oilp.XXXXXX/p") <= SUN_PATH_MAX )) || short_base=/tmp
+    p_short=$(mktemp -d "${short_base%/}/oilp.XXXXXX")
     ln -s "$t/p" "$p_short/p"
     p_root=$p_short/p
+    (( $(max_sock_bytes "$p_root") <= SUN_PATH_MAX )) ||
+      fail "the daemon's longest socket path fits AF_UNIX"
   fi
   phone() {
     local r=$p_root/$1
@@ -379,24 +408,73 @@ if [[ -n $BIN && -x $BIN/omamobile-linkd ]]; then
     chmod +x "$r/usr/bin/systemctl" "$r/usr/lib/omamobile-install-link/omamobile-link-gadget"
     echo "$r"
   }
-  # Start the daemon on root $1 with a socket pair for the link; "running"
-  # if it is still up after $2 seconds (then stopped), else its exit status
-  start() {
-    python3 -I - "$1" "$D" "${2:-1.5}" <<'EOF'
-import socket, subprocess, sys, time
+  # Start the daemon on root $1 with a socket pair for the link; install signal
+  # handlers before spawning so termination always closes the peer, terminates
+  # and reaps the exact daemon child (with a SIGKILL fallback after 5 s).
+  cat > "$t/daemon-wrap.py" <<'EOF'
+import os, signal, socket, subprocess, sys, time
+
 root, daemon, wait_s = sys.argv[1], sys.argv[2], float(sys.argv[3])
-a, b = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET)
-with open(root + "/daemon.log", "ab") as log:
-    p = subprocess.Popen([daemon, "--root", root, "--transport", "stdio"], stdin=b, stdout=log, stderr=log)
-b.close()
-end = time.time() + wait_s
-while time.time() < end and p.poll() is None:
-    time.sleep(0.05)
-if p.poll() is None:
-    p.terminate(); p.wait(); print("running")
-else:
-    print("exit %d" % p.returncode)
+pid_file = sys.argv[4] if len(sys.argv) > 4 and sys.argv[4] else None
+
+stop_sig = None
+
+def stop(signum, _frame):
+    global stop_sig
+    if stop_sig is None:
+        stop_sig = signum
+
+signal.signal(signal.SIGTERM, stop)
+signal.signal(signal.SIGINT, stop)
+signal.signal(signal.SIGHUP, stop)
+
+a = b = p = None
+rc = None
+try:
+    if stop_sig is None:
+        a, b = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+        with open(os.path.join(root, "daemon.log"), "ab") as log:
+            p = subprocess.Popen(
+                [daemon, "--root", root, "--transport", "stdio"],
+                stdin=b,
+                stdout=log,
+                stderr=log,
+            )
+        b.close()
+        b = None
+        if pid_file is not None:
+            with open(pid_file, "w") as pidf:
+                pidf.write(f"{p.pid}\n")
+        end = time.time() + wait_s
+        while stop_sig is None and time.time() < end and p.poll() is None:
+            time.sleep(0.05)
+        rc = p.poll()
+finally:
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    signal.signal(signal.SIGHUP, signal.SIG_IGN)
+    if p is not None:
+        if p.poll() is None:
+            p.terminate()
+        try:
+            p.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            p.kill()
+            p.wait()
+    if b is not None:
+        b.close()
+    if a is not None:
+        a.close()
+
+if stop_sig is not None:
+    if pid_file is None:
+        sys.exit(128 + stop_sig)
+elif pid_file is None:
+    print("running" if rc is None else f"exit {rc}")
 EOF
+  # "running" if it is still up after $2 seconds (then stopped), else its exit status
+  start() {
+    python3 -I "$t/daemon-wrap.py" "$1" "$D" "${2:-1.5}"
   }
   # A first start (stage waiting, no account), then what first boot leaves:
   # the account (this user's uid, which the agent's socket checks), its
@@ -465,29 +543,43 @@ EOF
   # The agent with the real daemon: an account, stage firstboot-done
   r=$(phone paired); first_boot_made_the_account "$r"
   echo 22222222-2222-3333-4444-555555555555 > "$r/proc/sys/kernel/random/boot_id"
-  rm -rf "${r:?}/run"; : > "$t/notify.log"; rm -f "$t/window.code"
-  python3 -I - "$r" "$D" <<'EOF' & dp=$!
-import socket, subprocess, sys, time
-root, daemon = sys.argv[1], sys.argv[2]
-a, b = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET)
-with open(root + "/daemon.log", "ab") as log:
-    p = subprocess.Popen([daemon, "--root", root, "--transport", "stdio"], stdin=b, stdout=log, stderr=log)
-b.close()
-time.sleep(12)
-p.terminate(); p.wait()
-EOF
+  rm -rf "${r:?}/run" "$r/daemon.pid"; : > "$t/notify.log"; rm -f "$t/window.code"
+  python3 -I "$t/daemon-wrap.py" "$r" "$D" 12 "$r/daemon.pid" & dp=$!
   pids+=("$dp")
   for _ in $(seq 100); do [[ -S $r/run/omamobile-install-link/agent ]] && break; sleep 0.05; done
   : > "$t/tap"
   ( (cd "$r" && AGT=$t OMAMOBILE_LINK_ROOT=. OMAMOBILE_LINK_NOTIFY=$t/notify OMAMOBILE_LINK_CLOSE=$t/close OMAMOBILE_LINK_WINDOW=$t/window \
       OMAMOBILE_LINK_RETRY_S=0.1 XDG_STATE_HOME=$t/pstate timeout 6 python3 -I "$AG") > "$t/agent2.out" 2>&1 || true )
   kill "$dp" 2>/dev/null || true; wait "$dp" 2>/dev/null || true
+  pids=()
+  [[ -s $r/daemon.pid ]] || { cat "$r/daemon.log" 2>/dev/null || true; fail "the real daemon wrapper recorded its daemon PID"; }
+  daemon_pid=$(<"$r/daemon.pid")
+  [[ $daemon_pid =~ ^[0-9]+$ ]] || fail "the recorded daemon PID is numeric"
+  if kill -0 "$daemon_pid" 2>/dev/null; then
+    daemon_state=$(sed -n 's/^.*) \([^ ]*\) .*/\1/p' "/proc/$daemon_pid/stat" 2>/dev/null || true)
+    if [[ $daemon_state != Z ]]; then
+      kill -KILL "$daemon_pid" 2>/dev/null || true
+      fail "the real daemon ends with its test wrapper"
+    fi
+  fi
   [[ $(state_of "$r") == firstboot-done ]] || { cat "$r/daemon.log"; fail "the daemon's state is firstboot-done"; }
   grep -c 'Setup is not finished' "$t/notify.log" >/dev/null || { cat "$t/agent2.out" "$r/daemon.log"; fail "the real daemon opens the agent's notice"; }
   code=$(cat "$t/window.code" 2>/dev/null || true)
   [[ $code =~ ^[0-9]{6}$ ]] || { cat "$t/agent2.out"; fail "a tap: the real daemon's code reaches the window"; }
   ! grep -rc "$code" "$r/daemon.log" "$t/notify.log" "$t/agent2.out" >/dev/null 2>&1 || fail "the code is in no journal line, notice or agent line"
   pass "the agent with the real daemon: the notice, a tap, a six-digit code in the window and nowhere else"
+  if [[ -n $p_short ]]; then
+    rm -rf "${p_short:?}"
+    sleep 0.5
+    [[ ! -e $p_short ]] || fail "the daemon cannot recreate the short root after cleanup"
+    p_short=""
+    pass "the daemon is reaped before its short root is removed"
+  else
+    rm -rf "${r:?}"
+    sleep 0.5
+    [[ ! -e $r ]] || fail "the daemon cannot recreate its root after cleanup"
+    pass "the daemon is reaped before its root is removed"
+  fi
 else
   skip "the marker's rules, status, reopen and the paired agent need the daemon (OMAMOBILE_LINK_BIN, or cargo and the source)"
 fi
