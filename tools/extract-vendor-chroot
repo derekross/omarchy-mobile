@@ -206,6 +206,9 @@ case $DEVICE in
 esac
 profile_lists "$PROFILE"
 [[ -n $OUT ]] || OUT="./out/vendor-chroot-$PROFILE"
+# Copy replaces $OUT/root and writes $OUT/MANIFEST, so OUT=/ would remove /root
+IFS= read -r -d '' out_real < <(realpath -mz -- "$OUT" 2>/dev/null) || die "can't resolve -o '$OUT'"
+[[ ! $out_real -ef / ]] || die "-o '$OUT' resolves to /: would remove /root"
 SRC=$(readlink -f "$1")
 [[ -f "$SRC" ]] || die "no such file: $1"
 

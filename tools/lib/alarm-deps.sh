@@ -26,11 +26,20 @@
 # cannot: then the container is brought up to date (pacman -Su) and the
 # install is tried once more. At the end every listed dependency must be
 # met (pacman -T), so one that still isn't stops the build here, by name.
+#
+# A split package's own names are never installed: the srcinfo lists each
+# package's depends, and one that depends on a sibling (hyprpm on hyprland)
+# would otherwise pull the published build of the package being built. On
+# 2026-11-27 that was hyprland 0.57.0-3.3 from [omamobile], whose
+# libhyprgraphics.so=5 no repository had any more, so the rebuild meant to
+# replace it (3.4, #1124) could not install its own dependencies.
 alarm_install_deps() {
-  local info wanted dep install=() missing
+  local info wanted dep install=() missing own
   info=$(cat)
+  own=" $(awk '$1 == "pkgname" {print $3}' <<<"$info" | tr '\n' ' ') "
   wanted=$(awk '$1 ~ /^(depends|makedepends|checkdepends)$/ {print $3}' <<<"$info" | sed 's/[<>=].*//' | sort -u)
   for dep in $wanted; do
+    [[ $own == *" $dep "* ]] && continue
     pacman -Sddp --print-format %n "$dep" >/dev/null 2>&1 && install+=("$dep")
   done
   ((${#install[@]})) || return 0

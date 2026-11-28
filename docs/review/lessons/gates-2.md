@@ -3,6 +3,60 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-886. `tools/pr-check BASE HEAD` run from another directory checks the
+  tool's own repository.** Called by its path from inside a review worktree it
+  printed "ok - no commits to check against origin/main" for a head with one
+  commit; it needs `-C <worktree>`. A passing line that means "nothing was
+  checked" is easy to quote. *Check:* the output lists the seven checks by
+  name; the tool could say which repository and range it read, and refuse
+  `HEAD` when the caller's directory is another work tree. Extends L-40 and
+  L-103. *From:* round 61, 2026-11-18.
+- **L-873. A package test that fails when its tool is missing is checked
+  against the CI workflow's package list as well as `checkdepends`.** #880
+  added `glslang` and `lua` as `checkdepends`, which the package builders
+  install, but `checks.yml` installs a fixed list and runs `test/all`
+  directly, so CI failed on the missing tool once the PR's lint failure was
+  out of the way; a red `tests/all` had hidden it. *Check:* for every `command
+  -v X || fail` a test adds, `grep -n '<package>'
+  .github/workflows/checks.yml`; if absent, the maintainer adds it (a workflow
+  change is his) or the test skips visibly, and the review says which. Extends
+  L-589 and L-769. *From:* #880, rounds 61 and 62, 2026-11-18.
+- **L-857. A test file `#include`d into its driver is never compiled by the
+  gate: its config has no `CONFIG_KUNIT`, and since #851 a `.c` built only
+  through an include is a SKIP.** Kernel #265's `max77759_charger_test.c`
+  first turned CI red with "W=1 builds" while the driver was clean; after #851
+  the same PR goes green with the test uncompiled, and its only evidence is
+  the contributor's UML run. *Check:* grep the CI log for `SKIP`; `git grep -n
+  '#include "<file>"'` for the includer, build it at each commit with
+  `scripts/config -e KUNIT -e <the test's symbol>` at W=1 in the gate's own
+  output directory, and say in the review that the suite itself wasn't run and
+  what stands in for it. Extends L-103, L-143 and L-179. *From:* kernel #265
+  and #266 with #851, rounds 60 to 62, 2026-11-18.
+- **L-834. Without the container, a board DTB for an overlay check builds from
+  `git archive` of the dts and `dt-bindings` trees, `cpp`, and a `dtc` from
+  any finished kernel output.** Both sides of #829's comparison (the published
+  kernel and a kernel PR's head) took seconds and touched nobody's build
+  directory. *Check:* `git archive <commit> arch/arm64/boot/dts/exynos
+  include/dt-bindings | tar -x -C <scratch>`, `cpp -nostdinc -I include -I
+  arch/arm64/boot/dts -undef -x assembler-with-cpp <board>.dts | dtc -@ -I dts
+  -O dtb`, then `fdtoverlay`, and confirm both DTBs are non-empty. Extends
+  L-335 and L-679. *From:* #829, round 60, 2026-11-17.
+- **L-833. A red test on a PR that adds one data file is read to its `not ok`
+  line, and a sibling PR pushed at the same time on the same base is the
+  control.** #829's failure was `omamobile-shell`'s `test/keys.sh`: the fake
+  panel acts after 0.4 s, the handler gives up at 1 s, and the CI log's order
+  showed the fake ran late; another PR's run from the same second passed.
+  *Check:* `gh run view <id> --log | grep 'not ok'`, name the package, read
+  the test's own timings against the log's order, and compare with a run on
+  the same base; the margin goes to the maintainer as a test finding. Extends
+  L-42, L-346 and L-768. *From:* #829, round 60, 2026-11-17.
+- **L-827. A new overlay outside `DTB_OVERLAYS` is still applied to the
+  published kernel's DTB, to set the merge order.** #861's `gnss.dtso` applies
+  to kernel #268's DTB and returns `FDT_ERR_NOTFOUND` on the published
+  `omamobile`; CI can't see it. *Check:* `fdtoverlay` against both; if only
+  the PR's kernel takes it, the review says "with or after" and the notes name
+  the kernel PR. Extends L-679. *From:* #861 with kernel #268, round 60,
+  2026-11-17.
 - **L-817. `tests/grep-q-pipes` doesn't scan package `libexec`, `bin` or
   `backends` directories.** #860's root helper piped into `grep -qx` under
   `pipefail` and the lint passed. *Check:* until the lint's pathspecs cover
@@ -348,60 +402,3 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   merge-tree --write-tree`, `git commit-tree`, then `kernel-pr-check
   --build` on that commit; after a batch of merges, gate the whole new
   range once. *From:* kernel #20, round 2.
-- **L-80. checkpatch reported every compatible a PR documents itself as
-  undocumented, and showed warnings only as a count.** It read bindings
-  from the clone's checked-out tree, not the commit under test. Fixed:
-  `kernel-pr-check` now gives checkpatch each commit's own bindings and
-  MAINTAINERS, and prints the warnings (extends L-30). *From:* kernel #21,
-  #28, #33, rounds 1 and 2.
-- **L-102. Feed a gate a known failure.** The device-tree comparison kept
-  only lines saying "warning" or "error"; dt-validate's say neither, so
-  every "dtbs_check, no new warnings" (ours and CI's) was blind until
-  476901b. A reused `--build` OUT also kept an earlier tree's processed
-  schema. Extends L-30. *From:* kernel #13 (found by its author). **Also
-  (kernel #192, round 39):** a first-light board validated against the
-  base's schema is a known failure for free: rejected on its compatible at
-  the base, accepted at the head, which proves both that dt-validate ran and
-  that the binding commit carries the fix.
-- **L-103. A passing gate log can hide a skipped check.** The project
-  container has no dtschema, so its runs print "# no dt-validate … skipped"
-  and still pass. *Check:* grep the log for `SKIP` and `skipped` before
-  quoting "dtbs_check passes"; run it where dtschema is installed. *From:*
-  round 9.
-- **L-120. For a new board, `kernel-pr-check` counts every message the
-  board inherits as new.** The base has no such DTB, so gs201.dtsi's four
-  undocumented compatibles failed lynx. *Check:* `dt-validate -m` a sibling
-  board on the same dtsi at the base and subtract its messages before calling
-  one new (the tool could do this itself). Extends L-30. *From:* kernel #43.
-- **L-121. When a test merge conflicts, check which tree it used before
-  asking anyone to rebase.** Our gs201 bindings branch "conflicted" with
-  zuma only on the unrelated local integration history; against
-  `github/omamobile` and #13 it merged cleanly. *Check:* `git merge-base` and
-  `git merge-tree` against the published branch and each open PR's head.
-  Extends L-104. *From:* kernel #13, round 10.
-- **L-122. "Same tree as before" is checked with the tree object.** `git
-  rev-parse A^{tree} B^{tree}` on the same base carries the earlier boot and
-  builds over to a reworded commit. Extends L-45 and L-84. *From:* kernel
-  #41, #35, round 10.
-- **L-145. CI checks a PR that edits a gate with that edit.** `checks.yml`
-  runs the PR's own `tools/pr-check`, so #41's new MAC exemption passed
-  itself. *Check:* run main's gate too, and review an exemption as a policy
-  change: test a line that mixes an exempt value with a real one. (Ours
-  dropped whole lines for the all-zeros exemption; since round 12 each
-  address is judged on its own.) Extends L-30. *From:* #41, round 12.
-- **L-146. CI doesn't parse UCM:** the runner has no `alsaucm`, and the test
-  skips silently. *Check:* parse UCM changes locally with `alsaucm` on a
-  virtual card, once per `If` branch. Extends L-103. *From:* #41,
-  round 12.
-- **L-154. `kernel-pr-check` builds the PR's own commits against their
-  merge base, so a fix that lands on the base after a PR branched never
-  reaches its CI until the PR is rebased.** A fresh `base.sha` doesn't change
-  the merge base, and a re-run replays the event's stale one. *Check:* gate
-  the PR rebased onto the current base (L-73) before asking for a rebase, and
-  say whether the rebase is needed for the code or only for CI. *From:*
-  kernel #43, round 13.
-- **L-155. A gate runs under every awk it will meet.** Round 12's MAC regex
-  used `(…){5}`, which mawk 1.3.4 (Debian, Ubuntu, our build container)
-  rejects, so `pr-check` failed every change there while CI's gawk passed.
-  *Check:* after any edit to a gate, run its tests in `omamobile-build:24.04`
-  too. Extends L-30. *From:* round 13.

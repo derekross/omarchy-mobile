@@ -62,22 +62,23 @@ echo "ok - an exempt MAC doesn't hide a real one on the same line"
 V=$(printf '%s:%s' 10:20:30 40:50:60) L=02:00:00:00:00:01 D=$(printf '%s:%s' 00:00:5e 00:53:01)
 H=${V//:/-} B=${V//:/} DH=${D//:/-}
 j=0
-mac_case() { # line expect [pattern]
-  case_branch "mac-form-$((j += 1))"
-  printf '%s\n' "$1" > notes.md
+line_case() { # line expect [pattern [file]]
+  local f=${4:-notes.md}
+  case_branch "line-form-$((j += 1))"
+  printf '%s\n' "$1" > "$f"
   git add -A && git commit -q -m "notes"
-  check "$1" "$2" "${3:-}"
+  check "${4:+$f: }$1" "$2" "${3:-}"
 }
 for line in "mac:$V" "tag:$V" "id:$V" "wlan0 at $H" "HWaddr ${H^^}" "mac=$B" "bd_addr: $B" \
   "\"mac_address\": \"${B^^}\"" "Intf0MacAddress=$B" "link/ether $B" "mac-address $B" "bd-addr=$B" \
   "mac:$L then mac:$H" "id:$D then bdaddr $B"; do
-  mac_case "$line" 1 "MAC or Bluetooth addresses"
+  line_case "$line" 1 "MAC or Bluetooth addresses"
 done
 echo "ok - a MAC after a label colon, with hyphens, in upper case or bare in a MAC record fails"
 for line in "mac:$L" "${L//:/-}" "mac=${L//:/}" "00-00-00-00-00-00" "macaddr=000000000000" "mac:$D" "${DH^^}" "hwaddr ${D//:/}" \
   "$V:70" "a0:$V" "$H-70" "a0-$H" "10:20-30:40-50:60" "fe80::1020:3040:5060" "${B:0:8}-5060-7080-90a0-$B" \
   "commit $B${B}1020304050607080" "build $B" "mac=${B}7" "together $B"; do
-  mac_case "$line" 0
+  line_case "$line" 0
 done
 echo "ok - made-up and documentation MACs in those forms, longer runs, mixed separators, IPv6, UUIDs and bare hex outside a MAC record pass"
 
@@ -92,7 +93,7 @@ S=$(ts 25 11 15 10 20 30) A=$(ts 00 1a 2b 3c 4d 5e)
 C=${A#00-}
 for line in "screenshot-$S.png" "screenshot-$(ts 26 11 15 10 20 30).png" "$(ts 25 01 15 10 20 30)" "$(ts 25 12 15 10 20 30)" \
   "$(ts 25 11 01 10 20 30)" "$(ts 25 11 31 10 20 30)" "$(ts 25 11 15 00 00 00)" "$(ts 25 11 15 23 59 59)"; do
-  mac_case "$line" 0
+  line_case "$line" 0
 done
 echo "ok - a hyphenated date and time passes, at each range's edges"
 for line in "wlan0 at $A" "$(ts 25 00 15 10 20 30)" "$(ts 25 13 15 10 20 30)" "$(ts 25 11 00 10 20 30)" "$(ts 25 11 32 10 20 30)" \
@@ -100,7 +101,7 @@ for line in "wlan0 at $A" "$(ts 25 00 15 10 20 30)" "$(ts 25 13 15 10 20 30)" "$
   "$(ts 25 11 1d 10 20 30)" "$(ts 25 11 15 1f 20 30)" "$(ts 25 11 15 10 2e 30)" "$(ts 25 11 15 10 20 3a)" "${S//-/:}" "mac=${S//-/}" \
   "screenshot-$S.png wlan0 at $A" "$S:${C//-/:}" "screenshot-$(ts 25 11 15 10 20 26):$(tc 1a 2b 3c 4d):$A" \
   "$(ts 25 11 15 10 20 32):$(tc 10 20 30 40):$(ts 50 1a 2b 3c 4d 5e)" "$(ts 25 11 15 10 20 26):$(tc 1a 2b 3c 4d):$(ts 50 1a 2b 3c 4d 5e)"; do
-  mac_case "$line" 1 "MAC or Bluetooth addresses"
+  line_case "$line" 1 "MAC or Bluetooth addresses"
 done
 echo "ok - past a range's edge, with a hex letter, with colons or in a MAC record, the same digits fail, and so does an address beside a timestamp, in its last field or after an exempt one there"
 
@@ -121,25 +122,25 @@ mac_forms() {
 }
 for o in 02 16 ca fe; do
   while IFS= read -r line; do
-    mac_case "$line" 0
+    line_case "$line" 0
   done < <(mac_forms "$o")
 done
 for line in "ff:ff:ff:ff:ff:ff" "FF:FF:FF:FF:FF:FF" "mac:ff:ff:ff:ff:ff:ff" \
   "ff-ff-ff-ff-ff-ff" "FF-FF-FF-FF-FF-FF" "wlan0-ff-ff-ff-ff-ff-ff" \
   "mac=ffffffffffff" "bd_addr: FFFFFFFFFFFF" "ether FFFFFFFFFFFF" \
   "\"mac_address\": \"FFFFFFFFFFFF\""; do
-  mac_case "$line" 0
+  line_case "$line" 0
 done
 echo "ok - locally administered unicast MACs (x2, x6, xA, xE) and all-ones pass in every spelling"
 for o in 03 17 cb ef ff; do
   while IFS= read -r line; do
-    mac_case "$line" 1 "MAC or Bluetooth addresses"
+    line_case "$line" 1 "MAC or Bluetooth addresses"
   done < <(mac_forms "$o")
-  mac_case "$L $o:$tail_c" 1 "MAC or Bluetooth addresses"
+  line_case "$L $o:$tail_c" 1 "MAC or Bluetooth addresses"
 done
 near_all_ones=$(printf '%s:%s' ff:ff:ff ff:ff:fe)
 for line in "$near_all_ones" "${near_all_ones//:/-}" "mac=${near_all_ones//:/}"; do
-  mac_case "$line" 1 "MAC or Bluetooth addresses"
+  line_case "$line" 1 "MAC or Bluetooth addresses"
 done
 echo "ok - group-bit first octets (x3, x7, xB, xF, including ff:... not all-ones) fail in every spelling"
 
@@ -153,11 +154,105 @@ case_branch serial
 echo 'androidboot.serialno=27141FDH2001AB' > notes.md
 git add -A && git commit -q -m "notes"
 check "a serial" 1 "serial numbers"
+out=$(tools/pr-check main 2>&1 || true)
+[[ $(grep -c 'notes.md: androidboot.serialno=27141FDH2001AB' <<<"$out" || true) == 1 ]] || { echo "$out"; fail "a serial: reported more than once"; }
 git checkout -q main && git checkout -q -b serial-placeholder
 echo 'androidboot.serialno=<SERIAL>; SERIAL=${serial}' > notes.md
 git add -A && git commit -q -m "notes"
 check "a serial placeholder" 0
 echo "ok - a serial fails, a placeholder passes"
+
+# A grep-matched line with no exempt term fails as before; on a line with
+# one, each assignment in the added text (after "<sha> <path>: ", using
+# ASCII white space around : or =) is judged on its own value so an exempt
+# value (<SERIAL>, SERIAL_PLACEHOLDER, FAKE..., $var, ${var}) hides no
+# literal serial beside it. Non-ASCII bytes stay ordinary characters
+# inside a value, do not act as white space around : or =, and do not
+# fold into ASCII exemptions (U+0130, U+212A).
+for line in \
+  'androidboot.serialno=<SERIAL> ro.serialno=27141FDH2001AB' \
+  'ro.serialno=27141FDH2001AB androidboot.serialno=<SERIAL>' \
+  'androidboot.serialno=<SERIAL>;ro.serialno=27141FDH2001AB' \
+  'ro.serialno=27141FDH2001AB;androidboot.serialno=<SERIAL>' \
+  'serialno=SERIAL_PLACEHOLDER serialno=27141FDH2001AB' \
+  'serialno=27141FDH2001AB,serialno=SERIAL_PLACEHOLDER' \
+  'serialno=FAKE12345678 serialno=27141FDH2001AB' \
+  'serialno=27141FDH2001AB serialno=FAKE12345678' \
+  'serialno=FAKE12345678;serialno=27141FDH2001AB' \
+  'serialno=FAKE12345678,serialno=27141FDH2001AB' \
+  'serialno=FAKE12345678serialno=27141FDH2001AB' \
+  'serialno=27141FDH2001ABserialno=FAKE12345678' \
+  'SERIAL=$serial serialno=27141FDH2001AB' \
+  'serialno=27141FDH2001AB SERIAL=$serial' \
+  'SERIAL=${serial} serialno=27141FDH2001AB' \
+  'serialno=27141FDH2001AB SERIAL=${serial}' \
+  'SERIAL=${serial};serialno=27141FDH2001AB' \
+  'serialno=27141FDH2001AB;SERIAL=${serial}' \
+  'serialno=ABCDEFGH${suffix}serialno=27141FDH2001AB' \
+  'serialno="27141FDH2001AB"${suffix}' \
+  '${x:-serialno=27141FDH2001AB}$y' \
+  '{serialno=27141FDH2001AB}$var' \
+  'serialno=27141FDH2001AB}${var}' \
+  'serialno=27141FDH2001AB{$var}' \
+  $'serialno=27141FDH2001AB\t$var' \
+  $'serialno=27141FDH2001AB\r$var' \
+  $'serialno=27141FDH2001AB\f$var' \
+  $'serialno=27141FDH2001AB\v$var' \
+  $'serialno\t=27141FDH2001AB serialno=FAKE12345678' \
+  $'serialno=\t27141FDH2001AB serialno=FAKE12345678' \
+  $'serialno=27141FDH2001AB$\xc4\xb0' \
+  $'serialno=27141FDH2001AB$\xc4\xb0 serialno=FAKE12345678' \
+  $'serialno=27141FDH2001ABFA\xe2\x84\xaaE' \
+  $'serialno=27141FDH2001ABFA\xe2\x84\xaaE serialno=FAKE12345678' \
+  $'serialno=FAKE12345678\xc2\xa0serialno=27141FDH2001AB'; do
+  line_case "$line" 1 "serial numbers"
+done
+echo "ok - an exempt serial value hides no literal serial beside it on the same line"
+for line in \
+  'serialno=FAKE12345678' \
+  'serialno=FAKE1234_DEV' \
+  'serialno=FAKE12345678_1' \
+  'serialno=FAKE12345678$1' \
+  'serialno=FAKE12345678}' \
+  '${opt:-serialno=FAKE12345678}' \
+  '{serialno=FAKE12345678}' \
+  'serialno=FAKE12345678serial_number=FAKE99999999' \
+  'serialno="EXAMPLE1-${suffix}"' \
+  $'serialno="EXAMPLE1\xe2\x80\x94${suffix}"' \
+  'serialno=ABCDEFGH${suffix}' \
+  'serialno=ABCDEFGH$suffix' \
+  'serialno=ABCDEFGH-$x' \
+  'serialno="ABCDEFGH${suffix}"' \
+  'serialno=27141FDH2001ABFAKE' \
+  'serialno=EXAMPLESERIAL_PLACEHOLDER' \
+  'serialno=ABCDEFGH<serial>' \
+  $'serialno=\tFAKE12345678' \
+  $'serialno=\rFAKE12345678' \
+  $'serialno=\fFAKE12345678' \
+  $'serialno=\vFAKE12345678' \
+  $'serial: \xe2\x80\x9cdocument\xe2\x80\x9d serialno=FAKE12345678' \
+  'serialno=FAKE12345678; androidboot.serialno=<SERIAL>; SERIAL=${serial}; serial=ABCDEFGH$suffix'; do
+  line_case "$line" 0
+done
+echo "ok - FAKE..., <SERIAL>, SERIAL_PLACEHOLDER and shell variables within a value still pass, alone or together"
+line_case 'ABCDEFGH12' 1 'serial numbers' serial
+line_case 'Document serialno=FAKE12345678' 0 '' serial
+line_case 'Document serialno=<SERIAL>' 0 '' serial
+line_case 'Document serialno=FAKE12345678' 0 '' fake-serial.md
+line_case 'serialno=27141FDH2001AB' 1 'serial numbers' fake-notes.md
+line_case $'serial\xce\xb2 = previous_value; serialno = "FAKE12345678"' 0 '' fixture.py
+echo "ok - a file path neither exempts a literal serial nor creates a false serial match, and non-ASCII around : or = does not invent one"
+if LC_ALL=tr_TR.UTF-8 grep -ci 'serialno' <<<$'SER\xc4\xb0ALNO=X' >/dev/null 2>&1; then
+  for line in \
+    $'SER\xc4\xb0ALNO=EXAMPLE1234 # <SERIAL>' \
+    $'SER\xc4\xb0ALNO=EXAMPLE1234 # $ID' \
+    $'serialno:\xe2\x80\x83EXAMPLE1234 # <SERIAL>'; do
+    LC_ALL=tr_TR.UTF-8 line_case "$line" 1 "serial numbers"
+  done
+  echo "ok - base-flagged serial lines under tr_TR.UTF-8 still fail"
+else
+  echo "ok - tr_TR.UTF-8 serial locale regression skipped (no tr_TR.UTF-8 locale)"
+fi
 
 case_branch imei
 echo "IMEI: 356938035643809" > notes.md

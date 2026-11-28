@@ -121,6 +121,18 @@ mkdir -p "$t/none"
 grep -c -- '^-S ' "$t/none/calls" >/dev/null && fail "and installs nothing"
 pass "a package with no dependency in a repository installs nothing"
 
+# A split package whose second package depends on the first (hyprpm on
+# hyprland): the published build of the package being built is in a
+# repository, but it is never installed as its own dependency (2026-11-27:
+# hyprland 3.3's libhyprgraphics.so=5 no longer resolved, and the 3.4
+# rebuild failed installing it)
+mkdir -p "$t/split"
+sed -i 's/^repo=" rust /repo=" rust hyprland hyprpm /' "$t/bin/pacman"
+( export PATH=$t/bin:$PATH STATE=$t/split; source tools/lib/alarm-deps.sh
+  alarm_install_deps <<<$'pkgbase = hyprland\n\tmakedepends = patch\n\tdepends = gcc-libs\npkgname = hyprland\npkgname = hyprpm\n\tdepends = python\n\tdepends = hyprland' ) > "$t/split/out" 2>&1 || { cat "$t/split/out"; fail "a split package installs its dependencies"; }
+[[ $(installed split) == "gcc-libs patch python " ]] || fail "a split package's own names are not installed, its other dependencies are (got: $(installed split))"
+pass "a split package never installs itself (hyprpm's depends = hyprland) from a repository"
+
 # tools/build-packages runs it in the container, and builds omamobile-install-link by default again
 grep -c -- '-v "$ROOT/tools/lib/alarm-deps.sh:/alarm-deps.sh:ro"' tools/build-packages >/dev/null || fail "the container gets tools/lib/alarm-deps.sh"
 grep -c '^      alarm_install_deps <<<"\$info"$' tools/build-packages >/dev/null || fail "and installs a package's dependencies with it"

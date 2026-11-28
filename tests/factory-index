@@ -37,13 +37,14 @@ printf 'CODENAME=testdev\n' > "$r/device/testdev/device.conf"
 fx() { python3 -I -B "$r/tools/factory-index" "$@"; }
 idx=$r/device/testdev/factory-builds.json
 
-# factory BUILD BOARD BOOTLOADER BASEBAND [RADIO-FILE-VERSION]: a zip laid out
-# as Google's, named with the first eight digits of its SHA-256
+# factory BUILD BOARD BOOTLOADER BASEBAND [RADIO-FILE-VERSION [INNER-BUILD]]:
+# a zip laid out as Google's, named with the first eight digits of its SHA-256
 factory() {
   python3 -I -B - "$t" "$@" <<'PY'
 import hashlib, io, os, sys, zipfile
 t, build, board, bl, bb = sys.argv[1:6]
 radio = sys.argv[6] if len(sys.argv) > 6 else bb
+inner_build = sys.argv[7] if len(sys.argv) > 7 else build
 top = "testdev-%s" % build
 inner = io.BytesIO()
 with zipfile.ZipFile(inner, "w") as z:
@@ -54,7 +55,7 @@ with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as z:
     z.writestr(top + "/flash-all.sh", "#!/bin/sh\n")
     z.writestr(top + "/bootloader-testdev-%s.img" % bl, b"bl")
     z.writestr(top + "/radio-testdev-%s.img" % radio, b"radio")
-    z.writestr(top + "/image-testdev-%s.zip" % build, inner.getvalue())
+    z.writestr(top + "/image-testdev-%s.zip" % inner_build, inner.getvalue())
 digest = hashlib.sha256(open(tmp, "rb").read()).hexdigest()
 out = os.path.join(t, "testdev-%s-factory-%s.zip" % (build, digest[:8]))
 os.replace(tmp, out)
@@ -94,6 +95,24 @@ cp "$z1" "$other"
 if fx add -d testdev "$other" 2>"$t/err"; then fail "a zip that holds another build than its name says is refused"; fi
 grep -c 'holds testdev-ab1c.230101.001, not the build its name says' "$t/err" >/dev/null || { cat "$t/err" >&2; fail "says which build the zip holds"; }
 ! grep -c '230101.009' "$idx" >/dev/null || fail "the build a zip's name claims is not added"
+# Matching outer name and top folder, but the inner image zip names another
+# build (different patch, carrier suffix, and precedence behind digest/duplicate)
+cp "$idx" "$t/idx-before.json"
+bad1=$(factory ab1c.230101.004 testdev testloader-1.0-111 testband-9.9-222 testband-9.9-222 ab1c.230101.009)
+bad2=$(factory ab1c.230101.004 testdev testloader-1.0-111 testband-9.9-222 testband-9.9-222 ab1c.230101.004.a1)
+cp "$bad1" "$t/testdev-ab1c.230101.004-factory-00000000.zip"
+dup=$(factory ab1c.230101.001 testdev testloader-1.0-111 testband-9.9-222 testband-9.9-222 ab1c.230101.009)
+refused_inner() { # KIND ZIP WANT
+  local rc=0
+  fx add -d testdev "$2" >/dev/null 2>"$t/err" || rc=$?
+  [[ $rc -eq 1 ]] || fail "$1 is refused with exit 1 (got $rc)"
+  grep -cF "$3" "$t/err" >/dev/null || { cat "$t/err" >&2; fail "$1 prints expected message"; }
+  cmp -s "$idx" "$t/idx-before.json" || fail "$1 leaves the index byte-identical"
+}
+refused_inner "patch mismatch" "$bad1" "holds testdev-ab1c.230101.004/image-testdev-ab1c.230101.009.zip, not the build its name says"
+refused_inner "carrier-suffix mismatch" "$bad2" "holds testdev-ab1c.230101.004/image-testdev-ab1c.230101.004.a1.zip, not the build its name says"
+refused_inner "wrong digest + inner mismatch" "$t/testdev-ab1c.230101.004-factory-00000000.zip" "first eight digits"
+refused_inner "duplicate build + inner mismatch" "$dup" "AB1C.230101.001 is already in"
 cp "$z1" "$t/testdev-ab1c.230101.001-factory-00000000.zip"
 if fx add -d testdev "$t/testdev-ab1c.230101.001-factory-00000000.zip" 2>"$t/err"; then fail "a zip whose name carries other digits than its SHA-256 is refused"; fi
 grep -c "first eight digits" "$t/err" >/dev/null || fail "says the name's digits aren't the file's"

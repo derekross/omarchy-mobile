@@ -42,6 +42,38 @@ assert b.aoc_settle(m, 15, now=lambda: 1100.0, sleep=slept.append) == 0.0
 PY
 pass "AoC settle wait"
 
+# the panel's refresh rate for the display state, from DRM's atomic state
+PYTHONPATH=lib python3 - "$tmp" <<'PY' || fail "panel refresh rate"
+import os, sys
+import usf_backend as b
+d = os.path.join(sys.argv[1], 'dri', '0'); os.makedirs(d)
+st = os.path.join(d, 'state')
+b.DRM_STATE_GLOB = os.path.join(sys.argv[1], 'dri', '*', 'state')
+# a Pixel 8 Pro dump (screen on), trimmed
+on = ('plane[35]: plane-0\n\tcrtc=crtc-0\ncrtc[37]: crtc-0\n\tenable=1\n\tactive=1\n'
+      '\tmode: "1344x2992": 120 541764 1344 1424 1448 1490 2992 3004 3008 3030 0x48 0x0\n'
+      'connector[39]: DSI-1\n\tcrtc=crtc-0\n')
+off = ('crtc[37]: crtc-0\n\tenable=0\n\tactive=0\n\tmode: "": 0 0 0 0 0 0 0 0 0 0 0x0 0x0\n'
+       'connector[39]: DSI-1\n\tcrtc=(null)\n')
+# an external display active on another CRTC, the panel at 60 Hz
+two = ('crtc[36]: crtc-1\n\tactive=1\n\tmode: "1920x1080": 30 1 1 1 1 1 1 1 1 1 0x0 0x0\n'
+       'crtc[37]: crtc-0\n\tactive=1\n\tmode: "1344x2992": 60 270882 1344 1 1 1 2992 1 1 1 0x48 0x0\n'
+       'connector[38]: DP-1\n\tcrtc=crtc-1\nconnector[39]: DSI-1\n\tcrtc=crtc-0\n')
+assert b.drm_panel_hz(on) == 120 and b.drm_panel_hz(off) is None and b.drm_panel_hz(two) == 60
+os.environ.pop('OMAMOBILE_PANEL_HZ', None)
+open(st, 'w').write(on)
+assert b.panel_refresh_hz() == 60                     # unset: 60, as before (the 7 Pro)
+os.environ['OMAMOBILE_PANEL_HZ'] = '90'
+assert b.panel_refresh_hz() == 90
+os.environ['OMAMOBILE_PANEL_HZ'] = 'drm'
+assert b.panel_refresh_hz() == 120
+open(st, 'w').write(off)
+assert b.panel_refresh_hz() == 60                     # panel off: 60, logged once
+b.DRM_STATE_GLOB = os.path.join(sys.argv[1], 'none', '*')
+assert b.panel_refresh_hz() == 60                     # no debugfs
+PY
+pass "panel refresh rate"
+
 # gyroscope stream: rates, record packing, AoC clock, USF backend on the fake AoC
 PYTHONPATH=lib python3 - <<'PY' || fail "gyroscope stream (offline)"
 import importlib.util, struct, time
