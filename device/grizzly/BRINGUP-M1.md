@@ -8622,6 +8622,63 @@ status bit was asserted or when pixels reached
 the panel. Stock A remained at 1080×2410 after
 the capture.
 
+###### D1 DPU backend interrupt routing
+
+Both D1 base DTBs from `vendor_kernel_boot` and the
+selected board-19 tree have the same 22 named inputs
+under `dc9x00@200000/dpu_be@80000`. The output-0 routes
+below are relative to the DPU interrupt controllers.
+
+| Event | Leaf controller | Leaf input |
+| --- | --- | --- |
+| `outpath0_frm_start` | Multicast aggregator 1 at `0x0f46e020` | `0x04` |
+| `outpath0_frm_done` | Multicast aggregator 1 at `0x0f46e020` | `0x05` |
+| `outpath0_underrun` | Multicast aggregator 1 at `0x0f46e020` | `0x06` |
+| `output0_te_rising_edge` | Multicast aggregator 1 at `0x0f46e020` | `0x09` |
+| `output0_te_falling_edge` | Multicast aggregator 2 at `0x0f46e040` | `0x09` |
+
+Aggregators 1 and 2 feed inputs 0 and 1 of the level
+aggregator at `0x0f46e080`. The level aggregator raises
+GIC SPI `0xe5`, INTID 261, level high. Other display
+sources feed that same parent. D1's `irq-gia-lib.ko`
+demultiplexes pending bits and passes the controller
+domain and input index to `generic_handle_domain_irq`
+at `0x67ac`. The frame-start leaf is dedicated even
+though the upstream interrupt is shared.
+
+D1's `vs_drm.ko` passes `dc_be_isr` at `0x43448`
+to `dc_component_parse_irqs`. The parser gets each
+Linux IRQ by resource index at `0x28ff8` and
+registers it with the same device action name at
+`0x29024`. The handler reads and acknowledges BE
+status and dispatches all pending display events.
+Its primary output-0 status word separates start,
+done, and underrun at bits 0, 1, and 2 and the two
+TE edges at bits 25 and 26. Thus the action name
+`f600000.dc9x00:dpu_be@80000` identifies the backend
+handler. It is shared by multiple Linux IRQs.
+
+The saved traces identify IRQ 439 as the BE leaf
+that carried the modeset fence. They make
+`outpath0_frm_start` the leading candidate for that
+leaf. IRQ 440 follows IRQ 439 by a median of 6.119 ms
+in the modeset capture, and IRQ 459 is the closest
+recorded BE entry to 60 of the 73 Composer hardware
+vblank samples. Timing is corroboration. Linux
+allocates the IRQ numbers dynamically, and IRQ 455
+already appears as an FE0 leaf within the same
+number range, so DT ordering does not establish the
+439 mapping.
+
+The missing evidence is a same-boot
+`/proc/interrupts` row tying 439 to both the GIA
+instance and hardware input. The exact D1 policy
+permits shell to read that file. Input 4 at
+`0x0f46e020` would identify the frame-start leaf.
+Input 4 alone is ambiguous because aggregator 2
+uses that input for post-writeback 1 completion.
+No device access was used for this offline check.
+
 After this stock Android session, take and verify a fresh
 guarded nine-partition NV backup before the next Linux
 slot B trial. Keep Android off between the rescue and trial.
