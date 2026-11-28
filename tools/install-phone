@@ -335,6 +335,11 @@ say "Checking the files ($mode mode)"
 root_digest="" root_name=""
 if [[ $mode == bundle ]]; then
   [[ -f $here/SHA256SUMS ]] || die "the bundle has no SHA256SUMS"
+  # Every entry is a plain file or a folder (#941): sha256sum -c and the
+  # flashing read through a symlink, so a link would be checked and written
+  # with bytes from outside the bundle, and find -type f below wouldn't list it.
+  odd=$(cd "$here" && find . -mindepth 1 ! -type f ! -type d -printf '%P\n' -quit)
+  [[ -z $odd ]] || die "the bundle holds $odd, which is not a plain file (a symlink?)"
   if [[ -f $here/SHA256SUMS.sig ]]; then
     command -v gpg >/dev/null || die "gpg is needed to check the bundle's signature"
     gnupg=$(mktemp -d)
