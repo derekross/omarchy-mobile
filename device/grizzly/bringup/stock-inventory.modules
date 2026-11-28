@@ -1,0 +1,40 @@
+# D1 factory module names in verified hard-dependency order.
+# The timer uses the stock GKI's PSCI restart path. The Pixel reboot module
+# and its battery and charger dependencies are omitted.
+spmi-smartdv.ko
+regmap-goog-spmi.ko
+systrace.ko
+pinctrl.ko
+irq-gia-lib.ko
+mbfs.ko
+google_pm_qos.ko
+goog-mba-ctrl.ko
+goog-mba-aggr.ko
+dma-iommu-vendor-hooks.ko
+trusty-core.ko
+io-pgtable-pixel.ko
+google_gtc.ko
+aoss_ssr_notifier.ko
+sbb-mux.ko
+irq-gia-google.ko
+google_vote_manager.ko
+goog-mba-cpm-iface.ko
+power_controller.ko
+dvfs_helper.ko
+google_irm.ko
+google_timestamp_sync.ko
+arm_smmu_v3_kvm.ko smc_s2=true smmu_telemetry_enable=true
+arm_smmu_v3.ko
+trusty-ipc.ko
+rst-cpm.ko
+mbfs_cpm_backend.ko
+google_wdt.ko
+da9188-core.ko
+clk-cpm.ko
+apc_irm.ko
+dvfs_target_frontend.ko
+gsa.ko
+gcdd.ko
+da9188-regulator.ko
+perf_domain.ko
+ufs.ko async_probe=1

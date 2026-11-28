@@ -1,0 +1,79 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/dts-v1/;
+/plugin/;
+
+&cpm_tx {
+	status = "okay";
+};
+
+&cpm_rx {
+	status = "okay";
+};
+
+&cpm {
+	status = "okay";
+};
+
+&usb2_rails {
+	status = "okay";
+};
+
+&fabstby_sgia {
+	status = "okay";
+};
+
+&amb_smmu {
+	status = "okay";
+};
+
+&hsion_sgia {
+	status = "okay";
+};
+
+&usb2_cfg {
+	status = "okay";
+};
+
+&usb2_phy {
+	status = "okay";
+};
+
+&lsioe_sgia {
+	status = "okay";
+};
+
+&lsioe_pinctrl {
+	status = "okay";
+};
+
+&lsioe_i2c3 {
+	status = "okay";
+};
+
+&eusb2_repeater {
+	status = "okay";
+};
+
+&usb {
+	status = "okay";
+};
+
+&aoss_sgia {
+	status = "okay";
+};
+
+&aoss_alert_sgia {
+	status = "okay";
+};
+
+&aoss_alert_gpio {
+	status = "okay";
+};
+
+&spmi_cpm {
+	status = "okay";
+};
+
+&tcpc {
+	status = "okay";
+};

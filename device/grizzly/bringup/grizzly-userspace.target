@@ -1,0 +1,5 @@
+[Unit]
+Description=Grizzly read-only Omarchy userspace check
+DefaultDependencies=no
+Requires=grizzly-userspace.service
+After=grizzly-userspace.service

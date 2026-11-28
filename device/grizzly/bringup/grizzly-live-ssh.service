@@ -1,0 +1,10 @@
+[Unit]
+Description=Serve Grizzly RAM-root status over USB SSH
+DefaultDependencies=no
+Requires=grizzly-userspace.service
+After=grizzly-userspace.service
+
+[Service]
+ExecStart=/usr/bin/sshd -D -e -f /run/grizzly-systemd/sshd-live.conf
+StandardOutput=null
+StandardError=kmsg

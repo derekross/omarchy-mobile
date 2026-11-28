@@ -1,0 +1,665 @@
+# SPDX-License-Identifier: MIT
+"""Build a local Grizzly D1 stock-kernel diagnostic prototype."""
+
+import argparse
+import hashlib
+import os
+from pathlib import Path
+import re
+import runpy
+import shutil
+import struct
+import subprocess
+import sys
+from tempfile import TemporaryDirectory
+
+
+HERE = Path(__file__).resolve().parent
+FACTORY = {
+    "boot": "7b5537d318aed78fe52538ce9e08c2dd9800bb25a0df501d94a816af5171603a",
+    "init_boot": "8ee7899805bf18512cdce5781f50520a8c505754b7ac716d71f7007dafdb2d07",
+    "vendor_boot": "43e5eb394fc4490c26e9c87f9dee7c7d4fde51920260b6340a588b51ae087f23",
+    "vendor_kernel_boot": "9830d75882f143a9aad7e2416ec3a5d76c2c35d5a700b8a5aef6cf7cdab7310a",
+    "dtbo": "af9aea143fd8bdb711d146292ef5fa273c001566d71743a24798491939adaf4f",
+}
+CAPACITY = 8 * 1024 * 1024
+MODPROBE_SHA256 = "ce0df1807b5726d01838b9e738013f28ebb207bb25ac9776849670701ef784a9"
+# kvm-arm.protected_modules in the exact D1 Grizzly boot arguments.
+PROTECTED_ROOTS = (
+    "goog-mba-ctrl.ko", "pinctrl.ko", "mbfs_cpm_backend.ko", "power_controller.ko",
+    "irq-gia-google.ko", "arm_smmu_v3_kvm.ko",
+)
+CPM_TRACE_MODULES = ("google_thermal_cpm_mbox.ko", "fwtp_lib.ko", "fwtp_cpm_module.ko")
+STOCK_UFS_SHA256 = "24463ad9d4f63b3f5672883468f8e8228c0bfc75e91cd62299ffae38469350b0"
+PSM1_SAMPLER_SHA256 = "ca17e8708c219353529834b72c478b5e5105d5f46132857717b5c73944a584fa"
+PSM1_PREP_SAMPLER_SHA256 = "6a2b75a802729fba0e8c387b2a2d037d96f0e323373f692ceef13c7f41d0222a"
+USB2_MODULES = (
+    "nvmem-rmem.ko", "i2c-designware-core.ko", "i2c-designware-platform.ko",
+    "google-eusb2-repeater.ko", "google_icc.ko", "google-usb-phy.ko", "dwc3-google.ko",
+)
+USB2_FIRMWARE = "lib/firmware/usb_phy_fw_2.27.0.bin"
+USB2_FIRMWARE_SHA256 = "723ff8e0e2aeda20c9b3b18277c93a6a69ddb4f45ff22a30838d7392ebb2b345"
+USB2_ISOLATION_DTBO_SHA256 = "075c0d37e382253b58f50e5cac6cfdcfe5e0bad0f57964eb68c7146a921f33e9"
+USB2_ISOLATION_BOARD_SHA256 = "e4507c31e1386a3d2a8459942d894743a439980cc32a10e5a5a10da98e250d3e"
+NV_RESCUE_INIT_SHA256 = "00784a6ea41f53acdac36ed5c7b81cf6fb90f35067b138bb7c79c0757a6baa75"
+# Byte boundary between the factory generic ramdisk and the overlay in this exact rescue.
+NV_RESCUE_FACTORY_RAMDISK_SIZE = 2969964
+DSI0_TRACE_BOARD_SHA256 = "df00e0d6736a3efefcb5bec99c1d7697bbf44830e0427fd3f889abd0f5bb37bb"
+DSI0_CDPHY_SHA256 = "e758f127694b54b47a0dc4b51acf2fd65325ed8f253cabf5c4f9b2738e439df5"
+DSI0_POWER_CONTROLLER_SHA256 = "17ab278a862d22f2ea7f62f4190c222c352756c702e85ad9adb16281f4f9cb7f"
+DSI0_MODULES = (
+    "tzprot.ko", "gs-drm-connector.ko", "mipi-cdphy.ko", "mipi-dsi2h.ko",
+    "google_icc.ko", "drm_display_helper.ko", "vs_drm.ko",
+)
+STOCK_DC_SHA256 = "5f75caef5893c7513c9d928f7542e4931f1c4be96bbd0358bf7e775ec99a6a68"
+DC_CID_EXCLUSIONS = (
+    "dsi2host@3d8000", "dsi2host@3f8000", "dw_mipi_cdphy@3c0000",
+    "dw_mipi_cdphy@3e0000", "dp-encoder",
+)
+DSI0_PANEL_MODULES = (
+    "i2c-designware-core.ko", "i2c-designware-platform.ko", "s2dos07x02-regulator.ko",
+    "da9188-gpio.ko", "gs-panel.ko", "panel-gs-pkcgda.ko",
+)
+
+
+def digest(path):
+    with path.open("rb") as source:
+        return hashlib.file_digest(source, "sha256").hexdigest()
+
+
+def capture(*command):
+    return subprocess.check_output(command)
+
+
+def without_display_status(dts, nodes, required_status=None):
+    for node in nodes:
+        declaration = rb"^\t\t(?:[a-zA-Z0-9_]+: )?" + re.escape(node.encode()) + rb" \{\n"
+        matches = list(re.finditer(declaration, dts, re.M))
+        if len(matches) != 1:
+            raise ValueError(f"expected one B0 display node: {node}")
+        split = matches[0].end()
+        head, body = dts[:split], dts[split:]
+        props = re.match(rb'(?:\t\t\t[^\t\n][^\n]*;\n)*', body)[0]
+        status = re.findall(rb'^\t\t\tstatus = "([^"\n]+)";\n', props, re.M)
+        if len(status) > 1 or (required_status is not None and status != [required_status]):
+            raise ValueError(f"unexpected B0 display node status: {node}")
+        props_end = len(props)
+        props = re.sub(rb'^\t\t\tstatus = "[^"\n]+";\n', b'', props, flags=re.M)
+        dts = head + props + body[props_end:]
+    return dts
+
+
+def pack_display_dtbo(stock_dtbo, vendor_dtbs, baseline, temp, image, avbtool, dc_cid):
+    # Pinned rescue DTBO and factory vendor-kernel DTB container.
+    source = stock_dtbo.read_bytes()
+    magic, total, header, stride, count, table, _, version = struct.unpack_from(">8I", source)
+    if (magic, header, stride, count, table, version) != (0xd7b7ab1e, 32, 32, 55, 32, 0):
+        raise ValueError("unexpected D1 rescue DTBO table")
+    entries = [struct.unpack_from(">8I", source, table + i * stride) for i in range(count)]
+    end = table + count * stride
+    for size, offset, *_ in entries:
+        if offset != end or size < 40:
+            raise ValueError("D1 rescue DTBO entries must be contiguous")
+        end += size
+    if end != total or total > len(source):
+        raise ValueError("invalid D1 rescue DTBO length")
+
+    index = 19
+    size, offset, board_id, rev, *_ = entries[index]
+    if (board_id, rev) != (0x80506, 0x10000):
+        raise ValueError("D1 DTBO entry 19 is not Grizzly B0")
+    overlay = temp / "b0.dtbo"
+    overlay.write_bytes(source[offset:offset + size])
+    base = temp / "b0-base.dtb"
+    container = vendor_dtbs.read_bytes()
+    start = struct.unpack_from(">I", container, 4)[0]
+    dtb_magic, dtb_size = struct.unpack_from(">2I", container, start)
+    if dtb_magic != 0xd00dfeed or start + dtb_size != len(container):
+        raise ValueError("invalid second D1 base DTB")
+    base.write_bytes(container[start:])
+    original = temp / "b0-original.dtb"
+    capture("fdtoverlay", "-i", base, "-o", original, overlay)
+    if original.read_bytes() != baseline.read_bytes():
+        raise ValueError("unmodified B0 merge differs from the audited board")
+
+    source_name = "stock-dc-cid.dtso" if dc_cid else "stock-dsi0-dp-off.dtso"
+    fragment = temp / "display-off.dtbo"
+    capture("dtc", "-q", "-I", "dts", "-O", "dtb", "-o", fragment, HERE / source_name)
+    replacement = temp / "b0-display-off.dtbo"
+    capture("fdtoverlay", "-i", overlay, "-o", replacement, fragment)
+    merged = temp / "b0-display-off.dtb"
+    capture("fdtoverlay", "-i", base, "-o", merged, replacement)
+    old_dts = capture("dtc", "-q", "-s", "-I", "dtb", "-O", "dts", original)
+    new_dts = capture("dtc", "-q", "-s", "-I", "dtb", "-O", "dts", merged)
+    if dc_cid:
+        if (without_display_status(old_dts, DC_CID_EXCLUSIONS)
+                != without_display_status(new_dts, DC_CID_EXCLUSIONS, b"disabled")):
+            raise ValueError("B0 merged tree changed outside the DC CID exclusions")
+    else:
+        dp = b'\t\t\tcompatible = "verisilicon,dp-encoder";\n\t\t\tphandle = <0x520>;\n'
+        if old_dts.count(dp) != 1 or new_dts != old_dts.replace(dp, dp + b'\t\t\tstatus = "disabled";\n', 1):
+            raise ValueError("B0 merged tree changed outside the DP encoder status")
+
+    changed = replacement.read_bytes()
+    delta = len(changed) - size
+    output = bytearray(source[:offset] + changed + source[offset + size:total])
+    struct.pack_into(">I", output, 4, len(output))
+    struct.pack_into(">I", output, table + index * stride, len(changed))
+    for i in range(index + 1, count):
+        struct.pack_into(">I", output, table + i * stride + 4, entries[i][1] + delta)
+    image.write_bytes(output)
+    avb = (sys.executable, "-I", avbtool)
+    capture(*avb, "add_hash_footer", "--image", image, "--partition_name", "dtbo",
+            "--partition_size", str(len(source)), "--algorithm", "NONE", "--salt", digest(image),
+            "--prop", "com.android.build.dtbo.fingerprint:"
+            "google/grizzly/grizzly:17/CP4A.261105.040.D1/16731845:user/release-keys")
+    capture(*avb, "verify_image", "--image", image)
+    return merged
+
+
+def write_payload(path, content, mode):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(content)
+    path.chmod(mode)
+
+
+def check_modules(cpio, manifest):
+    audit = runpy.run_path(str(HERE / "audit-stock-ufs.py"))
+    dep = capture("bsdtar", "-xOf", cpio, "lib/modules/modules.dep")
+    dependencies = audit["module_dependencies"](dep.decode())
+    members = set(capture("bsdtar", "-tf", cpio).decode().splitlines())
+    loaded = set()
+    for line in manifest.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        name, *parameters = line.split()
+        if (not re.fullmatch(r"[a-zA-Z0-9_-]+\.ko", name)
+                or name in {"sg.ko", "pixel-reboot.ko"} or "rpmb" in name
+                or name in loaded or name not in dependencies
+                or f"lib/modules/{name}" not in members):
+            raise ValueError(f"invalid inventory module: {name}")
+        if any(not re.fullmatch(r"[a-zA-Z0-9_]+=[a-zA-Z0-9_-]+", arg)
+               for arg in parameters):
+            raise ValueError(f"invalid parameters for {name}")
+        if set(dependencies[name]) - loaded:
+            raise ValueError(f"dependency order incomplete for {name}")
+        loaded.add(name)
+    if "ufs.ko" not in loaded:
+        raise ValueError("inventory manifest is missing ufs.ko")
+
+    protected = set()
+    for root in PROTECTED_ROOTS:
+        protected.update(audit["hard_closure"](dependencies, root))
+    if protected - loaded:
+        raise ValueError("inventory manifest is missing the protected module closure")
+    preloads = sorted(name.removesuffix(".ko").replace("-", "_") for name in protected)
+    if len(set(preloads)) != len(preloads):
+        raise ValueError("protected module names collide after normalization")
+    softdep = capture("bsdtar", "-xOf", cpio, "lib/modules/modules.softdep").decode()
+    for line in softdep.splitlines():
+        fields = line.split()
+        if len(fields) > 1 and fields[0] == "softdep" and fields[1].replace("-", "_") in preloads:
+            raise ValueError(f"unexpected soft dependency in protected closure: {fields[1]}")
+    return len(loaded), preloads
+
+
+def add_usb2_test(root, vendor_cpio, manifest, count, preloads, reader):
+    usb_modules = "\n".join(USB2_MODULES) + "\n"
+    full_count, full_preloads = check_modules(vendor_cpio, manifest.rstrip() + "\n" + usb_modules)
+    if full_count != count + len(USB2_MODULES) or full_preloads != preloads:
+        raise ValueError("USB2 modules must load separately after the NV guard")
+    test = root / "grizzly-inventory"
+    write_payload(test / "usb2-test", b"", 0o644)
+    write_payload(test / "usb2-test.sh", (HERE / "stock-usb2-test.sh").read_bytes(), 0o644)
+    write_payload(test / "usb2.modules", usb_modules.encode(), 0o644)
+    if reader is None:
+        write_payload(test / "usb2-test.bin", bytes(range(256)) * 256, 0o644)
+    else:
+        write_payload(test / "nv-reader-mode", b"", 0o644)
+        write_payload(test / "nv-reader", reader, 0o755)
+
+
+def read_nv_reader(path):
+    reader = path.read_bytes()
+    if len(reader) < 64 or reader[:6] != b"\x7fELF\x02\x01":
+        raise ValueError("expected a static ARM64 NV reader executable")
+    kind, machine = struct.unpack_from("<HH", reader, 16)
+    headers = struct.unpack_from("<Q", reader, 32)[0]
+    header_size, header_count = struct.unpack_from("<HH", reader, 54)
+    if (kind != 2 or machine != 183 or header_size != 56 or not header_count
+            or headers < 64 or headers + header_count * header_size > len(reader)):
+        raise ValueError("invalid ARM64 NV reader ELF headers")
+    segments = {struct.unpack_from("<I", reader, headers + i * header_size)[0]
+                for i in range(header_count)}
+    if 1 not in segments or segments & {2, 3}:
+        raise ValueError("NV reader must be linked statically")
+    return reader
+
+
+def pack(args):
+    sampler_path = args.ufs_psm1_prep_trace or args.ufs_psm1_trace
+    power_trace = (args.ufs_power_trace or args.ufs_pre_on_trace or sampler_path
+                   or args.ufs_cpm_trace or args.ufs_uic_trace)
+    dc_isolated_trace = args.dc_cid_trace or args.dc_be_trace
+    display_trace = args.dsi0_trace or dc_isolated_trace
+    rescue_base = display_trace or args.ufs_uic_trace
+    stock = {name: args.factory / f"{name}.img" for name in FACTORY}
+    expected_images = FACTORY
+    if rescue_base:
+        expected_images = dict(FACTORY, init_boot=NV_RESCUE_INIT_SHA256, dtbo=USB2_ISOLATION_DTBO_SHA256)
+        if digest(args.board_dtb) != DSI0_TRACE_BOARD_SHA256:
+            raise ValueError("stock trace requires the audited B0 merge of NV rescue DTBO entry 19")
+    for name, path in stock.items():
+        if digest(path) != expected_images[name]:
+            raise ValueError(f"{path} differs from the audited D1 factory image")
+    sampler = None
+    if sampler_path:
+        sampler = sampler_path.read_bytes()
+        expected = PSM1_PREP_SAMPLER_SHA256 if args.ufs_psm1_prep_trace else PSM1_SAMPLER_SHA256
+        if hashlib.sha256(sampler).hexdigest() != expected:
+            raise ValueError("PSM1 sampler differs from the loader-verified D1 module")
+    reader = None
+    isolation_dtbo = args.usb2_ep0_trace
+    if args.usb2_nv_reader:
+        reader_path, isolation_dtbo = args.usb2_nv_reader
+        reader = read_nv_reader(reader_path)
+    if isolation_dtbo:
+        if (digest(isolation_dtbo) != USB2_ISOLATION_DTBO_SHA256
+                or digest(args.board_dtb) != USB2_ISOLATION_BOARD_SHA256):
+            raise ValueError("USB2 isolation requires the verified DWC3 isolation DTBO and merged board DTB")
+        capture(sys.executable, "-I", args.avbtool, "verify_image", "--image", isolation_dtbo)
+
+    args.output.mkdir(mode=0o700)
+    images = args.output / "images"
+    images.mkdir()
+    with TemporaryDirectory(dir=args.output) as scratch:
+        temp = Path(scratch)
+        for name in ("boot", "vendor_boot", "vendor_kernel_boot"):
+            capture(sys.executable, args.unpack, "--boot_img", stock[name], "--out", temp / name)
+        vendor_kernel_ramdisk = temp / "vendor_kernel_boot/vendor_ramdisk00"
+        vendor_kernel_cpio = temp / "vendor-kernel.cpio"
+        vendor_kernel_cpio.write_bytes(capture("lz4", "-dc", vendor_kernel_ramdisk))
+        if sampler is not None or args.ufs_uic_trace:
+            ufs = capture("bsdtar", "-xOf", vendor_kernel_cpio, "lib/modules/ufs.ko")
+            if hashlib.sha256(ufs).hexdigest() != STOCK_UFS_SHA256:
+                raise ValueError("factory ufs.ko differs from the audited D1 module")
+            print(f"Factory ufs.ko SHA-256 verified: {STOCK_UFS_SHA256}")
+        root = temp / "root"
+        write_payload(root / "init", (HERE / "stock-inventory-init").read_bytes(), 0o755)
+        write_payload(root / "grizzly-inventory/scan.sh",
+                      (HERE / "stock-inventory-scan.sh").read_bytes(), 0o644)
+        archive_members = ["init", "grizzly-inventory", "lib"]
+        count = 0
+        factory_init_ramdisk = None
+        if args.handoff_only or args.preinit_helper_only:
+            write_payload(root / "grizzly-inventory/handoff-only", b"", 0o644)
+        else:
+            manifest = (HERE / "stock-inventory.modules").read_text()
+            if args.ufs_cpm_trace:
+                lines = manifest.splitlines()
+                (ufs_index,) = (i for i, line in enumerate(lines)
+                                if line.split()[:1] == ["ufs.ko"])
+                lines[ufs_index:ufs_index] = CPM_TRACE_MODULES
+                manifest = "\n".join(lines) + "\n"
+            count, preloads = check_modules(vendor_kernel_cpio, manifest)
+            write_payload(root / "grizzly-inventory/preloaded.modules",
+                          ("\n".join(preloads) + "\n").encode(), 0o644)
+            if args.preloads_only:
+                write_payload(root / "grizzly-inventory/preloads-only", b"", 0o644)
+            else:
+                write_payload(root / "stock-inventory.modules", manifest.encode(), 0o644)
+                archive_members.append("stock-inventory.modules")
+                if args.nv_guard_only or args.ufs_refclk_only or power_trace or args.usb2_test or display_trace:
+                    write_payload(root / "grizzly-inventory/nv-guard.sh",
+                                  (HERE / "stock-nv-guard.sh").read_bytes(), 0o644)
+                if args.nv_guard_only or (display_trace and not args.ufs_uic_trace):
+                    write_payload(root / "grizzly-inventory/nv-guard-only", b"", 0o644)
+                if display_trace:
+                    display_modules = DSI0_MODULES
+                    if args.dsi0_panel_discovery:
+                        display_modules += DSI0_PANEL_MODULES
+                    display_manifest = "\n".join(display_modules) + "\n"
+                    full_count, full_preloads = check_modules(
+                        vendor_kernel_cpio, manifest.rstrip() + "\n" + display_manifest)
+                    if full_count != count + len(display_modules) or full_preloads != preloads:
+                        raise ValueError("display closure must load separately after the NV guard")
+                    write_payload(root / "grizzly-inventory/dsi0.modules",
+                                  display_manifest.encode(), 0o644)
+                    helper = "stock-dsi0-trace.sh"
+                    if dc_isolated_trace:
+                        dc_module = capture("bsdtar", "-xOf", vendor_kernel_cpio, "lib/modules/vs_drm.ko")
+                        if hashlib.sha256(dc_module).hexdigest() != STOCK_DC_SHA256:
+                            raise ValueError("factory vs_drm.ko differs from the audited DC module")
+                        helper = "stock-dc-cid-trace.sh"
+                        if args.dc_be_trace:
+                            controller = capture("bsdtar", "-xOf", vendor_kernel_cpio,
+                                                 "lib/modules/power_controller.ko")
+                            if hashlib.sha256(controller).hexdigest() != DSI0_POWER_CONTROLLER_SHA256:
+                                raise ValueError("factory power_controller.ko differs from the audited D1 module")
+                            write_payload(root / "grizzly-inventory" / helper,
+                                          (HERE / helper).read_bytes(), 0o644)
+                            write_payload(root / "grizzly-inventory/dc-be-trace", b"", 0o644)
+                            helper = "stock-dc-be-trace.sh"
+                        else:
+                            write_payload(root / "grizzly-inventory/dc-cid-trace", b"", 0o644)
+                    elif args.dsi0_rmw_trace:
+                        helper = "stock-dsi0-rmw-trace.sh"
+                    if args.dsi0_panel_discovery:
+                        helper = "stock-dsi0-panel.sh"
+                        write_payload(root / "grizzly-inventory/dsi0-panel-discovery", b"", 0o644)
+                        if args.dsi0_panel_dp_off:
+                            write_payload(root / "grizzly-inventory/dsi0-panel-dp-off", b"", 0o644)
+                    if args.dsi0_dp0_vote_trace:
+                        controller = capture("bsdtar", "-xOf", vendor_kernel_cpio,
+                                             "lib/modules/power_controller.ko")
+                        if hashlib.sha256(controller).hexdigest() != DSI0_POWER_CONTROLLER_SHA256:
+                            raise ValueError("factory power_controller.ko differs from the audited D1 module")
+                        write_payload(root / "grizzly-inventory/dsi0-dp0-vote-trace", b"", 0o644)
+                        write_payload(root / "grizzly-inventory/stock-dsi0-dp0-vote.sh",
+                                      (HERE / "stock-dsi0-dp0-vote.sh").read_bytes(), 0o644)
+                    write_payload(root / "grizzly-inventory" / helper, (HERE / helper).read_bytes(), 0o755)
+                    if (args.dsi0_pll_trace or args.dsi0_genpd_trace
+                            or args.dsi0_phy_reset_trace or args.dsi0_rmw_trace
+                            or args.dsi0_dp0_vote_trace):
+                        cdphy = capture("bsdtar", "-xOf", vendor_kernel_cpio, "lib/modules/mipi-cdphy.ko")
+                        if hashlib.sha256(cdphy).hexdigest() != DSI0_CDPHY_SHA256:
+                            raise ValueError("factory mipi-cdphy.ko differs from the audited D1 module")
+                    if args.dsi0_pll_trace:
+                        write_payload(root / "grizzly-inventory/dsi0-pll-trace", b"", 0o644)
+                    if args.dsi0_genpd_trace:
+                        write_payload(root / "grizzly-inventory/dsi0-genpd-trace", b"", 0o644)
+                    if args.dsi0_phy_reset_trace:
+                        write_payload(root / "grizzly-inventory/dsi0-phy-reset-trace", b"", 0o644)
+                    if args.dsi0_rmw_trace:
+                        write_payload(root / "grizzly-inventory/dsi0-rmw-trace", b"", 0o644)
+                if args.ufs_refclk_only:
+                    write_payload(root / "grizzly-inventory/ufs-refclk-only", b"", 0o644)
+                    write_payload(root / "grizzly-inventory/ufs-refclk.sh",
+                                  (HERE / "stock-ufs-refclk.sh").read_bytes(), 0o644)
+                if power_trace:
+                    write_payload(root / "grizzly-inventory/ufs-power-trace", b"", 0o644)
+                    write_payload(root / "grizzly-inventory/ufs-power-trace.sh",
+                                  (HERE / "stock-ufs-power-trace.sh").read_bytes(), 0o644)
+                if args.ufs_pre_on_trace:
+                    write_payload(root / "grizzly-inventory/ufs-pre-on-trace", b"", 0o644)
+                if args.ufs_uic_trace:
+                    write_payload(root / "grizzly-inventory/ufs-uic-trace", b"", 0o644)
+                    write_payload(root / "grizzly-inventory/stock-ufs-uic-trace.sh",
+                                  (HERE / "stock-ufs-uic-trace.sh").read_bytes(), 0o644)
+                if sampler is not None:
+                    write_payload(root / "grizzly-inventory/ufs-psm1-trace",
+                                  f"{STOCK_UFS_SHA256}  /lib/modules/ufs.ko\n".encode(), 0o400)
+                    write_payload(root / "grizzly-inventory/grizzly_stock_psm1.ko", sampler, 0o400)
+                if args.ufs_psm1_prep_trace:
+                    write_payload(root / "grizzly-inventory/ufs-psm1-prep-trace", b"", 0o400)
+                if args.ufs_cpm_trace:
+                    write_payload(root / "grizzly-inventory/ufs-cpm-trace", b"", 0o644)
+                    for suffix in ("sh", "awk"):
+                        name = f"stock-ufs-cpm-trace.{suffix}"
+                        write_payload(root / "grizzly-inventory" / name, (HERE / name).read_bytes(), 0o644)
+                if args.usb2_test:
+                    add_usb2_test(root, vendor_kernel_cpio, manifest, count, preloads, reader)
+                    if args.usb2_ep0_trace:
+                        write_payload(root / "grizzly-inventory/usb2-ep0", b"", 0o644)
+                        write_payload(root / "grizzly-inventory/usb2-ep0.sh",
+                                      (HERE / "stock-usb2-ep0.sh").read_bytes(), 0o644)
+        if not args.handoff_only:
+            capture(sys.executable, args.unpack, "--boot_img", stock["init_boot"],
+                    "--out", temp / "factory-init_boot")
+            factory_init_ramdisk = temp / "factory-init_boot/ramdisk"
+            if rescue_base:
+                # Drop the known NV export overlay and retain the stock early-loader files.
+                factory_init_ramdisk.write_bytes(
+                    factory_init_ramdisk.read_bytes()[:NV_RESCUE_FACTORY_RAMDISK_SIZE])
+        busybox = capture("bsdtar", "-xOf", args.rescue_cpio, "bin/busybox")
+        if busybox[:6] != b"\x7fELF\x02\x01" or struct.unpack_from("<H", busybox, 18)[0] != 183:
+            raise ValueError("expected the ARM64 BusyBox from Grizzly RAM rescue")
+        write_payload(root / "grizzly-inventory/busybox", busybox, 0o755)
+        libc_name = "libc.musl-aarch64.so.1"
+        loader_name = "ld-musl-aarch64.so.1"
+        loader = capture("bsdtar", "-xOf", args.rescue_cpio, f"lib/{loader_name}")
+        if loader[:6] != b"\x7fELF\x02\x01" or struct.unpack_from("<H", loader, 18)[0] != 183:
+            raise ValueError("expected the ARM64 loader from Grizzly RAM rescue")
+        write_payload(root / f"lib/{loader_name}", loader, 0o755)
+        (root / f"lib/{libc_name}").symlink_to(loader_name)
+        (root / "lib").chmod(0o755)
+
+        new_paths = ("grizzly-inventory", "stock-inventory.modules",
+                     f"lib/{libc_name}", f"lib/{loader_name}")
+        cpio_sources = [vendor_kernel_cpio]
+        vendor_fragments = sorted((temp / "vendor_boot").glob("vendor_ramdisk[0-9][0-9]"))
+        if len(vendor_fragments) != 2:
+            raise ValueError("expected both D1 vendor ramdisk fragments")
+        for fragment in vendor_fragments:
+            cpio = temp / (fragment.name + ".cpio")
+            cpio.write_bytes(capture("lz4", "-dc", fragment))
+            cpio_sources.append(cpio)
+        if args.usb2_test:
+            firmware = capture("bsdtar", "-xOf", temp / "vendor_ramdisk00.cpio", USB2_FIRMWARE)
+            if len(firmware) != 40960 or hashlib.sha256(firmware).hexdigest() != USB2_FIRMWARE_SHA256:
+                raise ValueError("factory ramdisk USB2 PHY firmware differs from the audited D1 vendor image")
+        if factory_init_ramdisk is not None:
+            factory_init_cpio = temp / "factory-init.cpio"
+            factory_init_cpio.write_bytes(capture("lz4", "-dc", factory_init_ramdisk))
+            factory_paths = set(capture("bsdtar", "-tf", factory_init_cpio).decode().splitlines())
+            required = {"init", "system/bin/modprobe", "dev/console", "dev/kmsg",
+                        "dev/null", "dev/urandom"}
+            if required - factory_paths:
+                raise ValueError("factory generic ramdisk is missing early startup files")
+            cpio_sources.append(factory_init_cpio)
+            if args.preinit_helper_only:
+                modprobe = capture("bsdtar", "-xOf", factory_init_cpio, "system/bin/modprobe")
+                if hashlib.sha256(modprobe).hexdigest() != MODPROBE_SHA256:
+                    raise ValueError("factory modprobe differs from the audited help path")
+                write_payload(root / "grizzly-inventory/factory/modprobe", modprobe, 0o755)
+                write_payload(root / "system/bin/modprobe",
+                              (HERE / "stock-modprobe-probe").read_bytes(), 0o755)
+                archive_members.append("system/bin/modprobe")
+        for cpio in cpio_sources:
+            members = capture("bsdtar", "-tf", cpio).decode().splitlines()
+            if any(path == added or path.startswith(added + "/")
+                   for path in members for added in new_paths):
+                raise ValueError(f"new inventory path overlaps factory content in {cpio.name}")
+
+        cpio = args.output / "inventory.cpio"
+        capture("bsdtar", "--format", "newc", "--uid", "0", "--gid", "0",
+                "-cf", cpio, "-C", root, *archive_members)
+        ramdisk = args.output / "inventory.cpio.lz4"
+        capture("lz4", "-l", "-12", cpio, ramdisk)
+        if factory_init_ramdisk is not None:
+            combined = temp / "stock-and-inventory.lz4"
+            combined.write_bytes(factory_init_ramdisk.read_bytes() + ramdisk.read_bytes())
+            if capture("lz4", "-dc", combined) != factory_init_cpio.read_bytes() + cpio.read_bytes():
+                raise ValueError("factory and inventory archives do not decode in order")
+            ramdisk = combined
+        image = images / "init_boot.img"
+        capture(sys.executable, args.mkbootimg, "--header_version", "4",
+                "--os_version", "17.0.0", "--os_patch_level", "2026-11",
+                "--ramdisk", ramdisk, "--output", image)
+
+        private = temp / "test.pem"
+        public = args.output / "AVB-PUBLIC-KEY.pem"
+        capture("openssl", "genpkey", "-quiet", "-algorithm", "RSA",
+                "-pkeyopt", "rsa_keygen_bits:4096", "-out", private)
+        capture("openssl", "pkey", "-in", private, "-pubout", "-out", public)
+        avb = (sys.executable, "-I", args.avbtool)
+        capture(*avb, "add_hash_footer", "--image", image, "--partition_name", "init_boot",
+                "--partition_size", str(CAPACITY), "--algorithm", "SHA256_RSA4096",
+                "--rollback_index", "1793836800", "--key", private, "--salt", digest(image),
+                "--prop", "com.android.build.init_boot.os_version:17",
+                "--prop", "com.android.build.init_boot.security_patch:2026-11-05")
+        capture(*avb, "verify_image", "--image", image, "--key", public)
+
+        unpacked = temp / "init_boot"
+        capture(sys.executable, args.unpack, "--boot_img", image, "--out", unpacked)
+        if (unpacked / "ramdisk").read_bytes() != ramdisk.read_bytes():
+            raise ValueError("packed inventory ramdisk differs")
+        stock_kernel = temp / "boot/kernel"
+        kernel = temp / "Image"
+        kernel.write_bytes(capture("lz4", "-dc", stock_kernel))
+        vendor_ramdisks = temp / "combined-vendor-boot.lz4"
+        vendor_ramdisks.write_bytes(b"".join(fragment.read_bytes()
+                                             for fragment in vendor_fragments))
+        board_dtb = args.board_dtb
+        if args.dsi0_panel_dp_off or dc_isolated_trace:
+            board_dtb = pack_display_dtbo(stock["dtbo"], temp / "vendor_kernel_boot/dtb",
+                                         board_dtb, temp, images / "dtbo.img", args.avbtool,
+                                         dc_isolated_trace)
+        bounds = capture(sys.executable, HERE / "check-handoff.py", kernel, board_dtb,
+                         vendor_kernel_ramdisk, vendor_ramdisks, ramdisk,
+                         "--packed-kernel", stock_kernel,
+                         "--dtb-container", temp / "vendor_kernel_boot/dtb")
+        print(bounds.decode(), end="")
+
+    for name, path in stock.items():
+        if name != "init_boot":
+            if name == "dtbo" and (args.dsi0_panel_dp_off or dc_isolated_trace):
+                continue
+            if name == "dtbo" and isolation_dtbo:
+                path = isolation_dtbo
+            shutil.copyfile(path, images / f"{name}.img")
+    (images / "DEVICE").write_text("grizzly\n")
+    checksums = images / "SHA256SUMS"
+    checksums.write_text("".join(f"{digest(images / (name + '.img'))}  {name}.img\n"
+                                 for name in FACTORY))
+    fit = capture(sys.executable, HERE / "check-slot-b.py", images, checksums,
+                  "--fastboot-vars", args.fastboot_vars, "--require-healthy-a")
+    print(fit.decode(), end="")
+    if args.handoff_only:
+        print("Handoff-only prototype contains 0 stock module requests.")
+    elif args.preinit_helper_only:
+        print("Pre-init helper prototype replaces modprobe with the audited help-only wrapper.")
+    elif args.preloads_only:
+        print(f"Preloads-only prototype expects {len(preloads)} factory preloads "
+              "and contains no PID 1 module manifest.")
+    else:
+        print(f"Inventory manifest has {count} modules: {len(preloads)} expected preloads, "
+              f"{count - len(preloads)} subsequent module requests.")
+        if args.nv_guard_only:
+            print("NV guard prototype verifies read-only state without exporting block data.")
+        if args.dc_be_trace:
+            print("Stock BE trace records existing DC accesses and supplier votes with DSI hosts and PHYs disabled.")
+        elif args.dc_cid_trace:
+            print("Stock DC CID trace arms before the guarded display load with DSI hosts and PHYs disabled.")
+        elif args.dsi0_dp0_vote_trace:
+            print("Stock DP-off trace brackets the existing DSI0 PHY read with DP0 firmware vote samples.")
+        elif args.dsi0_panel_discovery:
+            print("Stock DSI0 panel fixture checks scoped I2C binding and the cached DRM connector.")
+        elif args.dsi0_rmw_trace:
+            print("Stock PHY register trace arms after CD-PHY loads and before the DSI host loads.")
+        elif args.dsi0_trace:
+            print("Stock DSI0 trace arms before the separate guarded display module load.")
+        if args.ufs_refclk_only:
+            print("UFS reference-clock prototype reads the stock attribute after the NV guard.")
+        if args.ufs_power_trace:
+            print("UFS power trace prototype records stock UFS MMIO reads and power votes.")
+        if args.ufs_uic_trace:
+            print("Stock UIC trace records capability requests, wait results and interrupt status.")
+        if args.ufs_pre_on_trace:
+            print("UFS PRE_ON trace prototype adds a register-only probe to the stock power trace.")
+        if sampler is not None:
+            print("UFS PSM1 trace prototype pairs the stock D1 sampler with stock AP power votes.")
+        if args.ufs_psm1_prep_trace:
+            print("UFS prep trace adds pre-load genpd counters and guarded pre/post-prep PSM1 samples.")
+        if args.ufs_cpm_trace:
+            print("UFS CPM trace prototype pairs stock MBFS votes and decoded firmware PSM1 events.")
+        if reader is not None:
+            host = args.output / "host-tools"
+            write_payload(host / "tools/stock-nv-transport.py",
+                          (HERE / "stock-nv-transport.py").read_bytes(), 0o700)
+            write_payload(host / "tools/check-stock-usb2.py",
+                          (HERE / "check-stock-usb2.py").read_bytes(), 0o600)
+            print("USB2 NV reader serves guarded, read-only partitions over the tested ACM gadget.")
+            print(f"Grizzly-only host backup tools: {host}")
+        elif args.usb2_test:
+            print(f"USB2 prototype loads {len(USB2_MODULES)} modules after the NV guard "
+                  "and sends 65536 synthetic bytes on request.")
+        if args.usb2_ep0_trace:
+            print("EP0 trace prototype uses the tested DWC3 isolation DTBO.")
+    print(f"Replacement init_boot SHA-256: {digest(image)}")
+
+
+def main():
+    os.umask(0o077)
+    parser = argparse.ArgumentParser(description=__doc__)
+    for option in ("factory", "board-dtb", "rescue-cpio", "mkbootimg", "unpack",
+                   "avbtool", "fastboot-vars"):
+        parser.add_argument(f"--{option}", type=Path, required=True)
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--handoff-only", action="store_true",
+                      help="verify stock PID 1 and restart without any loaded modules")
+    mode.add_argument("--preloads-only", action="store_true",
+                      help="verify factory protected preloads without loading UFS suppliers")
+    mode.add_argument("--preinit-helper-only", action="store_true",
+                      help="check the early factory modprobe runtime with its help command")
+    mode.add_argument("--nv-guard-only", action="store_true",
+                      help="verify read-only NV devices before enabling a backup transport")
+    mode.add_argument("--dsi0-trace", action="store_true",
+                      help="stage the stock DSI0 trace from the audited NV rescue images")
+    mode.add_argument("--dsi0-pll-trace", action="store_true",
+                      help="also capture stock DSI0 PHY PLL lock if the driver polls it")
+    mode.add_argument("--dsi0-genpd-trace", action="store_true",
+                      help="trace display genpd, wrapper vote stacks and runtime PM before DSI0 host access")
+    mode.add_argument("--dsi0-phy-reset-trace", action="store_true",
+                      help="correlate active-only stock PHY reset readbacks with DSI0 ON and host status")
+    mode.add_argument("--dsi0-phy-reset-uic-trace", action="store_true",
+                      help="record UFS startup before the guarded stock DSI0 PHY reset trace")
+    mode.add_argument("--dsi0-rmw-trace", action="store_true",
+                      help="observe existing stock PHY 0x28 accesses if display activity occurs")
+    mode.add_argument("--dsi0-panel-discovery", action="store_true",
+                      help="qualify stock panel and connector binding after the NV guard")
+    mode.add_argument("--dsi0-dp0-vote-trace", action="store_true",
+                      help="bracket stock DSI0 PHY init with read-only DP0 vote samples on the DP-off fixture")
+    mode.add_argument("--dc-cid-trace", action="store_true",
+                      help="trace the stock DC customer ID with DSI host and PHY nodes disabled")
+    mode.add_argument("--dc-be-trace", action="store_true",
+                      help="trace stock BE register accesses and supplier votes with DSI hosts and PHYs disabled")
+    mode.add_argument("--ufs-refclk-only", action="store_true",
+                      help="read the stock UFS device's reference-clock attribute after the NV guard")
+    mode.add_argument("--ufs-power-trace", action="store_true",
+                      help="trace the stock UFS module probe and verify the NV guard")
+    mode.add_argument("--ufs-uic-trace", action="store_true",
+                      help="capture stock D1 UIC requests and interrupts before the guarded scan")
+    mode.add_argument("--ufs-pre-on-trace", action="store_true",
+                      help="qualify the stock UFS PRE_ON sampling point without reading PSM1")
+    mode.add_argument("--ufs-psm1-trace", type=Path, metavar="SAMPLER_KO",
+                      help="capture a guarded stock PRE_ON PSM1 sample with the core vote")
+    mode.add_argument("--ufs-psm1-prep-trace", type=Path, metavar="SAMPLER_KO",
+                      help="trace prep PSM1 and snapshot stock genpd state before UFS loads")
+    mode.add_argument("--ufs-cpm-trace", action="store_true",
+                      help="correlate stock UFS MBFS votes with CPM firmware transition records")
+    mode.add_argument("--usb2-test", action="store_true",
+                      help="verify the NV guard and test USB2 with synthetic data")
+    usb2_features = parser.add_mutually_exclusive_group()
+    usb2_features.add_argument("--usb2-ep0-trace", type=Path, metavar="ISOLATION_DTBO",
+                               help="arm EP0 tracing in --usb2-test with the verified isolation DTBO")
+    usb2_features.add_argument("--usb2-nv-reader", type=Path, nargs=2,
+                               metavar=("READER_ELF", "ISOLATION_DTBO"),
+                               help="use the static NV reader in --usb2-test with the verified isolation DTBO")
+    parser.add_argument("output", type=Path)
+    parser.add_argument("--dsi0-panel-dp-off", action="store_true",
+                        help="exclude the DP encoder in the B0 DTBO for --dsi0-panel-discovery")
+    args = parser.parse_args()
+    if args.dsi0_dp0_vote_trace:
+        args.dsi0_panel_discovery = True
+        args.dsi0_panel_dp_off = True
+    if args.dsi0_panel_dp_off and not args.dsi0_panel_discovery:
+        parser.error("--dsi0-panel-dp-off requires --dsi0-panel-discovery")
+    if args.dsi0_phy_reset_uic_trace:
+        args.dsi0_phy_reset_trace = True
+        args.ufs_uic_trace = True
+    args.dsi0_trace |= (args.dsi0_pll_trace or args.dsi0_genpd_trace
+                        or args.dsi0_phy_reset_trace or args.dsi0_rmw_trace or args.dsi0_panel_discovery)
+    if (args.usb2_ep0_trace or args.usb2_nv_reader) and not args.usb2_test:
+        parser.error("USB2 isolation options require --usb2-test")
+    try:
+        pack(args)
+    except subprocess.CalledProcessError as error:
+        parser.exit(1, f"stock inventory packaging failed: {error.output.decode(errors='replace')}\n")
+    except (OSError, ValueError) as error:
+        parser.exit(1, f"stock inventory packaging failed: {error}\n")
+
+
+if __name__ == "__main__":
+    main()
