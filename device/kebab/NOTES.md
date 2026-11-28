@@ -67,6 +67,7 @@ Android boot image) was taken to the laptop and checked by SHA-256.
 | --- | --- | --- | --- |
 | before the write | b | no / no / 7 | no / no / 6 |
 | after the write | b | no / no / 7 | (not read) |
+| after 5 normal boots from `boot_b` | b | no / no / 7 | no / no / 6 |
 
 - **`fastboot reboot`:** ABL starts slot B by itself
   (`androidboot.slot_suffix=_b`, `androidboot.verifiedbootstate=orange`:
@@ -91,10 +92,16 @@ Android boot image) was taken to the laptop and checked by SHA-256.
   whose cause isn't in the journal (UPower logged no critical action; logind
   ignores the power key, which the shell handles); plugging USB in powered
   the phone on again, and that boot is clean.
-- **Not known yet:** whether this ABL spends slot B's retries on each
-  normal boot while B isn't marked successful (marking it is a GPT write,
-  a CONTRIBUTING.md §3.1 exception for the maintainer to agree). Until
-  then, `fastboot --set-active=b` resets the count.
+- **Retries aren't spent.** After five normal boots from `boot_b` (the
+  `fastboot reboot`, a standalone power-on, the power-on from plugging USB
+  in, a `systemctl reboot`, and the `reboot bootloader` below) slot B still
+  reads retry-count 7, not successful, not unbootable: this ABL doesn't
+  count normal boots against an unmarked slot, so slot B needn't be marked
+  successful (a GPT write, a CONTRIBUTING.md §3.1 exception) for the phone
+  to keep starting it.
+- **`reboot bootloader` works:** `omamobile-device-kebab`'s `reboot`
+  wrapper (`reboot-to bootloader`, LINUX_REBOOT_CMD_RESTART2) reaches ABL's
+  fastboot mode with no buttons.
 
 Way back: `fastboot boot` of the same image, or `fastboot flash boot_b`
 of the saved copy; slot A was not written.
