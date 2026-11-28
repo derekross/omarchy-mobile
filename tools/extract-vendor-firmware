@@ -1,8 +1,9 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
 # extract-vendor-firmware: stage device-specific firmware from the owner's
-# own image. Pixel factory images support cheetah, panther, raven, tegu and
-# husky; dipper takes vendor, modem and Bluetooth partition roots (-d).
+# own image. Pixel factory images support cheetah, panther, raven, tegu,
+# husky and tangorpro; dipper takes vendor, modem and Bluetooth partition
+# roots (-d).
 #
 # Proprietary firmware is not ours to redistribute, so Omamobile never
 # ships it. This stages files from the user's own image and renames them to
@@ -44,6 +45,17 @@
 # with that core's vector table (eight ARM branch instructions) and ends with
 # its version word, the one the MFC reports in FW_VERSION once it runs
 # (0x44250901 in the image this was tested with).
+#
+# The Pixel Tablet (-d tangorpro; <board> is "google,gs201-tangorpro") has a
+# BCM43752 (its firmware is tagged 4362b0-roml, the chip's silicon family),
+# and only its Wi-Fi files are mapped so far (device/tangorpro/WIFI-PLAN.md):
+#
+#   vendor/firmware/fw_bcmdhd.bin     -> brcm/brcmfmac43752-pcie.<board>.bin       (brcmfmac)
+#   vendor/firmware/bcmdhd.cal        -> brcm/brcmfmac43752-pcie.<board>.txt       (NVRAM)
+#   vendor/firmware/bcmdhd_clm.blob   -> brcm/brcmfmac43752-pcie.<board>.clm_blob  (regulatory)
+#
+# Its touch firmware is device/tangorpro/extract-touch-fw's. Bluetooth, the
+# AoC's sensor registry and audio wait for their own plans.
 #
 # Xiaomi Mi 8 (dipper) takes files copied from its own partitions into a
 # local directory containing vendor/, modem/ and bluetooth/ roots. The split
@@ -175,7 +187,7 @@ Usage: extract-vendor-firmware [-o OUTDIR] [-w WORKDIR] [-f] SOURCE
   -o DIR   staging root to write into (default: ./out/vendor-firmware); a
            successful run replaces this script's earlier outputs there
   -w DIR   scratch directory for the ~1 GB vendor.img (default: a temp dir in \$TMPDIR)
-  -d DEV   cheetah (default), panther, raven, tegu, husky or dipper
+  -d DEV   cheetah (default), panther, raven, tegu, husky, tangorpro or dipper
   -s SKU   husky: the hardware SKU (androidboot.hardware.sku), which picks the NVRAM
   -f       skip the device checks (android-info.txt board=$DEVICE, the vendor build.prop);
            dipper always requires vendor/build.prop to identify the backup as dipper
@@ -295,6 +307,19 @@ case $DEVICE_OPT in
       "firmware/cs40l26-dvl.bin|cs40l26-dvl.bin"
       "firmware/cs40l26-calib.wmfw|cs40l26-calib.wmfw"
     ) ;;
+  tangorpro)
+    # Pixel Tablet: Wi-Fi only (the header). No Bluetooth patch is mapped,
+    # so its check is off.
+    BOARD="google,gs201-tangorpro"
+    DEVICE="tangorpro"
+    FW_BASE="brcmfmac43752-pcie"
+    WIFI_CHIP="4362b0"
+    BT_CHIP=""
+    MAP=(
+      "firmware/fw_bcmdhd.bin|brcm/$FW_BASE.$BOARD.bin"
+      "firmware/bcmdhd.cal|brcm/$FW_BASE.$BOARD.txt"
+      "firmware/bcmdhd_clm.blob|brcm/$FW_BASE.$BOARD.clm_blob"
+    ) ;;
   dipper)
     DEVICE=dipper
     MAP=(
@@ -308,7 +333,7 @@ case $DEVICE_OPT in
       "bluetooth/image/crnv21.bin|qca/Xiaomi/dipper/crnv21.bin"
       "bluetooth/image/crbtfw21.tlv|qca/crbtfw21.tlv"
     ) ;;
-  *) die "unknown device $DEVICE_OPT (cheetah, panther, raven, tegu, husky or dipper)" ;;
+  *) die "unknown device $DEVICE_OPT (cheetah, panther, raven, tegu, husky, tangorpro or dipper)" ;;
 esac
 [[ $DEVICE == husky || -z $SKU ]] || die "-s is for husky only"
 # The camera data flow (tools/extract-camera-data) exists for cheetah only
@@ -517,8 +542,8 @@ done
 
 # The AoC's sensor registry (which sensors this board has, their buses and
 # settings), read by omamobile-sensor-proxy; without it only virtual sensors.
-# husky has no AoC driver yet, so it skips the registry.
-if [[ $DEVICE != husky && $DEVICE != dipper ]]; then
+# husky and tangorpro have no AoC driver yet, so they skip the registry.
+if [[ $DEVICE != husky && $DEVICE != tangorpro && $DEVICE != dipper ]]; then
   reg="$new/usr/share/omamobile/sensors"
   get_dir etc/sensors/registry "$reg" ||
     die "/vendor/etc/sensors/registry is missing from this image or could not be copied"

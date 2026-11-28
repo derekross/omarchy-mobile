@@ -1,0 +1,23 @@
+// SPDX-License-Identifier: MIT
+/*
+ * Bring-up only (TOUCH-PLAN.md): enable the Pixel Tablet's touchscreen,
+ * the NT36523 on USI0 SPI. The board file describes it and leaves USI0,
+ * SPI0 and the controller disabled; this turns the three on for one gated
+ * boot. Its pins (PERIC1, FAR_ALIVE) are already on, and it has no supply
+ * to enable. The firmware it names comes from device/tangorpro/extract-touch-fw.
+ * Applied with fdtoverlay; the tangorpro DTB is built with -@.
+ */
+/dts-v1/;
+/plugin/;
+
+&usi0 {
+	status = "okay";
+};
+
+&spi_0 {
+	status = "okay";
+};
+
+&touchscreen {
+	status = "okay";
+};
