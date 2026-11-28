@@ -33,9 +33,9 @@ each step below are recorded under [Results](#results).
 - **The slot mark is on hold** (the maintainer, #931, 2026-11-24): no
   `slot-a-mark write` or `restore`, and no `fastboot flash boot_a`, until
   the CONTRIBUTING §3.1 entry is decided. The tool refuses both on a phone
-  (`HOLD`), so only its read-only `status` and `dump` would merge in use. Test kernels are RAM-booted with
-  `fastboot boot` only, and reboots are kept few. A broken `sde` GPT means
-  EDL.
+  (`HOLD`), so on a phone only its read-only `status` and `dump` run.
+  Test kernels are RAM-booted with `fastboot boot` only, and reboots are
+  kept few. A broken `sde` GPT means EDL.
 
 The kernel code for this phone comes from postmarketOS's SM8150 kernel tree
 (the SoC and the board), which the owner's own earlier port had carried onto

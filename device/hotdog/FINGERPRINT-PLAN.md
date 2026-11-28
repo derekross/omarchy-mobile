@@ -352,6 +352,9 @@ per boot): `loaded TA gfp9558 (signed as fingerprint), app id 3`, the
 service active, no failed units, and the owner's finger unlocked the lock
 screen. The older driver on `boot_a` (`-crypt1-gf3a11a5f5062`) logs
 `unknown parameter 'app_signed_names' ignored` and loads the TA as before.
+The run had the owner's RPMB opt-in on (F7, decided 2026-11-04:
+`allow_rpmb=Y` and the consent file), so the driver's probe line ends
+`RPMB allowed`.
 
 **2026-11-05, the stack from the kernel and the package**
 (`7.3.0-rc6-omamobile-push1-g41a6c1235a0b`, `omamobile-device-hotdog`
