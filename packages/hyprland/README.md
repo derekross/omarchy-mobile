@@ -78,9 +78,10 @@ Omarchy dropped the patch, so it is gone here too.
 
 ## Status
 
-**0.57.0-3.5: 3.4 with 0003 (the lock surface follows a turn), not yet
-built from this PKGBUILD.** The patch and the results below are from
-#753, whose build ("#753's build" below: 0003 on 3.3's sources, made
+**0.57.0-3.5: 3.4 with 0003 (the lock surface follows a turn).** Built
+from this PKGBUILD on a Pixel 7 Pro (`tools/phone-install-package`,
+`-j4`, 24 min) and running there since 2026-11-28 (last row of the table).
+The patch and the other results below are from #753, whose build ("#753's build" below: 0003 on 3.3's sources, made
 before 3.4 took that number for the rebuild) was built on 2026-11-13 and
 has run on a Pixel 9a since 2026-11-14. Built from this PKGBUILD in
 an Arch Linux ARM container on an aarch64 host (`-j8`, 6 min), against
@@ -96,6 +97,7 @@ and compares the lock surface's size with the monitor's:
 | A VM with the 9a's packages and phone session (vkms, 1080x2424 at 8/3) | 0.57.0-3.1 | not ok, the same sizes |
 | The same VM | #753's build | ok, three runs; ok twice more with `OMAMOBILE_ROTATION_HOLD=1` |
 | Pixel 9a | #753's build | ok, three runs |
+| Pixel 7 Pro | 0.57.0-3.5 | ok: 480x1040 at the lock, 1040x480 turned, 480x1040 back |
 
 With `WAYLAND_DEBUG=1` on a lock client in the VM, 0.57.0-3.1 sent one
 `ext_session_lock_surface_v1.configure(405, 909)` at the lock and none for
@@ -108,9 +110,12 @@ with #753's build, locked in landscape and then turned to portrait, it is
 drawn at 405x909. In the VM with #753's build it also came out right after a
 turn made while the display was off (applied at the wake).
 
-Not tested: the Pixel 7 Pro (where 3.4 has the bug: locked after a turn,
-the lock screen came back squeezed on 2026-11-27), the Pixel 7 (the rotation hold was only
-run in the VM), and an external monitor.
+On the Pixel 7 Pro, 3.4 has the bug (locked after a turn, the lock screen
+came back squeezed on 2026-11-27). With 3.5, turned to landscape, locked
+with the power key and turned back to portrait while locked, Omarchy's
+lock screen is full size with a normal PIN pad, and unlocks (2026-11-28).
+Not tested: the Pixel 7 (the rotation hold was only run in the VM) and an
+external monitor.
 
 **0.57.0-3.4, built in the Arch Linux ARM container on the laptop
 (2026-11-27) against hyprgraphics 0.7.0, published to the development
