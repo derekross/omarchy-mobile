@@ -77,7 +77,8 @@ if command -v alsaucm >/dev/null && [[ -r /usr/share/alsa/ucm2/ucm.conf ]]; then
   out=$(ucmh list _devices/HiFi)
   [[ $out == *"0: Speaker"* && $out == *"1: Earpiece"* && $out == *"2: Mic"* ]] || fail "UCM husky: Speaker, Earpiece and Mic devices"
   [[ $(ucmh get CapturePCM/Mic/HiFi) == *"hw:0,8" ]] || fail "UCM husky: Mic PCM is EP1 capture (device 8)"
-  grep -q "BUILDIN MIC ID CAPTURE LIST' 0,-1,-1,-1" ucm2/Google/husky/HiFi.conf || fail "husky records mic id 0 only until the others are mapped"
+  grep -q "BUILDIN MIC ID CAPTURE LIST' 0,2,1,-1" ucm2/Google/husky/HiFi.conf || fail "husky lists its mics bottom (0), top (2), rear (1), as mapped by tapping 2026-11-26"
+  sed -n '/^SectionDevice."Mic"/,/^}/p' ucm2/Google/husky/HiFi.conf | grep -cE '^\s+CaptureChannels 2$' >/dev/null || fail "UCM husky: the Mic records two channels, bottom and top, as the 7 Pro does"
   [[ $(ucmh get PlaybackPCM/Speaker/HiFi) == *"hw:0,5" ]] || fail "UCM husky: Speaker PCM is EP6 (device 5)"
   pass "UCM profile parses: husky HiFi with Speaker and Earpiece on EP6"
 fi

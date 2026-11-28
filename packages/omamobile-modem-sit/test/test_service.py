@@ -32,6 +32,25 @@ class ServiceTests(unittest.TestCase):
         self.assertNotIn('aa', line)                     # only the first four bytes
         self.client.request.assert_not_called()          # logged, never answered
         self.assertEqual(self.service.indication_counts['0804'], 1)
+    def test_network_time_zone_is_kept_and_published(self):
+        # A test network (PLMN 00101): 2030-06-15 12:34:56 UTC, UTC+5:45 (23 quarter hours), no DST.
+        payload = bytes([1, 30, 6, 15, 12, 34, 56, 23, 0, 4, 1]) + b'00101' + bytes(9)
+        packet = struct.pack('<BBHHH', 2, 0, 0x0905, 8 + len(payload), 0) + payload
+        self.service.publish = Mock()
+        with patch('builtins.print') as out:
+            self.service.event(packet)
+        self.assertEqual(self.service.network_time['utc'], '2030-06-15T12:34:56Z')
+        self.assertEqual(self.service.network_time['offset_minutes'], 345)
+        self.assertEqual(self.service.network_time['dst'], 0)
+        self.assertEqual(self.service.network_time['plmn'], '00101')
+        self.assertIn('UTC+345 min', ' '.join(str(a) for a in out.call_args.args))
+        self.service.publish.assert_called_once()
+        self.client.request.assert_not_called()
+    def test_network_time_west_of_utc_and_short(self):
+        nitz = app_service.network_time(bytes([1, 30, 1, 2, 3, 4, 5, 0xd8, 0]))   # -40 quarter hours
+        self.assertEqual(nitz['offset_minutes'], -600)
+        self.assertEqual(nitz['plmn'], '')
+        self.assertIsNone(app_service.network_time(bytes(8)))
     def test_short_phone_reset_indication(self):
         self.assertIn('bytes 0x08..0x09 = 01 07',
                       app_service.reset_indication(struct.pack('<BBHHH', 2, 0, 0x0804, 10, 0) + b'\x01\x07'))

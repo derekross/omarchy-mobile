@@ -1,0 +1,18 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Bring-up only, never default (GNSS-PLAN.md, stage 2): turn on HSI0 USI3
+ * (already in SPI mode in zuma.dtsi) and its SPI controller, spi21 at
+ * 111e0000, with num-cs = <1> so the controller doesn't assume it. The
+ * BCM4775x node under it stays disabled, so no SPI device appears.
+ */
+/dts-v1/;
+/plugin/;
+
+&usi3_hsi0 {
+	status = "okay";
+};
+
+&spi21 {
+	num-cs = <1>;
+	status = "okay";
+};

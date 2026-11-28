@@ -1,0 +1,30 @@
+// SPDX-License-Identifier: MIT
+/*
+ * Bring-up only (AUDIO-PLAN.md, stage P1): USI7 as SPI and the two CS35L41
+ * speaker amplifiers (chip select 0 = top speaker / earpiece, 1 = bottom
+ * loudspeaker), as device/cheetah/overlays/audio-amps-test.dtso. The PERIC0
+ * pin controller is already on in panther's DTS (haptics). Needs the
+ * gs201-panther amplifier nodes in the kernel.
+ *
+ * With omamobile-audio installed, snd-soc-cs35l41-spi is blacklisted, so
+ * the nodes only bind when something loads it: tools/cs35l41-id (spidev,
+ * read-only IDs) or omamobile-speaker-protection.
+ */
+/dts-v1/;
+/plugin/;
+
+&{/soc@0/usi@109600c0} {
+	status = "okay";
+};
+
+&{/soc@0/usi@109600c0/spi@10960000} {
+	status = "okay";
+};
+
+&{/soc@0/usi@109600c0/spi@10960000/amplifier@0} {
+	status = "okay";
+};
+
+&{/soc@0/usi@109600c0/spi@10960000/amplifier@1} {
+	status = "okay";
+};

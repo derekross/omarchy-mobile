@@ -71,6 +71,13 @@ if [[ -f ../omamobile-device-cheetah/src/reboot-to.c ]]; then
   [[ $(readlink vendor/systemd/system-sleep/omamobile) == "$(readlink ../omamobile-device-cheetah/vendor/systemd/system-sleep/omamobile)" ]] \
     || fail "the system-sleep link drifted from the cheetah package"
   pass "omamobile-sleep and its system-sleep link match the cheetah package"
+  # The AoC is the 7 Pro's (same SoC, same firmware names): the same
+  # hang-safe start, unit and module policy.
+  for f in bin/omamobile-aoc-start vendor/systemd/system/omamobile-aoc.service \
+           vendor/modprobe.d/omamobile-aoc.conf; do
+    cmp -s "$f" "../omamobile-device-cheetah/$f" || fail "$f drifted from the cheetah package"
+  done
+  pass "the AoC files match the cheetah package"
 fi
 grep -q 'omamobile-keyring' PKGBUILD || fail "pacman needs omamobile-keyring"
 grep -q '^install=omamobile-device-panther.install$' PKGBUILD \
@@ -117,9 +124,15 @@ for f in usr/bin/reboot-to \
          usr/lib/modprobe.d/omamobile-wifi.conf \
          usr/bin/omamobile-wlan-mac usr/lib/udev/rules.d/80-omamobile-wlan-mac.rules \
          usr/bin/omamobile-sleep \
+         usr/bin/omamobile-aoc-start usr/lib/systemd/system/omamobile-aoc.service \
+         usr/lib/modprobe.d/omamobile-aoc.conf \
          etc/pacman.d/omamobile-mirrorlist; do
   [[ -f $tmp/root/$f ]] || fail "install stages $f"
 done
+[[ $(readlink "$tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-aoc.service") == ../omamobile-aoc.service ]] \
+  || fail "the AoC starts at boot through a vendor wants link"
+grep -qx 'blacklist aoc_core' "$tmp/root/usr/lib/modprobe.d/omamobile-aoc.conf" \
+  || fail "the AoC modules never autoload"
 grep -q 'KERNEL=="sda", MODE="0000"' "$tmp/root/usr/lib/udev/rules.d/10-omamobile-storage.rules" \
   || fail "the whole-disk node is made inaccessible"
 grep -q 'ID_PART_ENTRY_NAME}!="userdata"' "$tmp/root/usr/lib/udev/rules.d/10-omamobile-storage.rules" \
@@ -168,9 +181,12 @@ f=$tmp/root/usr/lib/modprobe.d/omamobile-fingerprint.conf
 for m in sg goodix_fp; do
   grep -qx "blacklist $m" "$f" || fail "$m is loaded by omamobile-fp only"
 done
-# No package here loads Trusty by hand (the 7 Pro's sound start does), so
-# blacklisting it would leave omamobile-fp without /dev/trusty-ipc-dev0
-grep -q 'trusty' <(grep -v '^#' "$f") && fail "Trusty must load from the DT, not be blacklisted"
+# Trusty calls into the secure world at probe: omamobile-aoc-start loads it
+# behind its hang marker, as on the 7 Pro, never udev from the DT
+for m in trusty_core trusty_log trusty_ipc trusty_virtio; do
+  grep -qx "blacklist $m" "$f" || fail "$m is loaded by omamobile-aoc-start only"
+done
+grep -qx 'softdep trusty_virtio pre: trusty_ipc' "$f" || fail "trusty_ipc loads before trusty_virtio"
 [[ -x $tmp/root/usr/bin/omamobile-usb-rescue ]] || fail "omamobile-usb-rescue is executable"
 [[ $(readlink "$tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-usb-rescue.service") == ../omamobile-usb-rescue.service ]] \
   || fail "omamobile-usb-rescue starts at boot"
@@ -200,17 +216,17 @@ grep -q '^PACKAGE=omamobile-device-panther$' "$tmp/root/usr/share/omamobile/devi
   || fail "the installed descriptor is panther"
 for absent in usr/bin/omamobile-boot-success usr/bin/omamobile-bootctl \
               usr/lib/systemd/system/omamobile-boot-success.service \
-              usr/bin/omamobile-charge-guard usr/bin/omamobile-aoc-start \
+              usr/bin/omamobile-charge-guard \
               usr/lib/systemd/logind.conf.d/10-omamobile-lid.conf; do
   [[ ! -e $tmp/root/$absent ]] || fail "install includes $absent"
 done
 for wants in "$tmp"/root/usr/lib/systemd/system/*.wants/*; do
   case ${wants##*/} in
-    omamobile-usb-rescue.service|omamobile-wifi.service|omamobile-camera.timer) ;;
+    omamobile-usb-rescue.service|omamobile-wifi.service|omamobile-camera.timer|omamobile-aoc.service) ;;
     *) fail "install enables ${wants#$tmp/root/}" ;;
   esac
 done
-pass "install stages the udev rules, the USB link and its rescue, Wi-Fi, and the mirrorlist; it starts only the USB rescue, guarded Wi-Fi and the camera timer, and nothing that marks a slot or starts the modem or the charger"
+pass "install stages the udev rules, the USB link and its rescue, Wi-Fi, and the mirrorlist; it starts only the USB rescue, guarded Wi-Fi, the guarded AoC and the camera timer, and nothing that marks a slot or starts the modem or the charger"
 # The cameras: drivers blacklisted, loaded only by omamobile-camera-start
 # from the timer, on panther's CSIS (1a450000; cheetah's is 1a460000).
 cam=$tmp/root/usr/bin/omamobile-camera-start
