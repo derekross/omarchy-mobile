@@ -514,6 +514,76 @@ merge_sha=$(git rev-parse --short HEAD)
 check "merge-only range introducing new MAC" 1 "MAC or Bluetooth addresses" "$merge_sha merge-only.md:" "no commits to check"
 echo "ok - a merge-only range introducing a real MAC fails and does not say 'no commits to check'"
 
+# Commit messages are scanned by the same four identifier checks, merge
+# commits included, labelled "<sha> (commit message): <line>".
+m=0
+msg_case() { # expect pattern subject [body]
+  local sha args=(-m "$3")
+  [[ -z ${4:-} ]] || args+=(-m "$4")
+  case_branch "msg-$((m += 1))"
+  git commit -q --allow-empty "${args[@]}"
+  sha=$(git rev-parse --short HEAD)
+  check "commit message: $3" "$1" "$2" "${2:+$sha (commit message):}"
+}
+msg_case 1 "MAC or Bluetooth addresses" "wifi: saw $V on wlan0"
+msg_case 1 "MAC or Bluetooth addresses" "wifi: note" "wlan0 at $V"
+msg_case 0 "" "wifi: example $L" "doc example $D and all zeros 00:00:00:00:00:00"
+echo "ok - a real MAC in a commit subject or body fails naming (commit message); exempt MACs pass"
+
+msg_case 1 "getprop output" "notes: boot" "[ro.boot.hardware.revision]: [MP1.0]"
+echo "ok - getprop output in a commit message fails"
+
+msg_case 1 "serial numbers" "notes: serial" "androidboot.serialno=27141FDH2001AB"
+msg_case 0 "" "notes: serial placeholder" "androidboot.serialno=<SERIAL>; SERIAL=\${serial}"
+msg_case 1 "serial numbers" "notes: mixed serial" "androidboot.serialno=<SERIAL> ro.serialno=27141FDH2001AB"
+msg_case 1 "serial numbers" "notes: mixed serial with colon" "ro.serialno=27141FDH2001AB, note: androidboot.serialno=<SERIAL>"
+echo "ok - a serial in a commit message fails (alone or beside an exempt value); a placeholder passes"
+
+msg_case 1 "IMEIs" "modem: imei" "IMEI: 356938035643809"
+echo "ok - an IMEI in a commit message fails"
+
+case_branch msg-earlier
+printf 'first\n' > notes.md
+git add notes.md && git commit -q -m "notes: saw $V"
+bad_sha=$(git rev-parse --short HEAD)
+printf 'second\n' > notes.md
+git add notes.md && git commit -q -m "notes: clean follow-up"
+good_sha=$(git rev-parse --short HEAD)
+check "identifier in earlier commit message" 1 "MAC or Bluetooth addresses" "$bad_sha (commit message):" "$good_sha "
+echo "ok - an identifier in an earlier commit's message fails and names the earlier commit"
+
+case_branch msg-merge-side
+printf 'side\n' > side-msg.md
+git add side-msg.md && git commit -q -m "side: clean commit"
+side_sha=$(git rev-parse --short HEAD)
+case_branch msg-merge
+git merge -q --no-ff -m "merge side with $V" msg-merge-side
+git rev-parse -q --verify HEAD^2 >/dev/null || fail "msg-merge: not a merge commit"
+merge_sha=$(git rev-parse --short HEAD)
+check "merge commit message with MAC" 1 "MAC or Bluetooth addresses" "$merge_sha (commit message):" "$side_sha "
+echo "ok - an identifier in a merge commit's own message fails and names the merge commit"
+
+msg_case 0 "" "tools: benign message with 0123456789ab" "$(printf '%s\n' \
+  'Tested at 2026-11-28 02:03:17 on register 0x18061e00 (commit 0123456789abcdef0123456789abcdef01234567).' \
+  'Use <MAC> and <SERIAL> instead of real values.' \
+  '' \
+  'Fixes: 0123456789ab ("tools: prior change")' \
+  'Link: https://lore.kernel.org/r/20261128020317.12345-1-dev@example.org' \
+  'Signed-off-by: A Human <a@example.org>' \
+  'Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>' \
+  'Assisted-by: Gemini 4 Neon')"
+echo "ok - a benign commit message with SHAs, Fixes/Link/trailers, timestamp, register offset and placeholders passes"
+
+msg_case 1 "MAC or Bluetooth addresses" $'\037'"wifi: saw $V"
+msg_case 1 "MAC or Bluetooth addresses" "wifi: note" $'\037'"wlan0 at $V"
+msg_case 1 "MAC or Bluetooth addresses" "wifi: bare marker" $'\037\n'"wlan0 at $V"
+echo "ok - a message line starting with \\037 (or a bare \\037 line before one) cannot hide an identifier"
+
+git config i18n.logOutputEncoding UTF-16
+msg_case 1 "MAC or Bluetooth addresses" "wifi: utf16" "wlan0 at $V"
+git config --unset i18n.logOutputEncoding
+echo "ok - a commit message with an identifier still fails under i18n.logOutputEncoding=UTF-16"
+
 git checkout -q main
 check "nothing to check" 0 "no commits"
 echo "ok - no commits, nothing to check"

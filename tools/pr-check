@@ -3,9 +3,10 @@
 # The policy checks a pull request must pass (AGENTS.md section 1, and
 # CONTRIBUTING.md section 6), on the commits between BASE and HEAD:
 #
-#   - no identifiers in added lines: MAC and Bluetooth addresses (locally
-#     administered ones, like 02:..., are allowed: they're made up), a
-#     `getprop` dump, a serial number assignment, an IMEI;
+#   - no identifiers in added lines or commit messages: MAC and Bluetooth
+#     addresses (locally administered ones, like 02:..., are allowed:
+#     they're made up), a `getprop` dump, a serial number assignment, an
+#     IMEI;
 #   - no vendor blobs: firmware, partition images, archives, compiled
 #     modules and libraries, APKs;
 #   - no Signed-off-by from an AI agent (the human signs off; a
@@ -51,8 +52,9 @@ fi
 
 # ---------------------------------------------------------------- identifiers
 # Added lines of every commit in the range (and lines newly introduced by any
-# merge commit relative to all its parents), with the commit and file each
-# came from; this file's own patterns are skipped.
+# merge commit relative to all its parents), plus the message of every commit
+# in the range, with the commit and file (or "(commit message)") each came
+# from; this file's own patterns are skipped.
 added=$(git -c core.quotePath=false -c log.showRoot=true log --full-history --cc --no-color --no-ext-diff --no-textconv \
   --src-prefix=a/ --dst-prefix=b/ --unified=0 --format='%x1f%h %P' "$range" \
   -- . ':(exclude)tools/pr-check' ':(exclude)tests/pr-check' \
@@ -72,6 +74,12 @@ added=$(git -c core.quotePath=false -c log.showRoot=true log --full-history --cc
       print sha " " f ": " substr($0, np + 1)
     }
   ')
+msgs=$(git log --encoding=UTF-8 --format='%x1f%h%n%w(0,1,1)%B' "$range" \
+  | awk '
+    /^\037/ { sha = substr($0, 2); next }
+    sha != "" && /^ / && $0 != " " { print sha " (commit message): " substr($0, 2) }
+  ')
+[[ -z $msgs ]] || added+=${added:+$'\n'}$msgs
 
 # A MAC is six octets joined all by colons or all by hyphens, in any case,
 # with no hex digit or further octet on either side; a label before it
