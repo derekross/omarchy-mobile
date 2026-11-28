@@ -241,7 +241,8 @@ def pack(args):
     sampler_path = args.ufs_psm1_prep_trace or args.ufs_psm1_trace
     power_trace = (args.ufs_power_trace or args.ufs_pre_on_trace or sampler_path
                    or args.ufs_cpm_trace or args.ufs_uic_trace)
-    display_trace = args.dsi0_trace or args.dc_cid_trace
+    dc_isolated_trace = args.dc_cid_trace or args.dc_be_trace
+    display_trace = args.dsi0_trace or dc_isolated_trace
     rescue_base = display_trace or args.ufs_uic_trace
     stock = {name: args.factory / f"{name}.img" for name in FACTORY}
     expected_images = FACTORY
@@ -326,12 +327,22 @@ def pack(args):
                     write_payload(root / "grizzly-inventory/dsi0.modules",
                                   display_manifest.encode(), 0o644)
                     helper = "stock-dsi0-trace.sh"
-                    if args.dc_cid_trace:
+                    if dc_isolated_trace:
                         dc_module = capture("bsdtar", "-xOf", vendor_kernel_cpio, "lib/modules/vs_drm.ko")
                         if hashlib.sha256(dc_module).hexdigest() != STOCK_DC_SHA256:
-                            raise ValueError("factory vs_drm.ko differs from the audited DC CID probe")
-                        write_payload(root / "grizzly-inventory/dc-cid-trace", b"", 0o644)
+                            raise ValueError("factory vs_drm.ko differs from the audited DC module")
                         helper = "stock-dc-cid-trace.sh"
+                        if args.dc_be_trace:
+                            controller = capture("bsdtar", "-xOf", vendor_kernel_cpio,
+                                                 "lib/modules/power_controller.ko")
+                            if hashlib.sha256(controller).hexdigest() != DSI0_POWER_CONTROLLER_SHA256:
+                                raise ValueError("factory power_controller.ko differs from the audited D1 module")
+                            write_payload(root / "grizzly-inventory" / helper,
+                                          (HERE / helper).read_bytes(), 0o644)
+                            write_payload(root / "grizzly-inventory/dc-be-trace", b"", 0o644)
+                            helper = "stock-dc-be-trace.sh"
+                        else:
+                            write_payload(root / "grizzly-inventory/dc-cid-trace", b"", 0o644)
                     elif args.dsi0_rmw_trace:
                         helper = "stock-dsi0-rmw-trace.sh"
                     if args.dsi0_panel_discovery:
@@ -491,10 +502,10 @@ def pack(args):
         vendor_ramdisks.write_bytes(b"".join(fragment.read_bytes()
                                              for fragment in vendor_fragments))
         board_dtb = args.board_dtb
-        if args.dsi0_panel_dp_off or args.dc_cid_trace:
+        if args.dsi0_panel_dp_off or dc_isolated_trace:
             board_dtb = pack_display_dtbo(stock["dtbo"], temp / "vendor_kernel_boot/dtb",
                                          board_dtb, temp, images / "dtbo.img", args.avbtool,
-                                         args.dc_cid_trace)
+                                         dc_isolated_trace)
         bounds = capture(sys.executable, HERE / "check-handoff.py", kernel, board_dtb,
                          vendor_kernel_ramdisk, vendor_ramdisks, ramdisk,
                          "--packed-kernel", stock_kernel,
@@ -503,7 +514,7 @@ def pack(args):
 
     for name, path in stock.items():
         if name != "init_boot":
-            if name == "dtbo" and (args.dsi0_panel_dp_off or args.dc_cid_trace):
+            if name == "dtbo" and (args.dsi0_panel_dp_off or dc_isolated_trace):
                 continue
             if name == "dtbo" and isolation_dtbo:
                 path = isolation_dtbo
@@ -527,7 +538,9 @@ def pack(args):
               f"{count - len(preloads)} subsequent module requests.")
         if args.nv_guard_only:
             print("NV guard prototype verifies read-only state without exporting block data.")
-        if args.dc_cid_trace:
+        if args.dc_be_trace:
+            print("Stock BE trace records existing DC accesses and supplier votes with DSI hosts and PHYs disabled.")
+        elif args.dc_cid_trace:
             print("Stock DC CID trace arms before the guarded display load with DSI hosts and PHYs disabled.")
         elif args.dsi0_dp0_vote_trace:
             print("Stock DP-off trace brackets the existing DSI0 PHY read with DP0 firmware vote samples.")
@@ -600,6 +613,8 @@ def main():
                       help="bracket stock DSI0 PHY init with read-only DP0 vote samples on the DP-off fixture")
     mode.add_argument("--dc-cid-trace", action="store_true",
                       help="trace the stock DC customer ID with DSI host and PHY nodes disabled")
+    mode.add_argument("--dc-be-trace", action="store_true",
+                      help="trace stock BE register accesses and supplier votes with DSI hosts and PHYs disabled")
     mode.add_argument("--ufs-refclk-only", action="store_true",
                       help="read the stock UFS device's reference-clock attribute after the NV guard")
     mode.add_argument("--ufs-power-trace", action="store_true",

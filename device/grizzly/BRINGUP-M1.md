@@ -9103,6 +9103,47 @@ it, and a USB-C reconnect restored detection. Stock D1 completed
 boot on A with enforcing verity and the original VBMeta digest.
 Take a fresh guarded NV backup before the next slot B trial.
 
+###### Offline passive stock D1 BE trace
+
+Build with `pack-stock-inventory.py --dc-be-trace` using the
+same audited D1 rescue inputs and B0 board tree as the
+[stock DC customer-ID fixture](#offline-stock-d1-dc-customer-id-trace).
+The packer checks the exact factory `vs_drm.ko` and
+`power_controller.ko` hashes. The CID DTBO is unchanged.
+Both DSI hosts, both PHYs and the DP encoder stay disabled.
+
+After the NV guard passes, PID 1 verifies the live device tree
+and arms a dedicated tracefs instance before loading the stock
+display manifest. It uses the existing `dc_read` result and
+isolation-helper call sites. The probes copy CPU registers and
+make no MMIO requests.
+
+| Stock probe or event | Evidence recorded |
+| --- | --- |
+| `dc_read+0x2c` | Offset and returned value for BE force-read `0xd4004`, isolation `0x80248`, and IRQ enable, status and overflow `0x80004`, `0x80008` and `0x80014` when stock reads them. |
+| `dc_hw_enable_clock_domain_iso+0x30` and `+0x34` | The argument to the stock isolation write and the point where the call returns. The return supplies no hardware isolation acknowledgment. |
+| Runtime PM and power-domain events | Parent DC and BE child runtime status, plus wrapper and display supplier domain targets. |
+| Existing MBFS events | Requests and replies for the wrapper `0x08` and display members `0x200`–`0x205`. |
+
+The trace uses one monotonic clock. It keeps the module-load
+window and three seconds afterward, reports per-event counts,
+rejects truncation, and removes its trace instance and probes.
+No extra DRM client or display operation is introduced. Stock
+may leave some register samples absent in this window. Device
+tree exclusion of DSI hosts and PHYs still allows the parent
+DC to vote for their domains. The trace records those votes.
+The stock NV guard and independent 90-second return remain.
+
+All five images passed checksum, AVB, ramdisk, handoff and
+archived slot-size checks. Three factory images and the scoped
+CID DTBO match the earlier fixture byte for byte. Only
+`init_boot` changed. Its SHA-256 is
+`d273fe4fe89ae8f01741d000f328bb18cb1c92a7b58fd6e17bcccfbabf045968`.
+Offline tests covered early arming, cleanup, rejection of a
+truncated trace and refusal to load with a DSI host enabled.
+Live probe attachment and samples remain to be verified.
+No phone access, reboot or flash was performed.
+
 ###### Mainline DSI0 readiness after stock connector registration
 
 The mainline prerequisite fixture at kernel
