@@ -8902,6 +8902,62 @@ reconnect restored host detection. Stock D1 then completed boot on A
 with enforcing verity and the original VBMeta digest. Take and verify a
 fresh guarded nine-partition NV backup before the next slot B trial.
 
+###### Stock D1 DC9x00 frame-start status and acknowledgment
+
+The exact D1 4 KiB `vs_drm.ko` matches the factory hash in
+[the CRTC fence analysis](#exact-d1-crtc-fence-signal-path).
+Both factory DTBs place `dpu-fe-be` at AP `0x0f600000` with size
+`0x11f000`. In the module, `dc_probe` maps that first resource
+at `0x29248`. The BE ISR passes that same resource to `dc_read`
+and `dc_write`, which use 32-bit `readl` and `writel`.
+
+| Offset from `dpu-fe-be` | AP address | Output-0 frame-start |
+| --- | --- | --- |
+| `0x80004` | `0x0f680004` | Source enable, bit 0. `dc_hw_enable_frame_irqs` updates this word under an IRQ-safe spinlock. Stock also configures sibling frame sources. |
+| `0x80008` | `0x0f680008` | Primary pending status, bit 0. The stock handler reads the word at `0x32750` and writes back the nonzero snapshot to the same address at `0x32768`. |
+| `0x80014` | `0x0f680014` | Separate overflow latch, bit 0. Stock reads and acknowledges it separately at `0x32808` and `0x32830`. |
+
+`dc_hw_init` installs bank mask `1` at `0x2e254`, selecting the
+first-bank path in `dc_hw_get_be_interrupt`. That path also reads
+and acknowledges secondary status and overflow at `0x8001c` and
+`0x80028`. The separate stock bulk-clear helpers confirm
+write-one-to-clear semantics. After acknowledgment, the module
+decodes primary bit 0 into the frame-start flag and dispatches
+it under the BE ISR spinlock. The stock GIA ACK and EOI callbacks
+contain trace hooks. The BE write clears the peripheral source for
+the level SGIA chain. Overflow is separate evidence and cannot
+complete a second CRTC event.
+
+The masked binding trial confirmed the two SGIAs and BE power vote.
+It did not touch the DC aperture. The earlier 356 MHz reply came
+from firmware. Stock takes BE and FE runtime references for its
+top-level initialization. Its later runtime-resume path can also
+perform 30 CSR reads at `0x0f6d4004` and then write `0` to the
+clock-domain isolation control at `0x0f680248` (`0x2ab40` and
+`0x2ab4c`). The corresponding suspend branch clears BE interrupts
+before writing `0x0f` to isolate. The exact prerequisites for
+BE-only access on mainline remain unverified. These paths supply
+no evidence of a DSI0 host or PHY TX register dependency for the
+frame-start acknowledgment itself.
+
+Keep `IRQF_NO_AUTOEN` until mainline qualifies the powered BE
+aperture, its bus clock, isolation and reset state with the leaf
+masked. Hold wrapper and BE power across every handler and
+teardown. After that qualification, verify the narrow sequence
+with the leaf still masked. Disable the source, clear stale bit 0
+in the owned status and overflow latches, and verify the clear
+without modifying sibling bits. Enable only the owned source
+with an ordered write and readback. Unmask the Linux leaf only
+with a handler that checks and acknowledges primary bit 0
+before delivering an event. For shutdown, mask the leaf,
+drain any running handler, disable and clear the source, then
+release BE power. The first delivery test needs a controlled
+frame source. Fence completion also needs the commit and event
+ownership described above.
+
+This analysis used saved artifacts. The mainline IRQ stays masked,
+and DSI0 host and PHY TX reads remain disabled.
+
 ###### Mainline DSI0 readiness after stock connector registration
 
 The mainline prerequisite fixture at kernel
