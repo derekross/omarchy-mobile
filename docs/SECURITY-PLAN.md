@@ -1022,9 +1022,10 @@ Arch's on the root are both built on OpenSSL (`libcryptsetup` links
 LUKS2 keyslot area with OpenSSL in userspace, turning to the kernel's
 sockets only for a cipher OpenSSL lacks (`crypt_cipher_init()` in
 cryptsetup's `lib/crypto_backend/crypto_openssl.c`); `aes-xts-plain64`
-isn't one. It opened the owner's volume without them (§11.9, 2026-11-27).
-The options that are in are inert without an encrypted root: the kernel
-sets up no device-mapper target by itself, and at boot only the
+isn't one. It opened the owner's volume without them (§11.9, 2026-11-27),
+and formatted, added, changed and removed keyslots without them
+(2026-11-28). The options that are in are inert without an encrypted root:
+the kernel sets up no device-mapper target by itself, and at boot only the
 `cryptsetup` of an `INITRAMFS_CRYPT` initramfs opens one, on a LUKS2
 `userdata`. A per-device `kernel.config` can't carry them, since the
 release kernel is one build for every device (RELEASES §3.1, §4).
@@ -1116,6 +1117,21 @@ device-neutral `tests/phone-encrypt`.
   2.4 s, the root open at 13.3 s with the owner's PIN on the first try
   (`pinpad-status` 0), the switch to Arch at 13.4 s. The mapping as before:
   LUKS2, `aes-xts-plain64`, a 512-bit key, discards and no workqueues.
+- **2026-11-28, keyslot writes without AF_ALG** (PD14, the maintainer's
+  request; RAM boot of `7.3.0-rc6-omamobile-prtest2noalg-gd8605e53486d`,
+  the kernel of the 11-27 entry; `boot_a` unchanged): on a 32 MiB LUKS2
+  file in `/run` with three test keys and PBKDF2 at 1000 iterations,
+  `luksFormat`, `luksAddKey`, `luksChangeKey`, `luksKillSlot 0` and `open
+  --test-passphrase`, each with `--debug`, then the file deleted. Once in
+  the initramfs while the pad waited (Alpine's cryptsetup 2.8.6 on OpenSSL
+  3.5.8; no AF_ALG at all: no module loaded, no `ALG` protocol) and once in
+  Arch after the owner's PIN (Arch's cryptsetup 2.8.8 on OpenSSL 4.1.0;
+  `af_alg` loaded, but this kernel has no socket module except
+  `algif_rng`). Both times every step exited 0, the killed slot's key was
+  refused afterwards, and the debug output named the OpenSSL backend in
+  every step; in the initramfs `luksFormat` also logged `Using userspace
+  crypto wrapper to access keyslot area`. No step set up a device-mapper
+  target (`/dev/mapper` afterwards: `control`, and `root` in Arch).
 - **Not run:** PT3 on its own (it ran inside PM2), PM3 and PM4 (recorded
   as a whole), the recovery key at the pad, `omamobile-pin` on the phone,
   a charging boot.
