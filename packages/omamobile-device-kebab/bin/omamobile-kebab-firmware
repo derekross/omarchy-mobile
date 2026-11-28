@@ -1,0 +1,96 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Install the OnePlus 8T's own firmware from its Android partitions, which
+# are read, never written: the GPU's zap shader from vendor_a (an EROFS
+# logical partition inside super) and the ADSP, CDSP, SLPI and venus images
+# from modem_a (FAT). Each .mdt goes in as the .mbn name the board DTS asks
+# for, with its .bNN segments beside it (the MDT loader finds them by base
+# name). Run at boot by omamobile-kebab-firmware.service; does nothing when
+# every file is already there. linux-firmware supplies the rest
+# (a650_sqe.fw, a650_gmu.bin, ath11k). Nothing of it is in the repository.
+#   omamobile-kebab-firmware [--force] [DEST]   (DEST default: the firmware dir)
+set -euo pipefail
+force=0
+[[ ${1:-} == --force ]] && { force=1; shift; }
+dest=${1:-/usr/lib/firmware/qcom/sm8250/OnePlus/kebab}
+names_modem=(adsp cdsp slpi venus)
+say() { echo "omamobile-kebab-firmware: $*"; }
+
+part() {  # the block device of a GPT partition by name
+  local d
+  for d in /sys/class/block/sd*; do
+    grep -qx "PARTNAME=$1" "$d/uevent" 2>/dev/null && { echo "/dev/${d##*/}"; return 0; }
+  done
+  return 1
+}
+complete() {
+  local n
+  for n in a650_zap "${names_modem[@]}"; do [[ -s $dest/$n.mbn ]] || return 1; done
+}
+if ((!force)) && complete; then say "already installed"; exit 0; fi
+
+tmp=$(mktemp -d)
+cleanup() {
+  mountpoint -q "$tmp/modem" && umount "$tmp/modem"
+  [[ -n ${loop:-} ]] && losetup -d "$loop" 2>/dev/null
+  rm -rf "$tmp"
+}
+trap cleanup EXIT
+mkdir -p "$tmp/new"
+
+# modem_a: FAT, mounted read-only
+modem=$(part modem_a) || { say "no modem_a partition"; exit 1; }
+mkdir "$tmp/modem"
+mount -t vfat -o ro,nodev,nosuid,noexec "$modem" "$tmp/modem"
+for n in "${names_modem[@]}"; do
+  f=$(find "$tmp/modem" -maxdepth 2 -iname "$n.mdt" | head -1)
+  [[ -n $f ]] || { say "no $n.mdt on modem_a"; exit 1; }
+  cp "$f" "$tmp/new/$n.mbn"
+  for b in "${f%.*}".b[0-9][0-9]; do cp "$b" "$tmp/new/$n.${b##*.}"; done
+done
+
+# vendor_a: an EROFS logical partition inside super, read through a
+# read-only loop over its extent (LP metadata parsed here, nothing mounted)
+super=$(part super) || { say "no super partition"; exit 1; }
+read -r off len < <(python3 - "$super" vendor_a <<'PY'
+import struct, sys
+f = open(sys.argv[1], "rb")
+def rd(o, n): f.seek(o); return f.read(n)
+if struct.unpack_from("<I", rd(4096, 4), 0)[0] != 0x616C4467: sys.exit("no LP geometry")
+h = rd(4096 * 3, 256)
+if struct.unpack_from("<I", h, 0)[0] != 0x414C5030: sys.exit("no LP metadata")
+hsize, tsize = struct.unpack_from("<I", h, 8)[0], struct.unpack_from("<I", h, 44)[0]
+po, pn, ps, eo, en, es = struct.unpack_from("<6I", h, 80)
+t = rd(4096 * 3 + hsize, tsize)
+for i in range(pn):
+    e = t[po + i * ps:po + (i + 1) * ps]
+    if e[:36].split(b"\0")[0].decode() != sys.argv[2]: continue
+    first, num = struct.unpack_from("<II", e, 40)
+    if num != 1: sys.exit("vendor_a has %d extents" % num)
+    ns, tt, td, _ = struct.unpack_from("<QIQI", t, eo + first * es)
+    if tt != 0: sys.exit("not a linear extent")
+    print(td * 512, ns * 512); sys.exit(0)
+sys.exit("no %s in super" % sys.argv[2])
+PY
+)
+loop=$(losetup -r -f --show -o "$off" --sizelimit "$len" "$super")
+dump.erofs --cat --path=/firmware/a650_zap.mdt "$loop" > "$tmp/new/a650_zap.mbn"
+for b in b00 b01 b02 b03 b04; do
+  dump.erofs --cat --path=/firmware/a650_zap.$b "$loop" > "$tmp/new/a650_zap.$b" 2>/dev/null ||
+    rm -f "$tmp/new/a650_zap.$b"
+  [[ -s $tmp/new/a650_zap.$b ]] || rm -f "$tmp/new/a650_zap.$b"
+done
+[[ -s $tmp/new/a650_zap.mbn ]] || { say "no a650_zap.mdt in vendor_a"; exit 1; }
+
+install -d "$dest"
+install -m644 "$tmp"/new/* "$dest/"
+say "installed $(ls "$tmp/new" | wc -l) files into $dest"
+
+# Remote processors that came up before their firmware was there (only for
+# the system's firmware directory: a test DEST leaves the running phone alone)
+[[ $dest == /usr/lib/firmware/qcom/sm8250/OnePlus/kebab ]] || exit 0
+for r in /sys/class/remoteproc/remoteproc*; do
+  [[ $(cat "$r/state" 2>/dev/null) == offline ]] || continue
+  [[ $(cat "$r/firmware" 2>/dev/null) == qcom/sm8250/OnePlus/kebab/* ]] || continue
+  echo start > "$r/state" 2>/dev/null && say "started $(cat "$r/name")" || say "$(cat "$r/name") did not start"
+done

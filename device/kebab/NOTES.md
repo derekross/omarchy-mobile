@@ -54,6 +54,43 @@ peripheral, no panel node and the wrong touch controller (S6SY761).
 [tree72]: https://gitlab.postmarketos.org/soc/qualcomm-sm8250/linux
 [tree]: https://gitlab.com/sm8250-mainline/linux
 
+## 2026-11-28: the phone's own firmware, installed at boot
+
+`omamobile-device-kebab` 0.1.5 adds `omamobile-kebab-firmware` (a script
+and a `sysinit.target` service before the panel wait and Plymouth). When
+any of the phone's own firmware is missing it reads it from the Android
+partitions, read-only, and installs it under
+`qcom/sm8250/OnePlus/kebab/` (each `.mdt` as the `.mbn` the DTS names,
+its `.bNN` segments beside it), then starts any remote processor that came
+up before its firmware:
+
+- **ADSP, CDSP, SLPI, venus** from `modem_a`, a FAT partition, mounted
+  `ro`;
+- **the GPU zap shader** from `vendor_a`. `super` holds the dynamic
+  partitions (LP metadata 10.2: `system_a`, `system_ext_a`, `product_a`
+  ext4; `vendor_a`, `odm_a` **EROFS**). The kernel has no EROFS, so the
+  script reads `super`'s LP metadata itself, puts a read-only loop
+  (`losetup -r`) over `vendor_a`'s single linear extent, and takes the
+  files out with `dump.erofs --cat` (`erofs-utils`).
+
+`linux-firmware-qcom` and `linux-firmware-atheros` (the SQE, GMU and
+ath11k files) are now dependencies of the package, so they come with the
+image.
+
+Test: with the hand-installed firmware moved aside, the next boot
+installed 71 files at 5.86 s and started the SLPI and ADSP; the sound card
+came back, Hyprland rendered on the Adreno 650 (`Renderer: FD650`) with
+the zap shader from the current `vendor_a` (newer than the Android 13
+copy installed by hand earlier: its `.mdt` and `.b01` differ), and a
+dry run into a test directory matched the hand-installed DSP images byte
+for byte. The loop and the mount are gone afterwards.
+
+On that boot PipeWire put the card on the `off` profile (WirePlumber:
+`failed to create proxy: Cannot allocate memory`) although the UCM verb
+probes fine (`spa-acp-tool`: "Profile HiFi supported"); a clean restart of
+the PipeWire units, and the next normal boot, chose HiFi. Seen twice today;
+to watch on a fresh install's first boot.
+
 ## 2026-11-28: boot splash (`boot_b`)
 
 The boot shows Omarchy's logo instead of kernel messages.

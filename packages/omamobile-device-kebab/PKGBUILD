@@ -2,11 +2,14 @@
 pkgname=omamobile-device-kebab
 pkgver=$(cat "${startdir:-.}/version")
 pkgrel=1
-pkgdesc="Omamobile support for the OnePlus 8T (kebab): reboot-to-fastboot, USB networking, display start, audio UCM"
+pkgdesc="Omamobile support for the OnePlus 8T (kebab): firmware from its own partitions, reboot-to-fastboot, USB networking, display start, audio UCM"
 arch=(aarch64)
 url="https://github.com/derekross/omamobile"
 license=(MIT)
-depends=(bash systemd alsa-ucm-conf)
+# linux-firmware: the GPU's SQE and GMU, ath11k; erofs-utils and python:
+# omamobile-kebab-firmware reads the zap shader from vendor_a
+depends=(bash systemd alsa-ucm-conf linux-firmware-qcom linux-firmware-atheros
+         erofs-utils python util-linux)
 
 build() {
   # Same syscall as device/kebab/initramfs/reboot-to.c. No libc.
@@ -34,6 +37,14 @@ package() {
     "$pkgdir/etc/pacman.d/omamobile-mirrorlist"
   install -Dm644 "$startdir/LICENSE" \
     "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  # The phone's own firmware from its Android partitions, at boot
+  install -Dm755 "$startdir/bin/omamobile-kebab-firmware" \
+    "$pkgdir/usr/bin/omamobile-kebab-firmware"
+  install -Dm644 "$startdir/systemd/omamobile-kebab-firmware.service" \
+    "$pkgdir/usr/lib/systemd/system/omamobile-kebab-firmware.service"
+  install -d "$pkgdir/usr/lib/systemd/system/sysinit.target.wants"
+  ln -s ../omamobile-kebab-firmware.service \
+    "$pkgdir/usr/lib/systemd/system/sysinit.target.wants/omamobile-kebab-firmware.service"
   # The display manager waits for msm DRM to take the panel
   install -Dm755 "$startdir/bin/omamobile-kebab-display-wait" \
     "$pkgdir/usr/bin/omamobile-kebab-display-wait"
