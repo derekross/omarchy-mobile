@@ -8103,10 +8103,25 @@ completed display rows had distinct tokens and covered
 19.722 seconds, from 3.7 ms after session start to 278.3 ms
 before stop. The 8 MiB ring buffer recorded zero wraps,
 overwritten bytes or chunks, discarded chunks, and writer
-or sequence packet loss. Trace Processor reported 71 frame
-timeline parser errors, so these counts cover the decoded
-rows. Stock A completed-boot and enforcing-verity checks
-matched before and after the capture.
+or sequence packet loss. Stock A completed-boot and
+enforcing-verity checks matched before and after the capture.
+
+The offline packet audit accounts for all 71 FrameTimeline
+parser errors. On 41 actual surface-frame starts, the producer
+sent `PRESENT_UNSPECIFIED` (`0`) explicitly in `present_type`.
+Thirty of those starts also had that value in
+`present_type_experimental`. Trace Processor v59.1 counts
+each explicit value outside its accepted range (1–5) and
+keeps the default unspecified classification. It still
+creates the surface slice. [Pinned parser source](https://github.com/google/perfetto/blob/1e9c61e9844affd7dccd3d42d9ea9f3a3d10cf6d/src/trace_processor/importers/proto/frame_timeline_event_parser.cc).
+
+Each of the 1,280 raw actual display starts has exactly one
+later end with the same cookie. The raw and SQL display rows
+match by display token, start timestamp and duration. The
+4,458 actual surface rows also match by display token,
+surface token, start and duration, with multiplicities. The
+71 errors affect surface presentation classification. They
+did not reduce either frame count in this capture.
 
 After this stock Android session, take and verify a fresh
 guarded nine-partition NV backup before the next Linux
