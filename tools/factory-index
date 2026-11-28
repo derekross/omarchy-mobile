@@ -74,6 +74,7 @@ its SHA-256, as Google's names do.
 import argparse
 import datetime
 import hashlib
+import io
 import json
 import os
 import re
@@ -152,10 +153,11 @@ def check_build(b, codename):
     return out
 
 
-def load(path, codename):
+def load_bytes(path, codename):
     try:
-        with open(path) as f:
-            idx = json.load(f)
+        with open(path, "rb") as f:
+            data = f.read()
+        idx = json.load(io.TextIOWrapper(io.BytesIO(data)))
     except (OSError, ValueError) as e:
         die("%s: not a build index (%s)" % (path, e))
     if not isinstance(idx, dict):
@@ -175,7 +177,11 @@ def load(path, codename):
         if build_date(below) > build_date(above):
             die("%s: %s is listed below %s, which is older; the list is newest first, by the date in "
                 "the build id" % (path, below["build"], above["build"]))
-    return {"format": FORMAT, "codename": codename, "updated": idx["updated"], "builds": builds}
+    return {"format": FORMAT, "codename": codename, "updated": idx["updated"], "builds": builds}, data
+
+
+def load(path, codename):
+    return load_bytes(path, codename)[0]
 
 
 def save(path, idx):
@@ -210,7 +216,7 @@ def sha256_of(path):
 
 
 def android_info(path, codename):
-    """board, bootloader and baseband from android-info.txt in the factory zip's image zip."""
+    """The image zip's path inside the factory zip, the bootloader and the baseband from android-info.txt."""
     try:
         outer = zipfile.ZipFile(path)
     except (OSError, zipfile.BadZipFile) as e:
@@ -235,7 +241,7 @@ def android_info(path, codename):
         want = "%s-%s-%s.img" % (kind, codename, req[key].lower())
         if names and os.path.basename(names[0]).lower() != want:
             die("%s: %s doesn't match android-info.txt's %s" % (path, names[0], req[key]))
-    return inner[0].split("/")[0], req["version-bootloader"], req["version-baseband"]
+    return inner[0], req["version-bootloader"], req["version-baseband"]
 
 
 def index_path(a):
@@ -259,8 +265,10 @@ def cmd_add(a):
     if not m:
         die("%s is not named %s-<build>-factory-<8 hex>.zip, as Google names it" % (name, codename))
     build = m.group(1).upper()
-    top, bootloader, baseband = android_info(a.zip, codename)
-    if top != "%s-%s" % (codename, m.group(1)):
+    inner, bootloader, baseband = android_info(a.zip, codename)
+    top, image = inner.split("/")
+    expected = "%s-%s" % (codename, m.group(1))
+    if top != expected:
         die("%s holds %s, not the build its name says" % (name, top))
     entry = {
         "build": build, "bootloader": bootloader, "baseband": baseband, "zip": name,
@@ -272,6 +280,8 @@ def cmd_add(a):
     entry = check_build(entry, codename)
     if any(b["build"] == build for b in idx["builds"]):
         die("%s is already in %s (tested/untested change its mark)" % (build, path))
+    if image != "image-%s.zip" % expected:
+        die("%s holds %s, not the build its name says" % (name, inner))
     # Newest first, by the build's date, whenever it is added: above the
     # first build that is no newer (so above the others of its own date)
     at = next((i for i, b in enumerate(idx["builds"]) if build_date(b) <= build_date(entry)), len(idx["builds"]))
@@ -373,14 +383,12 @@ def cmd_entry(a):
 
 def cmd_sign(a):
     path, codename = index_path(a)
-    load(path, codename)
+    _, data = load_bytes(path, codename)
     out = a.out or os.path.join(ROOT, "out", "factory-index", codename)
     dest = os.path.join(out, "factory-builds.json")
     sig_path = dest + ".sig"
     if os.path.exists(sig_path) and os.path.samefile(path, sig_path):
         die("%s is the same file as %s" % (sig_path, path))
-    with open(path, "rb") as src:
-        data = src.read()
     # Load the key and sign in a private temporary folder before touching
     # out: a refused key or failed gpg creates no folder and leaves the
     # source index and any existing copy/signature pair untouched.

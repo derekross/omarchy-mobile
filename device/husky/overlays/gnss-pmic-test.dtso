@@ -1,0 +1,14 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Bring-up only, never default (GNSS-PLAN.md, stage 3): turn on the S2MPG15
+ * sub-PMIC, pmic-2, for the three GNSS rails (LDO9S core, LDO10S RF, LDO11S
+ * AUX). Applied on top of gnss-bus-test. Nothing consumes the rails in this
+ * stage, so the regulator core's cleanup turns off any the bootloader left
+ * on, 30 s after late init. pmic-2 has no label: a path.
+ */
+/dts-v1/;
+/plugin/;
+
+&{/firmware/power-management/pmic-2} {
+	status = "okay";
+};

@@ -3,6 +3,34 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-758. A fix for a base-system requirement that a new upstream version
+  enforces is checked for what delivers it to each phone before the pin
+  moves.** #437 fixed `/run`'s mode in the initramfs, which reaches a phone
+  only with new boot images and a reboot, and only the 7 Pro's device package
+  carries boot files; #670 then moved every phone to Omarchy 4.5, whose sudo
+  migration exits 1 on `/run` 1777 (issue #447). *Check:* for each such
+  requirement, name what delivers the fix to a release-installed phone and to
+  each device without packaged boot files; prefer a fix inside the transaction
+  (tmpfiles.d, the update's preflight). Extends L-500, L-442 and L-415.
+  *From:* #670 with #437 and #673 (commit review), round 52, 2026-11-11.
+- **L-732. A table keyed on the bootloader's scanout size is checked for a second board of that size on the same SoC, open PRs included.** Kernel #181 picks gs201's modes by 1080x2400, which is also the Pixel 7a's size (kernel #202). *Check:* list the panel sizes of every board on the SoC, merged and open, before accepting size as a key. Extends L-464 and L-104. *From:* kernel #181 with kernel #202, round 51, 2026-11-11.
+- **L-731. An opt-in shell feature is checked for the surfaces it maps with the option off.** #612's setting gates the dock tap, but its two full-screen Top-layer windows are `visible: true` on every phone. *Check:* grep the diff for `PanelWindow` and read each `visible:`; with the option off, `hyprctl layers` matches main's. Extends L-608 and L-491. *From:* #612, round 51, 2026-11-11.
+- **L-730. An unchanged open PR is re-read each round against what the base gained under it: new compatibles in its driver's match table, and merged code that touches its open points.** Kernel #232's sleep callbacks bound one SoC until the base gave `pcie-gs201-cp` the Pixel 9a's compatible; #556's "screen state runs on every phone" was a caution until main got the 9a's own start-up "screen on" and a modem unit that can start at boot. Neither diff had changed. *Check:* `git log <old base>..<base> -- <each touched file>`, `git grep -n compatible <base>:<file>`, and grep main for what each open point names. Extends L-423, L-206 and L-608. *From:* kernel #232, #556, round 51, 2026-11-11.
+- **L-705. A switch named after one feature that flips a shared daemon's
+  profile is read for what else the profile governs.** #629's "keyboard
+  haptics: off" set feedbackd's `silent` profile, which drops sound and
+  vibration for every event, and omatel rings calls through feedbackd.
+  *Check:* `git grep -n feedbackd origin/main -- 'packages/*/PKGBUILD'
+  packages/omamobile-shell`, and the app repositories, for the other consumers
+  before accepting a profile change. Extends L-462. *From:* #629, round 50.
+- **L-704. A new file directly under `device/<codename>/` is checked against
+  the names the build tools read by convention.** #565 added
+  `device/bluejay/kernel.config` as the record of one build; `bin/omamobile
+  kernel` merges that file into every non-release build, so its fixed
+  `CONFIG_LOCALVERSION` would have named every Bluejay kernel after the tested
+  one, defeating the helpers' `uname -r` pin. *Check:* `git grep -n
+  'device/\$DEVICE/' bin tools` for the file's name, and grep any fragment for
+  `LOCALVERSION`. Extends L-149 and L-337. *From:* #565, round 50.
 - **L-703. A once-only step keyed on a default value reaches every device that
   still has the default, and "unchanged on the 7 Pro" covers the result, not
   the mechanism.** #635's step matches scale `= 3` or `"auto"`, so the 8 Pro
@@ -359,5 +387,3 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   2026-10-31.
 - **L-413. "Booted" or "known good" is a fact about the partitions since this boot, not a tool's record, and a guard that reads a tool's own state is walked through every other writer.** #320 first read `current/RELEASE`, which `bin/omamobile flash` (the documented recovery) and `push` never update, so after the recovery preflight refused every update. Its `save_previous` also treated slot B as booted with no record, a stale record or a record naming the running release; each can hold a set written in this boot (the hook's own same-release write, a half push), so the only recovery copy became a never-booted set marked `BOOTED=yes`. *Check:* list every way the thing can change after boot (the tool itself at the same version, fastboot, push, rollback's no-op branch, partial writes), run each in the package's fake root and then call preflight; prefer the kernel's evidence (`/sys/block/*/<part>/stat` write counters) over a record. Extends L-284 and L-363. *From:* #320, rounds 38 and 38b, 2026-11-02.
 - **L-414. A counter that proves "nothing happened" needs the mechanism that counts to be on.** #320's partition write counters stay 0 when `queue/iostats` is off, which turned the fail-safe back into the original bug. *Check:* for any "zero means unchanged" signal, find the switch that disables it and ask that "off" counts as "changed"; ask for one read on the phone that the counter rises after a known write and is zero after a fresh boot (C-1). *From:* #320, round 38c, 2026-11-02.
-- **L-415. Whether a check refuses or proceeds depends on where it runs relative to the irreversible step.** A refusal in a post-transaction hook (pacman has already removed the old modules) leaves a half-applied update; the same condition in the pre-transaction preflight costs only a restart. *Check:* when asking a hook to refuse, ask whether what it protects still exists at that point, and move the refusal to the earliest read-only gate when it doesn't. *From:* #320, round 38c, 2026-11-02.
-- **L-416. A packing change is a boot change.** #320's reproducible cpio dropped the `.` entry, so the initramfs root stayed at tmpfs's 1777 instead of 0755; the commit proved byte reproducibility and nothing about what the kernel unpacks. *Check:* diff both archives' listings with modes (`cpio -itv`), root entry included, and ask for one boot with `tools/phone-smoke`. *From:* #320, round 38b, 2026-11-02.

@@ -118,8 +118,37 @@ dumps=$(grep -E '\[(ro|persist|vendor|sys)\.[a-z0-9_.]+\]: \[' <<<"$added" || tr
 [[ -z $dumps ]] && pass "no getprop dumps" || fail "getprop output (quote single facts, never a dump):
 $(sed 's/^/    /' <<<"$dumps" | sed -n '1,5p')"
 
-serials=$(grep -iE '(serialno|ro\.serialno|androidboot\.serialno|serial[ _-]?(number)?)[[:space:]]*[:=][[:space:]]*["'\'']?[0-9A-Z]{8,}' <<<"$added" \
-  | grep -viE '<serial>|SERIAL_PLACEHOLDER|FAKE[0-9A-Z]*|\$\{?[a-z_]+' || true)
+# grep in the caller's locale picks serial assignments and flags lines
+# with no exempt term (<serial>, SERIAL_PLACEHOLDER, FAKE..., $var,
+# ${var}) as before. On base-exempted lines, awk (C locale, ASCII white
+# space) strips "<sha> <path>: " (a path holding ": " leaves its tail in
+# the text, stricter only), reads each assignment in the added text, and
+# fails the line when any value is not itself exempt. A value ends before
+# ASCII white space, quote, ;, ,, =, :, { or } (keeping ${ whole). No
+# interval expressions or POSIX classes in awk: every awk parses it.
+hits=$(grep -iE '(serialno|ro\.serialno|androidboot\.serialno|serial[ _-]?(number)?)[[:space:]]*[:=][[:space:]]*["'\'']?[0-9A-Z]{8,}' <<<"$added" || true)
+serial_ex='<serial>|SERIAL_PLACEHOLDER|FAKE[0-9A-Z]*|\$\{?[a-z_]+'
+serials=""
+if [[ -n $hits ]]; then
+  serials=$(
+    grep -viE "$serial_ex" <<<"$hits" || true
+    { grep -iE "$serial_ex" <<<"$hits" || true; } | LC_ALL=C awk 'BEGIN {
+        a = "[0-9a-z]"; s8 = a; for (i = 1; i < 8; i++) s8 = s8 a
+        pfx = "(serialno|ro\\.serialno|androidboot\\.serialno|serial[ _-]?(number)?)[ \t\r\f\v]*[:=][ \t\r\f\v]*[\"\047]?"
+        re = pfx s8 "([^ \t\r\f\v\"\047;,=:{}]|[$][{])*"
+        exempt = "<serial>|serial_placeholder|fake[0-9a-z]*|[$][{]?[a-z_]+"
+      }
+      {
+        line = tolower($0)
+        sub(/^[^ ]* /, "", line); i = index(line, ": "); if (i) line = substr(line, i + 2)
+        while (match(line, re)) {
+          v = substr(line, RSTART, RLENGTH); sub("^" pfx, "", v)
+          line = substr(line, RSTART + RLENGTH - length(v))
+          if (v !~ exempt) { print; next }
+        }
+      }'
+  )
+fi
 [[ -z $serials ]] && pass "no serial numbers" || fail "serial numbers (use <SERIAL>):
 $(sed 's/^/    /' <<<"$serials" | sed -n '1,5p')"
 

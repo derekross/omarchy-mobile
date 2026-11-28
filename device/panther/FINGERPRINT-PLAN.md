@@ -157,7 +157,9 @@ Not checked: the packages installed with `pacman -U` (their files were
 copied by hand), a wrong finger, sudo through `pam_fprintd`, and stock
 Android after a factory reset (cheetah's T2).
 
-Before a Pixel 7 DTB turns `/trusty` on by default (not just the bring-up
-overlay): Trusty loads straight from the DT here and calls into the secure
-world at probe, while the 7 Pro loads it from a start script behind a hang
-marker. The Pixel 7 gets the same guarded start first.
+Trusty calls into the secure world at probe, so now that the default
+image turns `/trusty` on (through `aoc-core-test`), its modules are
+blacklisted here as on the 7 Pro, and `omamobile-aoc-start` loads them
+behind its hang marker. A bring-up with only the fingerprint overlays (no
+AoC overlay) loads them by hand: `modprobe -a trusty_core trusty_log
+trusty_ipc trusty_virtio`.

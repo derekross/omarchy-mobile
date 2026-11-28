@@ -3,6 +3,105 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-307. A per-function object diff ends each function at its symbol size
+  and normalises absolute branch targets.** With inline alternatives, arm64's
+  readl replacement pool sits after the last function in `.text`, so new
+  readls elsewhere "changed" `gs_dsim_wait_fifo`; unstripped `0x… <fn+off>`
+  targets flagged two more. *Check:* cut each function at its `llvm-nm -S`
+  size (or treat a trailing `dmb osh`/`ldar` block as the pool), and first
+  check the normaliser reproduces a known result (base to #88). Extends L-153
+  and L-247. *From:* kernel #125, round 28.
+- **L-306. A provider merged as `status = "disabled"` turns a board's `&label`
+  reference into a silent runtime defer.** `dtc` and `dt-validate` both pass
+  the lynx draft without `&pinctrl_hsi2 { status = "okay"; }`. *Check:* for
+  every `&bank` or `&provider` a board PR references, read the provider node's
+  status in the dtsi at the base, and require the board to enable it. Extends
+  L-240. *From:* kernel #98 with #123, round 27.
+- **L-305. When a driver swallows a provider's `-EPROBE_DEFER` and falls back,
+  follow the fallback's own lookups before calling the result unpowered.**
+  hci_qca drops `pwrseq_get()`'s defer, but its fallback asks for regulators
+  that point at the PMU's `ldo` nodes, which nothing registers, so
+  `of_regulator_dev_lookup()` defers anyway. *Check:* for each supply phandle
+  in the fallback path, find who registers that node; a node with no regulator
+  device defers, and only a missing property falls back to a dummy. *From:*
+  kernel #98, round 27.
+- **L-304. A devm action that uses a resource is registered after that
+  resource is acquired.** Devres unwinds in reverse, so #124's restore action,
+  registered before `devm_regulator_get_optional()`, ran after
+  `regulator_put()` had freed the boost: a use-after-free on unbind with host
+  mode on. *Check:* when a commit adds a resource that an earlier devm action
+  or `.remove` uses, list the devm registrations in order, confirm each action
+  comes after everything it touches, and read any "unwound in reverse" comment
+  against that order. *From:* kernel #124, round 27.
+- **L-269. A power sequencer keeps a shared supply up only while another of
+  its targets has a consumer.** `pwrseq-qcom-wcn` reference-counts its
+  regulators across the Bluetooth and Wi-Fi targets; with Bluetooth as the
+  only consumer (lynx has no PCIe Wi-Fi node), Bluetooth off still drops the
+  buck. *Check:* read the sequencer's unit dependencies and the core's
+  `enable_count`, then list which targets have a consumer in that board's DT.
+  Corrects L-241's advice; see C-16. *From:* kernel #98, round 25.
+- **L-236. A binding's numeric constraints are checked against the stock
+  value of every phone that may use the property, the reference phone
+  first.** #95's `multipleOf: 47000` rejects stock cheetah's
+  `cirrus,vpbr-thld-uv = <3000000>`, which Google's driver rounds down.
+  *Check:* `grep -rn <property>` in the stock live DTs, then feed that value
+  through dt-validate. Extends L-52 and L-102. *From:* kernel #95, round 23.
+- **L-237. Before accepting a per-compatible constant for a firmware layout,
+  check whether the vendor driver reads it from the device.** #93's 14-byte
+  GT9895 record is right, but Google's driver takes it from
+  `point_struct_len` in the IC info goodix-berlin already parses. *Check:*
+  grep the vendor driver for where the value comes from before agreeing to
+  match data. Extends L-53 and L-72. *From:* kernel #93, round 23.
+- **L-238. A Kconfig `select` of a symbol that doesn't exist is silent, and a
+  sibling that selects the right one hides it.** #114 selects `CS_DSP` (the
+  symbol is `FW_CS_DSP`); it built because cs40l26-vibra and the CS35L41
+  codec select the real one. *Check:* `git grep -n '^config <SYM>$'` for
+  every selected symbol, then build with the siblings off. Extends L-20 and
+  L-143. *From:* kernel #114, round 24.
+- **L-239. A board DT is checked against the condition its binding text
+  states.** Raven's DSIM got `google,decon` ("when no KMS driver runs it") in
+  the commit that enabled gs-decon's KMS on that DECON, leaving two drivers
+  doing unlocked read-modify-writes of `TRIG_CON`. *Check:* for each optional
+  property a board sets, read its binding description and confirm the board
+  meets it. *From:* kernel #116, round 24.
+- **L-240. A board PR is built against the published branch's labels, not
+  the author's tree.** #98 references `&gph2`, which gs201 has only on the
+  integration branch. *Check:* for every `&label` a board PR adds, `git grep
+  '<label>:' github/omamobile -- arch/arm64/boot/dts/`; if missing, `git log
+  -S` on `omamobile-int` for the owner. Extends L-149 and C-10. *From:*
+  kernel #98, round 24.
+- **L-241. A supply shared by two radios is checked for what each driver does
+  at power-off.** hci_qca's WCN6855 path disables every supply when Bluetooth
+  goes down, so a fixed regulator on lynx's shared buck drops Wi-Fi with it;
+  Google's driver never drops that pin. *Check:* read each consumer's
+  power-off and runtime-PM paths, compare with the vendor driver, and prefer
+  the upstream power sequencer (`qcom,wcn6855-pmu`). Extends C-9 and L-67.
+  *From:* kernel #98, round 24. *Corrected 2026-10-28:* the sequencer keeps
+  the buck up only while Wi-Fi is also its consumer (L-269, C-16).
+- **L-242. A firmware-naming driver can pick different files for two
+  revisions of one chip.** btqca adds a `g` NVM variant for some `soc_id`
+  values, so lynx's two revisions load different files; one phone's
+  "tested" covers one. *Check:* compute the file names from each owner's
+  reported version. *From:* kernel #98, round 24.
+- **L-243. "Clock gating with Hibern8 as gs101 does" needs the PHY's Hibern8
+  hooks too.** gs101's PHY carries Google's `post_h8_enter`/`pre_h8_exit`
+  tables, zumapro's doesn't. *Check:* `git grep cfgs_hibern8
+  drivers/phy/samsung/` for the PHY the board binds, against the vendor's
+  tables. Extends L-77 and L-113. *From:* kernel #99, round 24.
+- **L-244. A hunk inserted right after a block comment leaves the comment
+  describing the wrong code.** #104 and #119 did this; checkpatch doesn't
+  see it. *Check:* for each hunk, a closing `*/` on the line above its first
+  `+` line means it split a comment from its code. *From:* kernel #104,
+  #119, round 24.
+- **L-245. A ramoops node is checked against stock's sizes and the siblings',
+  not only its address.** `record-size` puts a dmesg zone first and moves the
+  console zone, while the bootloader writes its log at stock's offset.
+  *Check:* stock's reserved-memory DT and `git grep -A4 '"ramoops"'
+  arch/arm64/boot/dts/exynos/google`. *From:* kernel #106, round 24.
+- **L-18. Check every commit for a human `Signed-off-by:`.** Three PRs at
+  once came without one, while their bodies said "checkpatch clean": it was
+  run on a diff, where the sign-off check can't fire. `tools/kernel-pr-check`
+  checks it now. *From:* kernel #10, #11, #12.
 - **L-19. Clock fixes belong in the clock driver's field description, not
   in a DT override.** `assigned-clock-parents` on a mux the driver describes
   at the wrong bit writes a reserved bit. *Check:* the mux's shift and width
@@ -337,97 +436,3 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   `panel`). *Check:* run dt-validate on the DTB for any node a PR adds under
   `/chosen`; a node at the root validates, and fw_devlink still skips it.
   *From:* kernel #154, 2026-10-31.
-- **L-352. A per-panel constant a contributor calls "approximate" may be in
-  Google's panel driver.** The 8 Pro's 70 x 155 mm is `HK3_WIDTH_MM`/
-  `HK3_HEIGHT_MM` in `panel-gs-hk3.c`. *Check:* `kernel/devices/google/
-  <device>/display/panel-gs-*.c` before accepting an estimate. *From:*
-  kernel #154, 2026-10-31.
-- **L-447. A crash fix that moves a decode out of its condition changes what
-  the reference phone shows, and a reference-phone run lapses when the
-  commit is reworked.** Kernel #191 decodes every scanned BSS and drops 6
-  GHz ones, so a 7 Pro also loses the phantom 2.4/5 GHz entries its 6 GHz
-  neighbours made; our 11-01 run on #56 covered only the NULL check.
-  *Check:* for a new skip or early return on a shared path, list the inputs
-  that used to pass with a wrong value, say what the reference phone stops
-  showing, and diff a moved commit against the tested one. Extends L-86,
-  L-206 and L-379. *From:* kernel #191 with #56, round 39, 2026-11-03.
-- **L-448. Before accepting a driver-side way to move a second clock with a
-  GPU's rate, grep the clock driver for an existing pairing.** Kernel #189
-  added a panfrost `l2` clock and an undocumented per-OPP `l2-hz`, set L2
-  first in both directions, while `clk-acpm` already pairs G3D and G3DL2 for
-  gs201 and zumapro in the vendor's order (L2 up first, down last). *Check:*
-  `git grep -n paired drivers/clk/samsung/clk-acpm.c` and the merged
-  siblings' GPU nodes, and compare the set order with
-  `gpu_dvfs_set_new_level()`. Extends L-104. *From:* kernel #189, round 39,
-  2026-11-03.
-- **L-471. A disabled board node that an overlay will enable later carries
-  its pin states now.** #159's Bluetooth child had no `pinctrl-0`, and
-  Samsung pinctrl refuses groups that arrive by runtime overlay. *Check:*
-  for every disabled node meant for an overlay, compare with the same-SoC
-  sibling's merged node and require the same `pinctrl-*` and groups in the
-  board DTS. Extends L-240. *From:* kernel #159, round 40, 2026-11-04.
-- **L-472. When a driver gives up where the vendor driver has a fallback,
-  use the vendor's fallback.** #194 made up an identify record after a
-  missing identify report; stock's `syna_tcm_v1_detect()` sends
-  `CMD_IDENTIFY`, then `CMD_RESET`, for exactly that case, and that also
-  reports the real firmware. *Check:* for any new "carry on without X" path,
-  grep the vendor driver for what it does when X is missing. Extends L-237.
-  *From:* kernel #194, round 40, 2026-11-04.
-- **L-473. A bindings PR that documents a vendor driver's names is reviewed
-  against the hardware, not the DTs it makes pass.** #193's schemas quieted
-  `dtbs_check`, but six nodes had no resources, half the properties were
-  DPCM flags, and two reinvented `model` and `sound-name-prefix`. Before
-  saying a codec's binding "already allows" a common property through its
-  `$ref`, read its last line: `additionalProperties: false` hides the ref's
-  properties. *Check:* for each node, its DT resources; for each property,
-  `git grep` the common sound schemas; list every DT, overlay and userspace
-  matcher that would freeze the names. Extends L-96 and L-183. *From:*
-  kernel #193, round 40, 2026-11-04.
-- **L-474. A boot argument that changes every reboot is tested on every
-  reboot path.** #198's `reboot=warm` was tested with `reboot-to bootloader`
-  only; an ordinary reboot and the panic reset the initramfs safety net
-  depends on weren't. *Check:* list the reboot paths (normal, `reboot-to
-  <reason>`, panic, watchdog) and ask for each, or the device notes that
-  cover them on that SoC. Extends L-284. *From:* kernel #198, round 41,
-  2026-11-05.
-- **L-503. "Appended at the end, so no offset moves" is checked for structs
-  that embed the grown struct.** `struct aoc_chip` sits inside `struct
-  snd_card_pdata`, so #203's appended bool shifted offsets in 15 functions.
-  *Check:* `git grep 'struct <name> [a-z_]*;'`, then an object diff. Extends
-  L-230. *From:* kernel #203, round 42, 2026-11-07.
-- **L-504. A new `->set_cs` branch for GPIO chip selects is dead unless the
-  controller sets `SPI_CONTROLLER_GPIO_SS`.** Kernel #204 added the same write
-  to `set_cs` and to `set_native_cs`, which the core never calls for a
-  `cs_gpiod` device here. *Check:* read `spi_set_cs()` in the target tree and
-  grep the driver for `GPIO_SS`. *From:* kernel #204, round 42, 2026-11-07.
-- **L-505. A board PR that moves a bring-up overlay into the DTS is proven by
-  comparing DTBs, not by a new boot.** Kernel #205's base DTB with the overlay
-  applied and its head DTB decompiled identical with `dtc -s`, so the
-  overlay's boot record carries over. *Check:* build both with the build's
-  `dtc -@`/`fdtoverlay` and compare; any difference names what the record
-  doesn't cover. Extends L-122. *From:* kernel #205, round 42, 2026-11-07.
-- **L-506. A vendor command borrowed for a fallback reads its answer where the
-  vendor driver does.** #194 sent `IDENTIFY` and waited for a report, but
-  Google's `syna_tcm_v1_detect()` parses the IDENTIFY response's payload,
-  which the PR discarded. *Check:* find the vendor's read of each borrowed
-  command's response and confirm the new code reads the same place. Extends
-  L-237. *From:* kernel #194, round 42, 2026-11-07.
-- **L-507. A board DT that gives a new node a GPIO or supply is checked
-  against the board's other users of it.** Kernel #202 put the 7a panel's
-  reset and supplies on the touchscreen's gpp23-2 and LDO25M/26M; the driver's
-  "shared GPIO" workaround was the symptom. *Check:* `git grep` each new pin
-  and rail in the board DTS and Google's `*-display.dtsi`/`*-touch.dtsi`.
-  Extends L-67 and L-349. *From:* kernel #202, round 42, 2026-11-07.
-- **L-508. A "new" panel driver is diffed against the closest merged one with
-  names normalised.** #202's S6E3FC5 driver differed from S6E3HC4's in 137
-  lines, and its init still set a 1440x3120 window. *Check:* `diff` both with
-  the names `sed`-ed to one token, then compare CASET/PASET and the init with
-  the vendor driver. Extends L-61 and L-117. *From:* kernel #202, round 42,
-  2026-11-07.
-- **L-509. A board added to the base after a PR's last gate inherits its
-  shared-dtsi changes, so the re-gate validates it.** Akita (on `zuma.dtsi`)
-  landed after #187's last CI, and `dtbs_check` had never seen the
-  combination. *Check:* `git log <old base>..<new base> --
-  arch/arm64/boot/dts` for boards including a touched dtsi; `dt-validate` each
-  on the merge. Extends L-195 and L-309. *From:* kernel #187, round 42,
-  2026-11-07.

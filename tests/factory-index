@@ -15,9 +15,9 @@
 # an Android update would land on a tested build (the newest one); match and
 # entry name the build's address on Google's server, which is Google's or
 # the index is refused; and sign makes a detached signature gpg verifies,
-# keeps the source intact in place and through symlinks or hard links,
-# refuses when .sig is the source, and writes nothing when the release key
-# can't be loaded or gpg fails.
+# reads the index once, keeps the source intact in place and through symlinks
+# or hard links, refuses when .sig is the source, and writes nothing when the
+# index is invalid, the release key can't be loaded or gpg fails.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
@@ -37,13 +37,14 @@ printf 'CODENAME=testdev\n' > "$r/device/testdev/device.conf"
 fx() { python3 -I -B "$r/tools/factory-index" "$@"; }
 idx=$r/device/testdev/factory-builds.json
 
-# factory BUILD BOARD BOOTLOADER BASEBAND [RADIO-FILE-VERSION]: a zip laid out
-# as Google's, named with the first eight digits of its SHA-256
+# factory BUILD BOARD BOOTLOADER BASEBAND [RADIO-FILE-VERSION [INNER-BUILD]]:
+# a zip laid out as Google's, named with the first eight digits of its SHA-256
 factory() {
   python3 -I -B - "$t" "$@" <<'PY'
 import hashlib, io, os, sys, zipfile
 t, build, board, bl, bb = sys.argv[1:6]
 radio = sys.argv[6] if len(sys.argv) > 6 else bb
+inner_build = sys.argv[7] if len(sys.argv) > 7 else build
 top = "testdev-%s" % build
 inner = io.BytesIO()
 with zipfile.ZipFile(inner, "w") as z:
@@ -54,7 +55,7 @@ with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as z:
     z.writestr(top + "/flash-all.sh", "#!/bin/sh\n")
     z.writestr(top + "/bootloader-testdev-%s.img" % bl, b"bl")
     z.writestr(top + "/radio-testdev-%s.img" % radio, b"radio")
-    z.writestr(top + "/image-testdev-%s.zip" % build, inner.getvalue())
+    z.writestr(top + "/image-testdev-%s.zip" % inner_build, inner.getvalue())
 digest = hashlib.sha256(open(tmp, "rb").read()).hexdigest()
 out = os.path.join(t, "testdev-%s-factory-%s.zip" % (build, digest[:8]))
 os.replace(tmp, out)
@@ -94,6 +95,24 @@ cp "$z1" "$other"
 if fx add -d testdev "$other" 2>"$t/err"; then fail "a zip that holds another build than its name says is refused"; fi
 grep -c 'holds testdev-ab1c.230101.001, not the build its name says' "$t/err" >/dev/null || { cat "$t/err" >&2; fail "says which build the zip holds"; }
 ! grep -c '230101.009' "$idx" >/dev/null || fail "the build a zip's name claims is not added"
+# Matching outer name and top folder, but the inner image zip names another
+# build (different patch, carrier suffix, and precedence behind digest/duplicate)
+cp "$idx" "$t/idx-before.json"
+bad1=$(factory ab1c.230101.004 testdev testloader-1.0-111 testband-9.9-222 testband-9.9-222 ab1c.230101.009)
+bad2=$(factory ab1c.230101.004 testdev testloader-1.0-111 testband-9.9-222 testband-9.9-222 ab1c.230101.004.a1)
+cp "$bad1" "$t/testdev-ab1c.230101.004-factory-00000000.zip"
+dup=$(factory ab1c.230101.001 testdev testloader-1.0-111 testband-9.9-222 testband-9.9-222 ab1c.230101.009)
+refused_inner() { # KIND ZIP WANT
+  local rc=0
+  fx add -d testdev "$2" >/dev/null 2>"$t/err" || rc=$?
+  [[ $rc -eq 1 ]] || fail "$1 is refused with exit 1 (got $rc)"
+  grep -cF "$3" "$t/err" >/dev/null || { cat "$t/err" >&2; fail "$1 prints expected message"; }
+  cmp -s "$idx" "$t/idx-before.json" || fail "$1 leaves the index byte-identical"
+}
+refused_inner "patch mismatch" "$bad1" "holds testdev-ab1c.230101.004/image-testdev-ab1c.230101.009.zip, not the build its name says"
+refused_inner "carrier-suffix mismatch" "$bad2" "holds testdev-ab1c.230101.004/image-testdev-ab1c.230101.004.a1.zip, not the build its name says"
+refused_inner "wrong digest + inner mismatch" "$t/testdev-ab1c.230101.004-factory-00000000.zip" "first eight digits"
+refused_inner "duplicate build + inner mismatch" "$dup" "AB1C.230101.001 is already in"
 cp "$z1" "$t/testdev-ab1c.230101.001-factory-00000000.zip"
 if fx add -d testdev "$t/testdev-ab1c.230101.001-factory-00000000.zip" 2>"$t/err"; then fail "a zip whose name carries other digits than its SHA-256 is refused"; fi
 grep -c "first eight digits" "$t/err" >/dev/null || fail "says the name's digits aren't the file's"
@@ -310,6 +329,112 @@ SH
   if PATH="$t/fakebin:$PATH" fx sign --index "$t/same/factory-builds.json" --codename testdev --out "$t/same" 2>/dev/null; then fail "in-place sign fails when gpg fails"; fi
   [[ $(sha256sum "$t/same/factory-builds.json" "$t/same/factory-builds.json.sig") == "$same_kept" ]] || fail "in-place gpg failure leaves the source and its signature untouched"
   pass "sign: in-place, symlink, hard link, .sig alias and gpg failure leave the source and any existing pair untouched"
+
+  # One read: sign opens a non-canonical index once and signs the original
+  # bytes even when the file is rewritten in place right after the first read
+  raw_idx=$t/compact.json
+  orig_idx=$t/compact.orig
+  python3 -I -B - "$idx" "$raw_idx" "$orig_idx" "$r/tools/factory-index" sign --index "$raw_idx" --codename testdev --out "$t/signed-one-read" <<'PY' >/dev/null || fail "sign reads the index once"
+import builtins, json, os, runpy, sys
+with open(sys.argv[1]) as src:
+    doc = json.load(src)
+orig = json.dumps(doc, separators=(",", ":")).encode("utf-8")
+alt = (json.dumps(doc, indent=4) + "\n").encode("utf-8")
+for p in sys.argv[2:4]:
+    with open(p, "wb") as dst:
+        dst.write(orig)
+target = os.path.realpath(sys.argv[2])
+tool = sys.argv[4]
+sys.argv = [tool] + sys.argv[5:]
+real_open = builtins.open
+opens, rewriting, rewrote = [], False, False
+def is_target(p):
+    return not rewriting and isinstance(p, (str, bytes, os.PathLike)) and os.path.realpath(os.fsdecode(p)) == target
+def rewrite_once():
+    global rewriting, rewrote
+    if rewrote:
+        return
+    rewrote = rewriting = True
+    try:
+        with real_open(target, "r+b") as w:
+            w.write(alt)
+            w.truncate()
+    finally:
+        rewriting = False
+class Wrap:
+    def __init__(self, f): self._f = f
+    def read(self, *a, **kw):
+        out = self._f.read(*a, **kw); rewrite_once(); return out
+    def read1(self, *a, **kw):
+        out = self._f.read1(*a, **kw); rewrite_once(); return out
+    def __enter__(self): self._f.__enter__(); return self
+    def __exit__(self, *a): return self._f.__exit__(*a)
+    def __getattr__(self, n): return getattr(self._f, n)
+def wrapped_open(file, *a, **kw):
+    f = real_open(file, *a, **kw)
+    return Wrap(f) if is_target(file) else f
+def hook(event, args):
+    if event == "open" and is_target(args[0]):
+        opens.append(args[1])
+builtins.open = wrapped_open
+sys.addaudithook(hook)
+try:
+    runpy.run_path(tool, run_name="__main__")
+finally:
+    builtins.open = real_open
+assert rewrote, "index was never read through open()"
+assert len(opens) == 1, f"expected 1 open of index, got {len(opens)}: {opens!r}"
+PY
+  cmp -s "$t/signed-one-read/factory-builds.json" "$orig_idx" || fail "one-read signed copy matches the original index bytes"
+  gpg --homedir "$G" --batch --verify "$t/signed-one-read/factory-builds.json.sig" "$orig_idx" 2>/dev/null || fail "one-read signature verifies against the original index bytes"
+  pass "sign: reads the index once to validate and sign the same bytes"
+
+  # Invalid bytes fail before gpg runs or --out is touched: invalid UTF-8
+  # (in an extra string field so non-UTF-8 decoding would pass schema checks),
+  # a UTF-8 BOM (which json.loads(bytes) would strip), invalid JSON, a CR
+  # newline error (pinning text-mode universal newlines), a schema error, or
+  # a missing index.
+  mkdir -p "$t/nogpg"
+  cat > "$t/nogpg/gpg" <<SH
+#!/bin/sh
+: > "$t/gpg-called"
+exit 1
+SH
+  chmod +x "$t/nogpg/gpg"
+  python3 -I -B - "$idx" "$t" <<'PY'
+import json, sys
+raw = open(sys.argv[1], "rb").read()
+t = sys.argv[2]
+bad_utf8 = raw.replace(b'{\n', b'{\n  "note": "\xff",\n', 1)
+assert bad_utf8 != raw
+open(f"{t}/bad-utf8.json", "wb").write(bad_utf8)
+open(f"{t}/bad-bom.json", "wb").write(b"\xef\xbb\xbf" + raw)
+open(f"{t}/bad-json.json", "wb").write(b"{")
+open(f"{t}/bad-cr.json", "wb").write(b"{\r!")
+m = json.loads(raw.decode("utf-8"))
+m["format"] = 2
+json.dump(m, open(f"{t}/bad-schema.json", "w"))
+PY
+  kept=$(sums)
+  for spec in \
+    "utf8:bad-utf8.json:not a build index" \
+    "bom:bad-bom.json:not a build index" \
+    "json:bad-json.json:not a build index" \
+    "cr:bad-cr.json:line 2 column 1" \
+    "schema:bad-schema.json:has format 2; this tool reads format 1" \
+    "missing:no-such-index.json:not a build index"; do
+    IFS=: read -r kind fname want <<<"$spec"
+    for out in "$t/signed-bad-$kind" "$t/signed"; do
+      rc=0
+      LC_ALL=C.UTF-8 PATH="$t/nogpg:$PATH" fx sign --index "$t/$fname" --codename testdev --out "$out" >/dev/null 2>"$t/err" || rc=$?
+      [[ $rc -eq 1 ]] || fail "sign refuses $kind ($out) with exit 1 (got $rc)"
+      grep -cF "$want" "$t/err" >/dev/null || { cat "$t/err" >&2; fail "sign $kind prints load's message"; }
+      [[ ! -e $t/gpg-called ]] || fail "sign $kind never invokes gpg"
+    done
+    [[ ! -e $t/signed-bad-$kind ]] || fail "sign $kind creates no new --out folder"
+    [[ $(sums) == "$kept" ]] || fail "sign $kind leaves existing signed copy and .sig byte-identical"
+  done
+  pass "sign: invalid UTF-8, UTF-8 BOM, invalid JSON, CR newline, schema error and missing file fail before gpg or touching --out"
 
   kept=$(sums)
   rm -rf "$r/keys"

@@ -52,6 +52,16 @@ for conf in omamobile-display.conf omamobile-wifi.conf omamobile-camera.conf \
             omamobile-max77759.conf omamobile-charger.conf; do
   install -Dm644 "vendor/modprobe.d/$conf" "$destination/usr/lib/modprobe.d/$conf"
 done
+# The AoC (audio and sensor DSP), as on the Pixel 7 Pro: its modules never
+# autoload (modprobe.d/omamobile-aoc.conf), and the hang-safe
+# omamobile-aoc-start loads them in order at boot, through a vendor wants
+# link. It does nothing on a DTB without the AoC node (aoc-core-test).
+install -Dm755 bin/omamobile-aoc-start "$destination/usr/bin/omamobile-aoc-start"
+install -Dm644 vendor/systemd/system/omamobile-aoc.service \
+  "$destination/usr/lib/systemd/system/omamobile-aoc.service"
+ln -sfn ../omamobile-aoc.service \
+  "$destination/usr/lib/systemd/system/multi-user.target.wants/omamobile-aoc.service"
+install -Dm644 vendor/modprobe.d/omamobile-aoc.conf "$destination/usr/lib/modprobe.d/omamobile-aoc.conf"
 # The camera drivers never autoload; omamobile-camera-start loads them.
 install -Dm755 bin/omamobile-camera-start "$destination/usr/bin/omamobile-camera-start"
 for unit in omamobile-camera.service omamobile-camera.timer; do

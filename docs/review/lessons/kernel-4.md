@@ -3,6 +3,100 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-352. A per-panel constant a contributor calls "approximate" may be in
+  Google's panel driver.** The 8 Pro's 70 x 155 mm is `HK3_WIDTH_MM`/
+  `HK3_HEIGHT_MM` in `panel-gs-hk3.c`. *Check:* `kernel/devices/google/
+  <device>/display/panel-gs-*.c` before accepting an estimate. *From:*
+  kernel #154, 2026-10-31.
+- **L-447. A crash fix that moves a decode out of its condition changes what
+  the reference phone shows, and a reference-phone run lapses when the
+  commit is reworked.** Kernel #191 decodes every scanned BSS and drops 6
+  GHz ones, so a 7 Pro also loses the phantom 2.4/5 GHz entries its 6 GHz
+  neighbours made; our 11-01 run on #56 covered only the NULL check.
+  *Check:* for a new skip or early return on a shared path, list the inputs
+  that used to pass with a wrong value, say what the reference phone stops
+  showing, and diff a moved commit against the tested one. Extends L-86,
+  L-206 and L-379. *From:* kernel #191 with #56, round 39, 2026-11-03.
+- **L-448. Before accepting a driver-side way to move a second clock with a
+  GPU's rate, grep the clock driver for an existing pairing.** Kernel #189
+  added a panfrost `l2` clock and an undocumented per-OPP `l2-hz`, set L2
+  first in both directions, while `clk-acpm` already pairs G3D and G3DL2 for
+  gs201 and zumapro in the vendor's order (L2 up first, down last). *Check:*
+  `git grep -n paired drivers/clk/samsung/clk-acpm.c` and the merged
+  siblings' GPU nodes, and compare the set order with
+  `gpu_dvfs_set_new_level()`. Extends L-104. *From:* kernel #189, round 39,
+  2026-11-03.
+- **L-471. A disabled board node that an overlay will enable later carries
+  its pin states now.** #159's Bluetooth child had no `pinctrl-0`, and
+  Samsung pinctrl refuses groups that arrive by runtime overlay. *Check:*
+  for every disabled node meant for an overlay, compare with the same-SoC
+  sibling's merged node and require the same `pinctrl-*` and groups in the
+  board DTS. Extends L-240. *From:* kernel #159, round 40, 2026-11-04.
+- **L-472. When a driver gives up where the vendor driver has a fallback,
+  use the vendor's fallback.** #194 made up an identify record after a
+  missing identify report; stock's `syna_tcm_v1_detect()` sends
+  `CMD_IDENTIFY`, then `CMD_RESET`, for exactly that case, and that also
+  reports the real firmware. *Check:* for any new "carry on without X" path,
+  grep the vendor driver for what it does when X is missing. Extends L-237.
+  *From:* kernel #194, round 40, 2026-11-04.
+- **L-473. A bindings PR that documents a vendor driver's names is reviewed
+  against the hardware, not the DTs it makes pass.** #193's schemas quieted
+  `dtbs_check`, but six nodes had no resources, half the properties were
+  DPCM flags, and two reinvented `model` and `sound-name-prefix`. Before
+  saying a codec's binding "already allows" a common property through its
+  `$ref`, read its last line: `additionalProperties: false` hides the ref's
+  properties. *Check:* for each node, its DT resources; for each property,
+  `git grep` the common sound schemas; list every DT, overlay and userspace
+  matcher that would freeze the names. Extends L-96 and L-183. *From:*
+  kernel #193, round 40, 2026-11-04.
+- **L-474. A boot argument that changes every reboot is tested on every
+  reboot path.** #198's `reboot=warm` was tested with `reboot-to bootloader`
+  only; an ordinary reboot and the panic reset the initramfs safety net
+  depends on weren't. *Check:* list the reboot paths (normal, `reboot-to
+  <reason>`, panic, watchdog) and ask for each, or the device notes that
+  cover them on that SoC. Extends L-284. *From:* kernel #198, round 41,
+  2026-11-05.
+- **L-503. "Appended at the end, so no offset moves" is checked for structs
+  that embed the grown struct.** `struct aoc_chip` sits inside `struct
+  snd_card_pdata`, so #203's appended bool shifted offsets in 15 functions.
+  *Check:* `git grep 'struct <name> [a-z_]*;'`, then an object diff. Extends
+  L-230. *From:* kernel #203, round 42, 2026-11-07.
+- **L-504. A new `->set_cs` branch for GPIO chip selects is dead unless the
+  controller sets `SPI_CONTROLLER_GPIO_SS`.** Kernel #204 added the same write
+  to `set_cs` and to `set_native_cs`, which the core never calls for a
+  `cs_gpiod` device here. *Check:* read `spi_set_cs()` in the target tree and
+  grep the driver for `GPIO_SS`. *From:* kernel #204, round 42, 2026-11-07.
+- **L-505. A board PR that moves a bring-up overlay into the DTS is proven by
+  comparing DTBs, not by a new boot.** Kernel #205's base DTB with the overlay
+  applied and its head DTB decompiled identical with `dtc -s`, so the
+  overlay's boot record carries over. *Check:* build both with the build's
+  `dtc -@`/`fdtoverlay` and compare; any difference names what the record
+  doesn't cover. Extends L-122. *From:* kernel #205, round 42, 2026-11-07.
+- **L-506. A vendor command borrowed for a fallback reads its answer where the
+  vendor driver does.** #194 sent `IDENTIFY` and waited for a report, but
+  Google's `syna_tcm_v1_detect()` parses the IDENTIFY response's payload,
+  which the PR discarded. *Check:* find the vendor's read of each borrowed
+  command's response and confirm the new code reads the same place. Extends
+  L-237. *From:* kernel #194, round 42, 2026-11-07.
+- **L-507. A board DT that gives a new node a GPIO or supply is checked
+  against the board's other users of it.** Kernel #202 put the 7a panel's
+  reset and supplies on the touchscreen's gpp23-2 and LDO25M/26M; the driver's
+  "shared GPIO" workaround was the symptom. *Check:* `git grep` each new pin
+  and rail in the board DTS and Google's `*-display.dtsi`/`*-touch.dtsi`.
+  Extends L-67 and L-349. *From:* kernel #202, round 42, 2026-11-07.
+- **L-508. A "new" panel driver is diffed against the closest merged one with
+  names normalised.** #202's S6E3FC5 driver differed from S6E3HC4's in 137
+  lines, and its init still set a 1440x3120 window. *Check:* `diff` both with
+  the names `sed`-ed to one token, then compare CASET/PASET and the init with
+  the vendor driver. Extends L-61 and L-117. *From:* kernel #202, round 42,
+  2026-11-07.
+- **L-509. A board added to the base after a PR's last gate inherits its
+  shared-dtsi changes, so the re-gate validates it.** Akita (on `zuma.dtsi`)
+  landed after #187's last CI, and `dtbs_check` had never seen the
+  combination. *Check:* `git log <old base>..<new base> --
+  arch/arm64/boot/dts` for boards including a touched dtsi; `dt-validate` each
+  on the merge. Extends L-195 and L-309. *From:* kernel #187, round 42,
+  2026-11-07.
 - **L-542. "As Google's driver does" is traced to the end of the vendor
   function, including what it does with the answer.** Kernel #194's fallback
   follows `syna_tcm_v1_detect()` up to the `IDENTIFY`/`RESET` order, but
