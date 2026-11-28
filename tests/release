@@ -22,8 +22,8 @@
 # the upload stage running the real tools/release-upload --dry-run on a
 # signed fixture bundle (throwaway key; ssh, rsync and curl are stubs that
 # must not be called), and the identifiers stage failing closed on a missing,
-# unreadable, corrupt, truncated or incomplete release initramfs while
-# scanning a valid real-shaped one.
+# unreadable, corrupt, truncated or incomplete release initramfs or root image
+# while scanning valid real-shaped ones.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 fail() { printf 'not ok - %s\n' "$1" >&2; [[ ! -f ${t:-}/log ]] || cat "$t/log" >&2; exit 1; }
@@ -967,3 +967,251 @@ assert_id_fail "appended cpio archive fails identifiers" "release initramfs $ir:
 grep -Fq "bytes (bytes after the archive's end, or an unpadded stream)" "$t/log" || fail "appended archive case explains the size mismatch"
 grep -Eq '^[0-9]+ blocks?$' "$t/log" || fail "appended archive case prints cpio block count"
 pass "the identifiers stage fails closed on a missing, unreadable, corrupt, truncated, partial or incomplete initramfs, clears stale state on rerun, and scans a valid one"
+
+# --- identifiers: fail closed when debugfs can't open, list or dump the root image ---
+cp "$t/id-valid.cpio.lz4" "$ir"
+rf_list=$R/out/release/$V2/rootfs-files.txt
+rimg=$R/out/$rname2
+
+# Corrupt zstd stream (cannot even decompress)
+rm -f "$rf_list"
+printf 'not a zstd stream\n' > "$rimg"
+assert_id_fail "corrupt zstd root image fails identifiers" "could not decompress root image: out/$rname2"
+[[ ! -e $rf_list ]] || fail "corrupt zstd root image must not write rootfs-files.txt"
+
+# Zstd-compressed fixed non-ext4 bytes: debugfs exits 0 with Bad magic on stderr
+python3 -I -c 'import sys; sys.stdout.buffer.write(b"\x5a" * 1048576)' | zstd -q -f -o "$rimg"
+assert_id_fail "non-ext4 root image fails identifiers" "could not list root image: out/$rname2"
+grep -Fq "Bad magic number in super-block" "$t/log" || fail "non-ext4 root image prints debugfs superblock error"
+[[ ! -e $rf_list ]] || fail "non-ext4 root image must not write rootfs-files.txt"
+
+# Zstd-compressed 0-byte image: debugfs exits 0 with short read on stderr
+: | zstd -q -f -o "$rimg"
+assert_id_fail "empty 0-byte root image fails identifiers" "could not list root image: out/$rname2"
+grep -Fq "short read" "$t/log" || fail "empty 0-byte root image prints debugfs short read error"
+[[ ! -e $rf_list ]] || fail "empty 0-byte root image must not write rootfs-files.txt"
+
+# Valid ext4 image with an empty root (only lost+found, and with lost+found removed)
+mke2fs -q -t ext4 "$t/id-empty-lf.img" 1M >/dev/null 2>&1
+zstd -q -f "$t/id-empty-lf.img" -o "$rimg"
+assert_id_fail "empty ext4 root (only lost+found) fails identifiers" "root image out/$rname2 has no /etc directory"
+[[ ! -e $rf_list ]] || fail "empty ext4 root (only lost+found) must not write rootfs-files.txt"
+
+cp "$t/id-empty-lf.img" "$t/id-empty-none.img"
+debugfs -w -R "rmdir lost+found" "$t/id-empty-none.img" >/dev/null 2>&1
+empty_ls=$(debugfs -R 'ls -p /' "$t/id-empty-none.img" 2>/dev/null)
+grep -Fq '/./' <<<"$empty_ls" || fail "empty-root fixture did not list /"
+if grep -Fq '/lost+found/' <<<"$empty_ls"; then
+  fail "empty-root fixture still holds /lost+found"
+fi
+zstd -q -f "$t/id-empty-none.img" -o "$rimg"
+assert_id_fail "empty ext4 root (only . and ..) fails identifiers" "root image out/$rname2 has no /etc directory"
+[[ ! -e $rf_list ]] || fail "empty ext4 root (only . and ..) must not write rootfs-files.txt"
+
+# Non-empty ext4 image lacking /etc
+mkdir -p "$t/id-noetc/other"
+printf 'hello\n' > "$t/id-noetc/other/file.txt"
+mke2fs -q -t ext4 -d "$t/id-noetc" "$t/id-noetc.img" 1M >/dev/null 2>&1
+zstd -q -f "$t/id-noetc.img" -o "$rimg"
+assert_id_fail "ext4 image without /etc fails identifiers" "root image out/$rname2 has no /etc directory"
+[[ ! -e $rf_list ]] || fail "ext4 image without /etc must not write rootfs-files.txt"
+
+# Symlinked /etc (/etc -> /etc): debugfs rdump writes a host symlink that [[ -d ]]
+# would follow; identifiers must refuse it as not a dumped directory.
+mkdir -p "$t/id-symetc"
+ln -s /etc "$t/id-symetc/etc"
+mke2fs -q -t ext4 -d "$t/id-symetc" "$t/id-symetc.img" 1M >/dev/null 2>&1
+zstd -q -f "$t/id-symetc.img" -o "$rimg"
+assert_id_fail "symlinked /etc fails identifiers" "debugfs didn't dump /etc from root image out/$rname2, so it can't be scanned"
+
+# Inode-0 deleted directory entries (first-in-block entries keep their old names
+# with inode 0 in debugfs ls -p): none may reach rootfs-files.txt.
+mkdir -p "$t/id-in0/etc/churn"
+printf 'omamobile\n' > "$t/id-in0/etc/hostname"
+python3 -I - "$t/id-in0/etc/churn" <<'PY'
+import os, sys
+for i in range(300):
+    open(os.path.join(sys.argv[1], f"deleted_padding_entry_number_{i:03d}"), "w").close()
+PY
+mke2fs -q -t ext4 -b 1024 -d "$t/id-in0" "$t/id-in0.img" 4M >/dev/null 2>&1
+python3 -I -c 'for i in range(300): print(f"rm \"/etc/churn/deleted_padding_entry_number_{i:03d}\"")' |
+  debugfs -w -f - "$t/id-in0.img" >/dev/null 2>&1
+in0_ls=$(debugfs -R 'ls -p "/etc/churn"' "$t/id-in0.img" 2>/dev/null)
+grep -q '^/0/' <<<"$in0_ls" || fail "inode-0 fixture did not produce /0/ entries"
+zstd -q -f "$t/id-in0.img" -o "$rimg"
+reset_id_state
+run --version "$V2" identifiers || fail "image with inode-0 deleted dirents passes identifiers"
+grep -qx '/etc/hostname' "$rf_list" || fail "inode-0 fixture lists /etc/hostname"
+if grep -Fq 'deleted_padding_entry_' "$rf_list"; then
+  fail "inode-0 deleted dirents must not appear in rootfs-files.txt"
+fi
+
+# Truncated ext4 image: debugfs opens it and lists /, /etc, /etc/deep, but
+# hits a short read on /etc/deep/sub's directory block and exits 0.
+mkdir -p "$t/id-trunc/usr/share" "$t/id-trunc/etc/deep/sub"
+python3 -I - "$t/id-trunc" <<'PY'
+import os, sys
+base = sys.argv[1]
+for i in range(40):
+    with open(os.path.join(base, f"usr/share/pad_{i:02d}.bin"), "wb") as f:
+        f.write(b"A" * 65536)
+with open(os.path.join(base, "etc/deep/sub/secret.txt"), "wb") as f:
+    f.write(b"serial-ABC123\n" * 4096)
+PY
+mke2fs -q -t ext4 -b 4096 -d "$t/id-trunc" "$t/id-trunc.img" 16M >/dev/null 2>&1
+dir_blk=$(debugfs -R "blocks /etc/deep/sub" "$t/id-trunc.img" 2>/dev/null | awk '{ print $1; exit }')
+[[ $dir_blk =~ ^[1-9][0-9]*$ ]] || fail "read /etc/deep/sub block number"
+cp "$t/id-trunc.img" "$t/id-trunc-dir.img"
+truncate -s "$((dir_blk * 4096))" "$t/id-trunc-dir.img"
+zstd -q -f "$t/id-trunc-dir.img" -o "$rimg"
+rm -f "$rf_list"
+assert_id_fail "truncated ext4 image (missing subdir block) fails identifiers" "could not list root image: out/$rname2"
+grep -Fq "short read" "$t/log" || fail "truncated ext4 subdir prints debugfs short read error"
+[[ ! -e $rf_list ]] || fail "truncated ext4 subdir must not write rootfs-files.txt"
+
+# Truncated ext4 image where every directory lists cleanly (ext4_list passes),
+# but /etc/secret.txt's tail block (holding a listed identifier) sits past EOF
+# so debugfs rdump hits a short read while exiting 0.
+mkdir -p "$t/id-rdtrunc/etc"
+python3 -I -c 'import sys; open(sys.argv[1], "wb").write(b"A" * 262144 + b"\nserial-ABC123\n")' "$t/id-rdtrunc/etc/secret.txt"
+mke2fs -q -t ext4 -b 4096 -d "$t/id-rdtrunc" "$t/id-rdtrunc.img" 4M >/dev/null 2>&1
+file_last_blk=$(debugfs -R "blocks /etc/secret.txt" "$t/id-rdtrunc.img" 2>/dev/null | awk '{ print $NF; exit }')
+[[ $file_last_blk =~ ^[1-9][0-9]*$ ]] || fail "read /etc/secret.txt last block number"
+cp "$t/id-rdtrunc.img" "$t/id-rdtrunc-cut.img"
+truncate -s "$((file_last_blk * 4096))" "$t/id-rdtrunc-cut.img"
+zstd -q -f "$t/id-rdtrunc-cut.img" -o "$rimg"
+assert_id_fail "truncated ext4 image (rdump short read on /etc file) fails identifiers" "could not dump /etc from root image: out/$rname2"
+grep -Fq "short read" "$t/log" || fail "rdump short read prints debugfs error"
+
+# debugfs stub cases on a valid root image: nonzero exit with banner-only stderr,
+# exit 0 with an error on stderr despite valid stdout, omitted root or subdir
+# listing, nonzero rdump exit with banner-only stderr, and a suffixed WIP banner.
+zstd -q -f "$t/id-root.img" -o "$rimg"
+real_debugfs=$(command -v debugfs)
+mkdir -p "$t/dfs-stub"
+cat > "$t/dfs-stub/debugfs" <<'EOF'
+#!/bin/sh
+case ${DFS_MODE:-} in
+  rc)
+    echo "debugfs 1.47.2 (1-Jan-2025)" >&2
+    printf 'debugfs: ls -p "/"\n/2/040755/0/0/.//\n/2/040755/0/0/..//\n/12/040755/0/0/etc//\n'
+    exit 2
+    ;;
+  stderr)
+    echo "debugfs 1.47.2 (1-Jan-2025)" >&2
+    echo "debugfs: injected error on stderr" >&2
+    printf 'debugfs: ls -p "/"\n/2/040755/0/0/.//\n/2/040755/0/0/..//\n/12/040755/0/0/etc//\n'
+    exit 0
+    ;;
+  nolist)
+    echo "debugfs 1.47.2 (1-Jan-2025)" >&2
+    printf 'debugfs: ls -p "/"\n'
+    exit 0
+    ;;
+  nolist-sub)
+    echo "debugfs 1.47.2 (1-Jan-2025)" >&2
+    if [ "$1" = "-f" ]; then
+      cmds=$(cat)
+      case $cmds in
+        *'ls -p "/"'*)
+          printf 'debugfs: ls -p "/"\n/2/040755/0/0/.//\n/2/040755/0/0/..//\n/12/040755/0/0/etc//\n'
+          ;;
+        *)
+          printf 'debugfs: ls -p "/etc"\n'
+          ;;
+      esac
+    fi
+    exit 0
+    ;;
+  rdump-rc)
+    if [ "$1" = "-R" ]; then
+      "$REAL_DEBUGFS" "$@" >/dev/null 2>&1 || true
+      echo "debugfs 1.47.2 (1-Jan-2025)" >&2
+      exit 2
+    fi
+    exec "$REAL_DEBUGFS" "$@"
+    ;;
+  wip)
+    "$REAL_DEBUGFS" "$@" 2>"$DFS_ERR"
+    rc=$?
+    sed '1s/^debugfs .*/debugfs 1.48-WIP (20-May-2024)/' "$DFS_ERR" >&2
+    exit "$rc"
+    ;;
+esac
+EOF
+chmod +x "$t/dfs-stub/debugfs"
+DFS_MODE=rc PATH="$t/dfs-stub:$PATH" assert_id_fail "nonzero debugfs exit fails identifiers" "could not list root image: out/$rname2"
+grep -Fq "debugfs exited 2" "$t/log" || fail "nonzero debugfs exit reports exit status"
+DFS_MODE=stderr PATH="$t/dfs-stub:$PATH" assert_id_fail "debugfs stderr error with valid stdout fails identifiers" "could not list root image: out/$rname2"
+grep -Fq "debugfs: injected error on stderr" "$t/log" || fail "debugfs stderr error is printed"
+DFS_MODE=nolist PATH="$t/dfs-stub:$PATH" assert_id_fail "debugfs omitting root listing fails identifiers" "could not list root image: out/$rname2"
+grep -Fq "debugfs did not list directory: /" "$t/log" || fail "omitted root listing explains which directory was missing"
+DFS_MODE=nolist-sub PATH="$t/dfs-stub:$PATH" assert_id_fail "debugfs omitting /etc listing fails identifiers" "could not list root image: out/$rname2"
+grep -Fq "debugfs did not list directory: /etc" "$t/log" || fail "omitted /etc listing explains which directory was missing"
+DFS_MODE=rdump-rc REAL_DEBUGFS="$real_debugfs" PATH="$t/dfs-stub:$PATH" assert_id_fail "nonzero debugfs rdump exit fails identifiers" "could not dump /etc from root image: out/$rname2"
+grep -Fq "debugfs exited 2" "$t/log" || fail "nonzero debugfs rdump exit reports exit status"
+reset_id_state
+DFS_MODE=wip REAL_DEBUGFS="$real_debugfs" DFS_ERR="$t/dfs.err" PATH="$t/dfs-stub:$PATH" run --version "$V2" identifiers ||
+  fail "pre-release debugfs banner passes identifiers"
+rm -r "$t/dfs-stub"
+
+# Real-shaped valid root image: root-owned entries (rdump prints benign
+# unprivileged ownership notes), mode-0000 file, read-only subdir, symlink,
+# spaces, quote in regular filename, /root, /usr/share/omamobile and
+# /var/lib/omamobile all pass and record identifiers_done.
+mkdir -p "$t/id-real/etc/ro" "$t/id-real/etc/with space" "$t/id-real/root" \
+  "$t/id-real/usr/share/omamobile" "$t/id-real/var/lib/omamobile"
+printf 'omamobile\n' > "$t/id-real/etc/hostname"
+printf 'ro-clean\n' > "$t/id-real/etc/ro/zero.txt"
+printf 'space-clean\n' > "$t/id-real/etc/with space/note.txt"
+printf 'quote-clean\n' > "$t/id-real/etc/file\"quote.txt"
+ln -s hostname "$t/id-real/etc/host-link"
+printf '# clean\n' > "$t/id-real/root/.profile"
+printf 'share\n' > "$t/id-real/usr/share/omamobile/info.txt"
+printf 'state\n' > "$t/id-real/var/lib/omamobile/state.txt"
+chmod 0555 "$t/id-real/etc/ro"
+mke2fs -q -t ext4 -d "$t/id-real" "$t/id-real.img" 4M >/dev/null 2>&1
+debugfs -w -f - "$t/id-real.img" >/dev/null 2>&1 <<'EOF'
+sif /etc uid 0
+sif /etc gid 0
+sif /etc/hostname uid 0
+sif /etc/ro uid 0
+sif /etc/ro/zero.txt uid 0
+sif /etc/ro/zero.txt mode 0100000
+EOF
+zstd -q -f "$t/id-real.img" -o "$rimg"
+reset_id_state
+run --version "$V2" identifiers || fail "valid real-shaped root image passes identifiers"
+grep -Fq "no MAC address, serial, IMEI" "$t/log" || fail "valid real-shaped root image prints clean note"
+grep -q '^identifiers_done=clean ' "$st2" || fail "valid real-shaped root image records identifiers_done"
+grep -qx '/etc/hostname' "$rf_list" || fail "valid real-shaped root image lists /etc/hostname"
+
+# A failed rerun after a valid run must remove the stale rootfs-files.txt
+# (and clear identifiers_done), while --dry-run leaves both intact.
+run --dry-run --version "$V2" identifiers || fail "dry-run identifiers after valid root image succeeds"
+[[ -f $rf_list ]] || fail "dry-run identifiers must not remove rootfs-files.txt"
+grep -q '^identifiers_done=clean ' "$st2" || fail "dry-run identifiers keeps identifiers_done"
+printf 'not a zstd stream\n' > "$rimg"
+if run --version "$V2" identifiers; then fail "failed rerun on corrupt root image must fail"; fi
+grep -Fq "could not decompress root image: out/$rname2" "$t/log" || fail "failed rerun reports corrupt root image"
+if grep -q '^identifiers_done=' "$st2"; then fail "failed rerun must clear identifiers_done"; fi
+[[ ! -e $rf_list ]] || fail "failed rerun must remove stale rootfs-files.txt"
+
+# A listed identifier in every dumped directory (/etc, /root,
+# /usr/share/omamobile, /var/lib/omamobile) and in the file list itself is found
+printf 'serial-ETC111\nserial-ROOT222\nserial-USO333\nserial-VLO444\nserial-LIST555\n' >> "$t/ids"
+mkdir -p "$t/id-real/opt"
+printf 'device serial-ETC111 here\n' > "$t/id-real/etc/leak.conf"
+printf 'device serial-ROOT222 here\n' > "$t/id-real/root/leak.conf"
+printf 'device serial-USO333 here\n' > "$t/id-real/usr/share/omamobile/leak.conf"
+printf 'device serial-VLO444 here\n' > "$t/id-real/var/lib/omamobile/leak.conf"
+: > "$t/id-real/opt/serial-LIST555"
+mke2fs -q -t ext4 -d "$t/id-real" "$t/id-real-bad.img" 4M >/dev/null 2>&1
+zstd -q -f "$t/id-real-bad.img" -o "$rimg"
+assert_id_fail "listed identifiers in dumped root directories and file list fail identifiers" "identifiers found (above)"
+grep -Fq "/rootfs/etc/leak.conf: listed identifier: serial-ETC111" "$t/log" || fail "reports listed identifier found in root image /etc"
+grep -Fq "/rootfs/root/leak.conf: listed identifier: serial-ROOT222" "$t/log" || fail "reports listed identifier found in root image /root"
+grep -Fq "/rootfs/usr/share/omamobile/leak.conf: listed identifier: serial-USO333" "$t/log" || fail "reports listed identifier found in root image /usr/share/omamobile"
+grep -Fq "/rootfs/var/lib/omamobile/leak.conf: listed identifier: serial-VLO444" "$t/log" || fail "reports listed identifier found in root image /var/lib/omamobile"
+grep -Fq "/rootfs-files.txt: listed identifier: serial-LIST555" "$t/log" || fail "reports listed identifier found in root image file list"
+pass "the identifiers stage fails closed when debugfs can't open, list or dump the root image, and scans a valid real-shaped one"
