@@ -8679,6 +8679,20 @@ Input 4 alone is ambiguous because aggregator 2
 uses that input for post-writeback 1 completion.
 No device access was used for this offline check.
 
+The follow-up needs only a read-only stock A
+snapshot. Record the build, slot, `/proc/uptime`,
+and IRQ 439 alongside the other BE rows from
+`/proc/interrupts`. Linux prints the IRQ chip,
+domain hardware input and descriptor name before
+the action name. Use the descriptor name to resolve
+the GIA instance when the chip column just says
+`GIA`. Check that the device uptime reaches back
+past the saved capture's host start time before
+applying the current mapping to the captured fence.
+If that continuity is unavailable, report the row
+for the current boot only. This check needs no
+display mode change or new trace.
+
 After this stock Android session, take and verify a fresh
 guarded nine-partition NV backup before the next Linux
 slot B trial. Keep Android off between the rescue and trial.
